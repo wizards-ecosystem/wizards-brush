@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use The Wizard's Brush in published work, please cite the software repository."
+title: "The Wizard's Brush"
+type: software
+authors:
+  - family-names: Limb
+    given-names: Isaac
+repository-code: "https://github.com/wizards-ecosystem/wizards-brush"
+url: "https://github.com/wizards-ecosystem/wizards-brush"
+version: 0.1.0
+license: Apache-2.0

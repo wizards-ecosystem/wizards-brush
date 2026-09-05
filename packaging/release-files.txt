@@ -1,0 +1,32 @@
+# Runtime files copied from the reviewed Git tree into the standalone bundle.
+# Directories expand to their tracked contents. The prebuilt frontend and the
+# bundle-specific README are added separately by scripts/build_release.py.
+.env.example
+.python-version
+LICENSE
+NOTICE
+THIRD_PARTY_NOTICES.md
+pyproject.toml
+uv.lock
+remote_gpu.py
+install.sh
+start.sh
+backend
+docs/model-licenses.md
+docs/network-security.md
+docs/remote-gpu.md
+models/loras/README.md
+scripts/bootstrap-tools.sh
+scripts/check-host.sh
+scripts/doctor.py
+scripts/download_models.py
+scripts/install_nunchaku.sh
+scripts/make_remote_gpu.py
+scripts/migrate_local_state.py
+scripts/project-env.sh
+scripts/remote-gpu-requirements.in
+scripts/remote-gpu-requirements.lock
+scripts/setup.sh
+scripts/start.sh
+scripts/tool-versions.env
+wildcards

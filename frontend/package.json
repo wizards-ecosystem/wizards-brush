@@ -1,0 +1,59 @@
+{
+  "name": "wizards-brush-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser interface for The Wizard's Brush local-first image and video studio.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/wizards-ecosystem/wizards-brush#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wizards-ecosystem/wizards-brush.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wizards-ecosystem/wizards-brush/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": "22.22.2"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{json,js}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{json,js}\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/newsreader": "^5.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.5",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "jsdom": "^30.0.1",
+    "postcss": "^8.4.49",
+    "prettier": "^3.9.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.11"
+  }
+}

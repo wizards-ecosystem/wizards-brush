@@ -1,0 +1,60 @@
+{
+  "name": "general-art-v1",
+  "description": "Matched prompts for general-purpose art, composition, realism, typography, and style coverage.",
+  "prompts": [
+    {
+      "id": "portrait",
+      "category": "human realism",
+      "smoke": true,
+      "width": 768,
+      "height": 1024,
+      "seed": 18421,
+      "prompt": "Editorial three-quarter portrait of an elderly Japanese ceramic artist standing in a sunlit workshop, both hands visible holding a newly glazed cobalt bowl, authentic skin texture, silver hair, indigo work jacket, shelves of handmade pottery receding into soft depth of field, gentle window light and warm bounce light, restrained natural color, 85 mm photography, finely observed documentary realism."
+    },
+    {
+      "id": "composition",
+      "category": "prompt fidelity and spatial reasoning",
+      "smoke": true,
+      "width": 1024,
+      "height": 768,
+      "seed": 29731,
+      "prompt": "A clean cinematic still in a pale concrete gallery: on the left, a small red cube rests on a tall black pedestal; in the center, a transparent glass sphere floats above a shallow circular pool; on the right, a large yellow paper crane stands on the floor. Exactly three principal objects, clearly separated, with their reflections visible in the water, wide symmetrical framing, soft overcast skylight, precise scale and spatial relationships."
+    },
+    {
+      "id": "typography",
+      "category": "graphic design and exact text",
+      "smoke": false,
+      "width": 768,
+      "height": 1024,
+      "seed": 41047,
+      "prompt": "A finished contemporary museum poster with bold Swiss-grid typography. The exact large headline reads 'WIZARD'S BRUSH'. The exact smaller line beneath reads 'CREATE BEYOND THE FRAME'. One luminous ultramarine brushstroke crosses an ivory paper field, with a tiny vermilion square in the lower right. Crisp kerning, generous negative space, print-ready graphic design, no extra words or logos."
+    },
+    {
+      "id": "landscape",
+      "category": "cinematic environment",
+      "smoke": false,
+      "width": 1024,
+      "height": 768,
+      "seed": 52369,
+      "prompt": "A vast temperate rainforest valley immediately after rain, ancient cedar trees wrapped in moss, a narrow silver waterfall emerging through low cloud, one tiny hiker in an orange jacket crossing a suspended footbridge for scale, wet leaves catching the first amber sunrise, layered atmospheric depth, physically plausible light, cinematic landscape photography with rich but natural color."
+    },
+    {
+      "id": "illustration",
+      "category": "narrative illustration",
+      "smoke": false,
+      "width": 1024,
+      "height": 768,
+      "seed": 63803,
+      "prompt": "A richly detailed storybook illustration of a young astronomer and a fox repairing a brass telescope on the roof of a whimsical traveling library at dusk. Open books flutter like birds, constellations form delicate ink diagrams in the violet sky, warm lantern windows below, expressive poses and clear visual storytelling, gouache and colored-pencil texture on paper, elegant shape language, harmonious navy, saffron, and coral palette."
+    },
+    {
+      "id": "product",
+      "category": "commercial product rendering",
+      "smoke": false,
+      "width": 1024,
+      "height": 768,
+      "seed": 74177,
+      "prompt": "Premium studio product photograph of a sculptural translucent green glass perfume bottle with a brushed silver cap, centered on dark slate beside two fresh bergamot leaves and one cut citrus, precise caustic light patterns, controlled softbox highlights, believable glass thickness, subtle condensation, luxury editorial composition, deep charcoal backdrop, sharp label-free object, realistic materials and shadows."
+    }
+  ]
+}

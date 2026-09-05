@@ -1,0 +1,133 @@
+The Wizard's Brush
+Copyright 2026 Isaac Limb and The Wizard's Brush contributors
+
+This product includes software developed as part of The Wizard's Brush project.
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+The generated frontend bundles JavaScript and generated CSS under the MIT
+License and the following font software under the SIL Open Font License,
+Version 1.1. The complete copyright notices and license texts are emitted as
+`/third-party-notices.txt` and recorded in THIRD_PARTY_NOTICES.md.
+
+Instrument Sans
+    Copyright 2022 The Instrument Sans Project Authors.
+
+Newsreader
+    Copyright 2020 The Newsreader Project Authors.
+
+================================================================================
+Third-party material
+================================================================================
+
+The Wizard's Brush was written after reading and comparing multiple upstream projects.
+What was taken from each, and under which terms, is recorded here rather than
+left to be inferred from a comment. Every item below is also attributed at its
+use site.
+
+--------------------------------------------------------------------------------
+Reused under permissive licences
+--------------------------------------------------------------------------------
+
+SD.Next: https://github.com/vladmandic/automatic
+    Copyright the SD.Next authors. Licensed under the Apache License, Version 2.0.
+
+    backend/app/modelprobe.py contains tensor-name markers that identify a
+    checkpoint's family, adapted from SD.Next's `modules/model_probe.py`. Those
+    markers were verified by that
+    project against real checkpoints, which is the part that is hard to redo.
+
+InvokeAI: https://github.com/invoke-ai/InvokeAI
+    Copyright the InvokeAI authors. Licensed under the Apache License, Version 2.0.
+
+    backend/app/generators/vram.py follows the design of InvokeAI's
+    `backend/util/vae_working_memory.py`: predicting VAE decode cost from output
+    area so tiling becomes a decision rather than an unconditional default.
+
+SwarmUI: https://github.com/mcmonkeyprojects/SwarmUI
+    Copyright (c) 2024-2025 Alex "mcmonkey" Goodwin. Licensed under the MIT License.
+
+    backend/app/params.py adapts the `ParamsQueried` idea: recording which
+    parameters a handler actually read, so saved metadata cannot claim a setting
+    took effect when it did not. backend/app/notify.py follows the design of
+    SwarmUI's WebhookManager.
+
+Uncensored-Local-Studio: https://github.com/techjarves/Uncensored-Local-Studio
+    Licensed under the MIT License.
+
+    The backend diagnosis and capability surfaces follow its useful lifecycle
+    principle: an unavailable engine remains visible with a reason, and a model
+    artifact is not called ready merely because a directory exists. The code,
+    API shape, and React implementation in The Wizard's Brush are independent.
+
+open-generative-ai: https://github.com/Anil-matcha/Open-Generative-AI
+    Licensed under the MIT License.
+
+    The schema-driven form audit informed restore-time value coercion and
+    dependent option/range narrowing. The Wizard's Brush uses its own registry shape,
+    renderer, validation, and tests; no catalogue data or source was copied.
+
+HiDream-O1-Image: https://github.com/HiDream-ai/HiDream-O1-Image
+    Copyright (c) 2026 HiDream.ai. Licensed under the MIT License.
+
+    `remote_gpu.py` fetches the publisher's official runner at a pinned commit
+    into the operator's remote runtime when the optional HiDream model is
+    enabled. The upstream runner is not bundled in this repository. Wizards
+    Brush invokes its documented interface and changes the documented optional
+    attention flag for portability; it carries no upstream source expression.
+
+--------------------------------------------------------------------------------
+Read and reimplemented; NOT copied
+--------------------------------------------------------------------------------
+
+The projects below are GPL-3.0 or AGPL-3.0. The Wizard's Brush is Apache-2.0, so no
+code from them may be incorporated. Where the better idea was on their side it was
+reimplemented from the observable behaviour or the wire format, never from their
+source. These entries exist so that boundary is auditable rather than asserted.
+
+ComfyUI: https://github.com/comfyanonymous/ComfyUI (GPL-3.0)
+    backend/app/wsframe.py carries previews as binary WebSocket frames. The
+    convention of a big-endian uint32 type prefix is a wire format, not
+    copyrightable expression; the framing here adds a job id, a tolerant decoder
+    for unknown types, and shares no code with ComfyUI's `BinaryEventTypes`.
+
+    Latent-to-RGB preview matrices: ComfyUI ships constants for these. None were
+    copied. backend/app/generators/latent_rgb.py ships an EMPTY table, populated
+    only by scripts/fit_preview_matrix.py, which derives a projection from the
+    model itself with a least-squares solve.
+
+krita-ai-diffusion: https://github.com/Acly/krita-ai-diffusion (GPL-3.0)
+    backend/app/errors.py classifies failures into numeric severity bands so that
+    ">= warning" is a threshold test. The banding idiom is the same one HTTP
+    status codes use; the members, the values in use, and the implementation are
+    our own.
+
+Fooocus: https://github.com/lllyasviel/Fooocus (GPL-3.0)
+    Its simple-versus-advanced product design and mask-focused inpaint behavior
+    were studied. The Wizard's Brush independently implements a registry-driven
+    Simple/Full form, source-space mask geometry, and its own metadata reader.
+    No Fooocus source, constants, or specially licensed inpaint material was copied.
+
+AUTOMATIC1111 stable-diffusion-webui:
+https://github.com/AUTOMATIC1111/stable-diffusion-webui (AGPL-3.0)
+    Its persisted parameter conventions, grid behavior, mask handling, and
+    adapter UX were studied as ecosystem behavior. The Wizard's Brush independently
+    implements its own routers, parameter versioning, geometry, and UI. The
+    A1111 parameters block is an interoperability format, not copied code.
+
+locally-uncensored: https://github.com/PurpleDoubleD/locally-uncensored (AGPL-3.0)
+    Its incident-driven lifecycle safeguards informed independent watchdog,
+    preflight, orphan-recovery, and retry designs. No source or UI expression
+    was copied.
+
+--------------------------------------------------------------------------------
+Runtime dependencies
+--------------------------------------------------------------------------------
+
+The Wizard's Brush depends on third-party packages that are downloaded at install
+time and are not redistributed here. Their licences are their own; see uv.lock
+and frontend/package-lock.json for the exact resolved set.
+
+Model weights are downloaded at run time from their respective publishers and
+are NOT covered by this licence. Several carry their own terms, including the
+CreativeML Open RAIL-M family, which restrict use in ways Apache-2.0 does not.
+Read the licence of any model you download.

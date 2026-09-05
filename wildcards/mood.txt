@@ -1,0 +1,8 @@
+serene
+dramatic
+melancholic
+joyful
+mysterious
+tranquil
+tense
+whimsical

@@ -1,0 +1,106 @@
+{
+  "reviewed_at": "2026-08-31",
+  "policy": "General-purpose quality first; repository-provided safety components remain enabled. Models whose licenses require additional deployment controls or manual review are excluded.",
+  "runnable": [
+    {
+      "lane": "local",
+      "variant": "turbo",
+      "repo": "Tongyi-MAI/Z-Image-Turbo",
+      "license": "Apache-2.0",
+      "role": "fast general default",
+      "recipe": "9 steps, CFG 0"
+    },
+    {
+      "lane": "local",
+      "variant": "quality",
+      "repo": "Tongyi-MAI/Z-Image",
+      "license": "Apache-2.0",
+      "role": "undistilled local quality and diversity",
+      "recipe": "40 steps, CFG 4"
+    },
+    {
+      "lane": "local",
+      "variant": "klein",
+      "repo": "black-forest-labs/FLUX.2-klein-4B",
+      "license": "Apache-2.0",
+      "role": "4070-class realtime challenger",
+      "recipe": "4 steps, CFG 1"
+    },
+    {
+      "lane": "remote",
+      "variant": "quality",
+      "repo": "Qwen/Qwen-Image-2512",
+      "license": "Apache-2.0",
+      "role": "single-A100 Diffusers quality default",
+      "recipe": "50 steps, true CFG 4"
+    },
+    {
+      "lane": "remote",
+      "variant": "hidream",
+      "repo": "HiDream-ai/HiDream-O1-Image",
+      "license": "MIT",
+      "role": "single-A100 Pixel-DiT challenger",
+      "recipe": "50 steps, CFG 5"
+    }
+  ],
+  "adapters": [
+    {
+      "lane": "local",
+      "repo": "tarn59/pixel_art_style_lora_z_image_turbo",
+      "target": "Z-Image-Turbo",
+      "weight": 1.0
+    },
+    {
+      "lane": "local",
+      "repo": "renderartist/Classic-Painting-Z-Image-Turbo-LoRA",
+      "target": "Z-Image-Turbo",
+      "weight": 0.8
+    },
+    {
+      "lane": "local",
+      "repo": "ostris/z_image_turbo_childrens_drawings",
+      "target": "Z-Image-Turbo",
+      "weight": 1.0
+    },
+    {
+      "lane": "remote",
+      "repo": "lightx2v/Qwen-Image-2512-Lightning",
+      "target": "Qwen-Image-2512",
+      "weight": 1.0,
+      "role": "4-step generation speed comparison"
+    },
+    {
+      "lane": "remote",
+      "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+      "target": "Qwen-Image-Edit-2511",
+      "weight": 1.0,
+      "role": "4-step editing speed comparison"
+    }
+  ],
+  "excluded": [
+    {
+      "repo": "ideogram-ai/ideogram-4-nf4",
+      "reason": "Strongest open-weight Arena result, but its model agreement requires additional deployment controls and human oversight."
+    },
+    {
+      "repo": "black-forest-labs/FLUX.2-dev",
+      "reason": "License requires additional deployment controls or manual review, and full bf16 exceeds one A100."
+    },
+    {
+      "repo": "black-forest-labs/FLUX.2-klein-9B",
+      "reason": "Its non-commercial license requires additional deployment controls or manual review; the Apache-2.0 4B checkpoint is the baseline local candidate."
+    },
+    {
+      "repo": "krea/Krea-2-Turbo",
+      "reason": "Community license requires additional deployment controls or equivalent review."
+    },
+    {
+      "repo": "nvidia/Cosmos3-Super-Text2Image",
+      "reason": "Official deployment uses four to eight GPUs; the 64B checkpoint is not a single-A100 candidate."
+    },
+    {
+      "repo": "tencent/HunyuanImage-3.0",
+      "reason": "The repository is about 169 GB and cannot run full-resident on one 80 GB A100."
+    }
+  ]
+}

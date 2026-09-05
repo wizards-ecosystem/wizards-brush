@@ -1,0 +1,232 @@
+[project]
+name = "wizards-brush"
+version = "0.1.0"
+description = "Local-first image and video studio with an optional user-operated remote GPU lane."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Isaac Limb" }]
+keywords = ["generative-ai", "image-generation", "video-generation", "diffusers", "local-first"]
+requires-python = ">=3.12,<3.13"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+]
+
+# ---- Core runtime: FastAPI app + diffusion stack. Installs & runs cleanly. ----
+dependencies = [
+    # web / api
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "python-multipart>=0.0.12",
+    "websockets>=13",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "sqlmodel>=0.0.22",
+    # Cross-platform advisory file lock. Used for the single-process guard on the
+    # database (db.acquire_process_lock) — two instances sharing one SQLite file
+    # means two job lanes draining one queue. Pure Python, no build step, and
+    # already present transitively via huggingface_hub; declared because we
+    # import it directly and must not depend on someone else's dependency.
+    "filelock>=3.13",
+    # imaging / io
+    "pillow>=11",
+    "numpy>=2.1",
+    "imageio>=2.36",
+    "imageio-ffmpeg>=0.5",   # bundles a static ffmpeg — no system install needed
+    # diffusion
+    #
+    # torch is pinned, and the ceiling is set by Nunchaku (the local 4-bit
+    # backend in generators/quant.py): its wheels are built per torch minor and
+    # currently top out at torch 2.11 (cu12.8 / cu13.0). Raising torch past 2.11
+    # silently drops us back to the bitsandbytes path, so bump both together.
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "diffusers>=0.39",
+    "transformers>=4.56,<6",
+    "accelerate>=1.10",
+    "peft>=0.17",            # LoRA loading for diffusers pipelines
+    "safetensors>=0.6",
+    "sentencepiece>=0.2",
+    # 5.29.6 fixes PYSEC-2026-1805. MediaPipe's legacy wheel declares
+    # protobuf<5 even though its solutions/controlnet_aux paths pass our smoke
+    # test on 5.29.6; the matching uv override below documents that exception.
+    "protobuf>=5.29.6,<6",
+    # Torch imports setuptools at runtime; 83.0.0 fixes PYSEC-2026-3447 and is
+    # smoke-tested with the pinned Torch/CUDA pair by optional-check.
+    "setuptools==83.0.0",
+    "ftfy>=6.3",
+    # quantization fallback when Nunchaku has no wheel for the installed torch
+    "bitsandbytes>=0.48",
+    # upscaling + face restoration (Real-ESRGAN / GFPGAN weights via spandrel)
+    "spandrel>=0.4.2",
+]
+
+[project.optional-dependencies]
+# Face restoration: GFPGAN runs through spandrel (already core); facexlib
+# only supplies detection + 5-point alignment + paste-back. Isolated because it
+# pulls numba/scipy, but it is a single self-contained package — the old
+# gfpgan/basicsr tree (and its torchvision monkeypatch) is gone.
+faces = ["facexlib>=0.3"]
+# Auto-detailer face/hand detection (mediapipe has native wheels; isolated like faces).
+#
+# Capped deliberately. mediapipe dropped the legacy `mp.solutions` API between
+# 0.10.21 and 0.10.30 (only Image/ImageFormat/tasks remain), which breaks two
+# things at once: the auto-detailer's face/hand detection, and controlnet_aux,
+# which imports mediapipe.solutions at package scope and so cannot be imported
+# at all — taking ControlNet depth/pose down with it.
+#
+# The floor was previously uncapped, so any fresh install after 0.10.30 shipped
+# silently lost both features. Porting our own detector to the Tasks API would
+# not help controlnet_aux, so the cap stays until that package moves.
+detailer = ["mediapipe>=0.10.14,<0.10.30"]
+# RIFE frame interpolation via ONNX (CPU works; CUDA provider used when present).
+rife = ["onnxruntime>=1.18"]
+# ControlNet depth/pose preprocessors (canny needs only cv2, which detailer brings).
+control = ["controlnet_aux>=0.0.7"]
+dev = ["ruff>=0.14", "pytest>=8.3", "mypy>=1.13"]
+
+[project.urls]
+Homepage = "https://github.com/wizards-ecosystem/wizards-brush"
+Documentation = "https://github.com/wizards-ecosystem/wizards-brush/tree/main/docs"
+Issues = "https://github.com/wizards-ecosystem/wizards-brush/issues"
+Repository = "https://github.com/wizards-ecosystem/wizards-brush.git"
+
+# Torch-free dependency group for CI: just enough to import the app (heavy deps
+# are lazy) and run the test suite on a CPU-only runner.
+[dependency-groups]
+test = [
+    "pytest>=8.3",
+    "mypy>=1.13",
+    "ruff>=0.16",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "httpx>=0.27",
+    "python-multipart>=0.0.12",
+    "websockets>=13",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "sqlmodel>=0.0.22",
+    # Cross-platform advisory file lock. Used for the single-process guard on the
+    # database (db.acquire_process_lock) — two instances sharing one SQLite file
+    # means two job lanes draining one queue. Pure Python, no build step, and
+    # already present transitively via huggingface_hub; declared because we
+    # import it directly and must not depend on someone else's dependency.
+    "filelock>=3.13",
+    "pillow>=10.4",
+    "huggingface-hub>=0.26",
+]
+
+# ---- uv: pin Python 3.12 and pull torch from the CUDA 13.0 index ----
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The app runs via `uvicorn backend.app.main:app` from the repo root — it is not
+# packaged. Tell setuptools there are no modules so `-e .` only installs deps.
+[tool.setuptools]
+py-modules = []
+
+[tool.uv]
+package = false
+required-version = "==0.11.17"
+cache-dir = ".runtime/cache/uv"
+# MediaPipe 0.10.x has a stale protobuf<5 declaration, and Torch 2.11's
+# setuptools<82 ceiling predates the security-fixed 83.0 release. Keep these
+# identical to the direct dependencies; the release gate imports both stacks.
+override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==83.0.0"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+cache-dir = ".runtime/cache/ruff"
+
+[tool.ruff.lint]
+# Selected explicitly rather than relying on ruff's defaults: those widened in
+# 0.16 and turned a green tree red on a version bump alone. Pin the surface here
+# so lint only changes when we change it.
+select = [
+    "E", "W", "F",   # pycodestyle + pyflakes
+    "I",             # import sorting
+    "UP",            # pyupgrade — keep syntax current with the pinned Python
+    "B",             # bugbear — real bug shapes
+    "C4", "SIM", "RET", "FURB",  # comprehensions / simplification / returns
+    "RUF",           # ruff-specific, incl. RUF100 unused-noqa
+    "BLE",           # blind except — deliberate here, but each one must say so
+]
+ignore = [
+    "E402",     # late imports are intentional (compat shims, lazy heavy deps)
+    "B008",     # FastAPI Depends()/File() in defaults is the framework idiom
+    "RET504",   # a named result before return is often the clearer read
+    # Non-ASCII is load-bearing here: the official Wan negative prompt is
+    # Chinese, UI labels carry emoji, and prose comments use em-dashes.
+    "RUF001", "RUF002", "RUF003",
+    # `class X(str, Enum)` is deliberate: StrEnum changes what str(member)
+    # returns, and these values are persisted in SQLite and sent over the API.
+    "UP042",
+    # SIM108's ternary rewrite hurts the commented numeric clamps it targets.
+    "SIM108",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+cache_dir = ".runtime/cache/pytest"
+
+[tool.mypy]
+python_version = "3.12"
+cache_dir = ".runtime/cache/mypy"
+files = ["backend", "scripts", "tests", "remote_gpu.py"]
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*", "torchvision.*", "diffusers.*", "transformers.*", "accelerate.*",
+    "imageio.*", "imageio_ffmpeg.*", "spandrel.*", "facexlib.*",
+    "huggingface_hub.*", "bitsandbytes.*", "nunchaku.*", "mediapipe.*",
+    "controlnet_aux.*", "onnxruntime.*", "numpy.*", "cv2.*",
+    "nest_asyncio.*", "sageattention.*",
+]
+ignore_missing_imports = true
+
+# These modules carry `type: ignore`s aimed at the heavy imaging/diffusion deps.
+# In the torch-free CI env those deps resolve to Any and the ignores look unused;
+# in the full dev env they're needed — so the unused-ignore warning can't be
+# satisfied in both. Scope it off here only, keeping it strict everywhere else.
+[[tool.mypy.overrides]]
+module = ["backend.app.generators.*", "backend.app.utils.io"]
+warn_unused_ignores = false
+
+# remote_gpu.py is a single-file runner for a separately provisioned GPU
+# environment. Type-check it for real mistakes, but do not demand annotations
+# on its interactive-environment helpers.
+[[tool.mypy.overrides]]
+module = ["remote_gpu", "remote_gpu_filled"]
+warn_unused_ignores = false
+check_untyped_defs = false
+
+# Tests assert liveness at runtime; Optional-pk unwrap noise adds nothing there.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disable_error_code = ["union-attr", "arg-type", "attr-defined", "operator", "index", "list-item"]

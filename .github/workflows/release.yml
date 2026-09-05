@@ -1,0 +1,97 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      WARM_UP: "false"
+      LOG_LEVEL: "WARNING"
+      UV_CACHE_DIR: ${{ github.workspace }}/.runtime/cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.runtime/python
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.venv
+      TMPDIR: ${{ github.workspace }}/.runtime/tmp
+      HF_HOME: ${{ github.workspace }}/models/huggingface
+      OUTPUT_DIR: ${{ github.workspace }}/output
+      LORA_DIR: ${{ github.workspace }}/models/loras
+      WEIGHTS_DIR: ${{ github.workspace }}/models/weights
+      RUNTIME_DIR: ${{ github.workspace }}/.runtime
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: bootstrap project-owned tools
+        run: bash scripts/bootstrap-tools.sh
+      - name: install project-owned Python and test dependencies
+        run: |
+          source scripts/project-env.sh
+          source scripts/tool-versions.env
+          uv python install "$PYTHON_VERSION"
+          uv sync --only-group test --frozen
+      - name: install frontend dependencies
+        run: source scripts/project-env.sh && cd frontend && npm ci
+      - name: verify source and build production frontend
+        run: make check
+      - name: build and verify standalone bundle
+        run: make release-bundle
+      - name: upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-bundle
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    needs: build
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: download release bundle
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-bundle
+          path: release
+      - name: attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release/*
+
+  publish:
+    needs: [build, attest]
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (needs.attest.result == 'success' || needs.attest.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: download release bundle
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-bundle
+          path: release
+      - name: publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/*.tar.xz release/*.tar.xz.sha256
+          release/*.cdx.json release/*.cdx.json.sha256
+          --verify-tag --generate-notes
+          --title "The Wizard's Brush $GITHUB_REF_NAME"

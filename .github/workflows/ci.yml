@@ -1,0 +1,76 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Rapid pushes to a branch supersede in-flight runs instead of piling up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WARM_UP: "false"
+      LOG_LEVEL: "WARNING"
+      UV_CACHE_DIR: ${{ github.workspace }}/.runtime/cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.runtime/python
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.venv
+      TMPDIR: ${{ github.workspace }}/.runtime/tmp
+      HF_HOME: ${{ github.workspace }}/models/huggingface
+      OUTPUT_DIR: ${{ github.workspace }}/output
+      LORA_DIR: ${{ github.workspace }}/models/loras
+      WEIGHTS_DIR: ${{ github.workspace }}/models/weights
+      RUNTIME_DIR: ${{ github.workspace }}/.runtime
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: bootstrap project-owned tools
+        run: bash scripts/bootstrap-tools.sh
+      - name: install project-owned Python
+        run: source scripts/project-env.sh && source scripts/tool-versions.env && uv python install "$PYTHON_VERSION"
+      # Torch-free install: tests never import the heavy diffusion stack
+      # (enforced by the no-torch guard fixture in tests/conftest.py).
+      # --frozen: resolve strictly from the committed uv.lock, so a run can
+      # never silently pick up a different dependency set than a dev has.
+      - name: install test group
+        run: source scripts/project-env.sh && uv sync --only-group test --frozen
+      - name: containment audit
+        run: source scripts/project-env.sh && .venv/bin/python scripts/doctor.py
+      - name: ruff
+        # Version comes from uv.lock like everything else, so CI and `make lint`
+        # cannot disagree. The rule set is pinned explicitly in pyproject.
+        run: source scripts/project-env.sh && uv run --no-sync ruff check backend tests scripts remote_gpu.py
+      - name: mypy
+        run: source scripts/project-env.sh && uv run --no-sync mypy
+      - name: pytest
+        run: source scripts/project-env.sh && uv run --no-sync python -m pytest tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.runtime/cache/npm
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: bootstrap project-owned tools
+        working-directory: .
+        run: bash scripts/bootstrap-tools.sh
+      - run: source ../scripts/project-env.sh && npm ci
+      - run: source ../scripts/project-env.sh && npm run lint
+      - run: source ../scripts/project-env.sh && npm run format:check
+      - run: source ../scripts/project-env.sh && npm run test
+      - run: source ../scripts/project-env.sh && npm run build

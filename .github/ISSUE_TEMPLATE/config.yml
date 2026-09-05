@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/wizards-ecosystem/wizards-brush/blob/main/SECURITY.md
+    about: Please do not disclose vulnerabilities in a public issue.
+  - name: Support and questions
+    url: https://github.com/wizards-ecosystem/wizards-brush/blob/main/SUPPORT.md
+    about: Read the support guide before opening an issue.

@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible problem in The Wizard's Brush.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove secrets, private URLs, generated media, and personal data.
+        Security vulnerabilities belong in SECURITY.md, not this form.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Include the expected result and the actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, app version/commit, browser, and local or Remote GPU lane.
+    validations:
+      required: true
+  - type: dropdown
+    id: supported-platform
+    attributes:
+      label: Platform status
+      description: The supported local baseline is Linux/WSL2 with an NVIDIA CUDA GPU.
+      options:
+        - Supported baseline
+        - Remote GPU deployment
+        - Unsupported or experimental platform
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove tokens, tunnel URLs, prompts, and private media before attaching.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Safety checklist
+      options:
+        - label: I searched existing issues and removed secrets, private URLs, personal data, and private media.
+          required: true

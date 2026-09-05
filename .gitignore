@@ -1,0 +1,90 @@
+# ---- Python / backend ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.runtime/
+
+# ---- Node / frontend ----
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ---- Secrets & runtime ----
+.env
+# Anything derived from .env carries the same secrets. `.env` alone did not
+# cover `.env.bak`, `.env.local`, `.env.save` or an editor's `.env~`, so a
+# secret-bearing file could sit untracked-but-committable next to the one rule
+# that was meant to prevent exactly that.
+.env.*
+.env~
+!.env.example
+*.env
+*.log
+# Generated Remote GPU runners carry real keys — never commit. Keep the old
+# name ignored as well so existing local deployments cannot leak during migration.
+remote_gpu_filled.py
+ecosystem_todo.md
+colab_filled.py
+# tsc incremental build state
+frontend/tsconfig.tsbuildinfo
+/release/
+
+# ---- Generated assets & runtime state ----
+output/
+# Organized project-local model stores. Only the LoRA instructions are tracked.
+models/*
+!models/loras/
+models/loras/*
+!models/loras/README.md
+# Legacy locations retained only so a pre-cutover checkout can migrate safely.
+/hf_cache/
+/weights/
+/loras/
+*.safetensors
+*.ckpt
+*.pth
+*.onnx
+
+# ---- Upstream reference checkouts and private build plans ----
+# `explorations/` holds full clones of the five projects that were read while
+# building this one — two of them GPL-3.0 — alongside the private build plans.
+# None of it belongs in this history: it is 400+ MB, it is not ours to
+# redistribute, and a stray `git add -A` would put GPL sources into an
+# Apache-2.0 repository. This lives here rather than in .git/info/exclude so the
+# protection travels with the clone instead of guarding one machine.
+explorations/
+
+# ---- Local scratch ----
+# Prompt scratchpads are working files belonging to whoever is at the machine,
+# not to the project: they hold whatever is being iterated on that day, which
+# here routinely means content that is deliberately local-only. Nothing reads
+# them at runtime, so ignoring them costs nothing — and it means a stray
+# `git add -A` cannot publish one, which is the whole point.
+temp_prompt.md
+temp_*.md
+*.prompt.md
+
+# Private evaluation notes are intentionally local. The Remote GPU worker is
+# configured from the ignored .env, and these notes may describe that setup.
+/docs/colab-next-phase.md
+/docs/feedback-loop.md
+/docs/local-model-benchmark.md
+/docs/video-stack-research.md
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- Claude Code local ----
+.claude/settings.local.json
+
+# runtime model caches
+gfpgan/
