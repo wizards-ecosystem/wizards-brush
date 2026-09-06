@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.svg" width="100%" alt="The Wizard's Brush - a local-first image and video atelier">
+  <img src="docs/assets/brush-header.png" width="100%" alt="The Wizard's Brush - a local-first image and video atelier">
 </p>
 
 <h1 align="center">The Wizard's Brush</h1>

@@ -207,7 +207,8 @@ def test_readme_quick_start_and_frontend_legal_assets_are_shipped():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert '<h1 align="center">The Wizard\'s Brush</h1>' in readme
     assert "make install" in readme and "make models" in readme and "make start" in readme
-    assert "docs/assets/readme-hero.svg" in readme
+    assert "docs/assets/brush-header.png" in readme
+    assert (ROOT / "docs" / "assets" / "brush-header.png").is_file()
     for badge in (
         "github/actions/workflow/status/wizards-ecosystem/wizards-brush/ci.yml",
         "github/v/release/wizards-ecosystem/wizards-brush",
