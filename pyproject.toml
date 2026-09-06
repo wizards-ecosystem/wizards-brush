@@ -58,9 +58,9 @@ dependencies = [
     # protobuf<5 even though its solutions/controlnet_aux paths pass our smoke
     # test on 5.29.6; the matching uv override below documents that exception.
     "protobuf>=5.29.6,<6",
-    # Torch imports setuptools at runtime; 83.0.0 fixes PYSEC-2026-3447 and is
-    # smoke-tested with the pinned Torch/CUDA pair by optional-check.
-    "setuptools==83.0.0",
+    # Torch imports setuptools at runtime; 84.0.0 contains the fix for
+    # PYSEC-2026-3447 and is smoke-tested with the pinned Torch/CUDA pair.
+    "setuptools==84.0.0",
     "ftfy>=6.3",
     # quantization fallback when Nunchaku has no wheel for the installed torch
     "bitsandbytes>=0.48",
@@ -141,7 +141,7 @@ cache-dir = ".runtime/cache/uv"
 # MediaPipe 0.10.x has a stale protobuf<5 declaration, and Torch 2.11's
 # setuptools<82 ceiling predates the security-fixed 83.0 release. Keep these
 # identical to the direct dependencies; the release gate imports both stacks.
-override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==83.0.0"]
+override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==84.0.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

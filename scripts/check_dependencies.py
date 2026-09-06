@@ -23,7 +23,7 @@ def _override_is_tested(owner: str, dependency: str) -> bool:
     if (owner, dependency) == ("mediapipe", "protobuf"):
         return installed["mediapipe"] == "0.10.14" and installed["protobuf"] == "5.29.6"
     if (owner, dependency) == ("torch", "setuptools"):
-        return installed["torch"] == "2.11.0+cu130" and installed["setuptools"] == "83.0.0"
+        return installed["torch"] == "2.11.0+cu130" and installed["setuptools"] == "84.0.0"
     return False
 
 
