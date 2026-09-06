@@ -36,6 +36,10 @@ os.environ["PROBE_DEVICE"] = "false"
 # developer happens to have in their own .env — a machine set to LOCAL_QUANT=
 # nunchaku would otherwise fail the heavy-import guard on an unrelated change.
 os.environ["LOCAL_QUANT"] = "4bit"
+# Tests that exercise model switching need a deterministic second slot. Public
+# defaults deliberately ship only the starter model, while a developer's .env
+# often configures this slot; pin it here so CI and local runs see one contract.
+os.environ["LOCAL_IMAGE_MODEL_HQ"] = "Tongyi-MAI/Z-Image"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["REMOTE_GPU_BASE_URL"] = ""  # env beats .env — keep tests off any real tunnel
 # Persisting an asset calls enrichment.enqueue(), which spawns a daemon thread
