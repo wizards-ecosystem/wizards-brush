@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, syncMediaToken } from "../api/client";
+import { api, saveBrowserSession } from "../api/client";
 import type { AppSettings, UserPreset } from "../api/types";
 import { Icon, type IconName } from "../components/icons";
 import { WildcardManager } from "../components/WildcardManager";
@@ -17,21 +17,24 @@ export function Settings() {
   const [data, setData] = useState<AppSettings | null>(null);
   const [url, setUrl] = useState("");
   const [secret, setSecret] = useState("");
-  const [apiToken, setApiToken] = useState(localStorage.getItem("api_token") || "");
+  const [apiToken, setApiToken] = useState("");
   const [saving, setSaving] = useState(false);
+  const [savingAccess, setSavingAccess] = useState(false);
   const [msg, setMsg] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [presets, setPresets] = useState<UserPreset[]>([]);
 
   const load = () =>
     api.getSettings().then((d) => {
       setData(d);
       setUrl(d.remote_gpu_base_url || "");
+      setLoadError("");
     });
   const loadPresets = () => api.userPresets().then(setPresets);
   useEffect(() => {
-    load();
-    loadPresets();
-    refreshStats();
+    void Promise.all([load(), loadPresets(), refreshStats()]).catch((error) => {
+      setLoadError(`${error}`);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -76,10 +79,72 @@ export function Settings() {
     }
   };
 
+  const saveApiToken = async () => {
+    setSavingAccess(true);
+    try {
+      await saveBrowserSession(apiToken);
+      toast(
+        apiToken ? "Browser session saved — reloading" : "Browser session cleared — reloading",
+        "success",
+      );
+      setTimeout(() => location.reload(), 400);
+    } catch (error) {
+      toast(`${error}`, "error");
+    } finally {
+      setSavingAccess(false);
+    }
+  };
+
+  const accessSection = (
+    <SettingsSection
+      id="access"
+      icon="settings"
+      title="API access"
+      description="Authenticate this browser with backend-issued, script-inaccessible cookies. Use make browser-dev or make browser to keep that profile inside the project."
+    >
+      <p className="text-xs leading-relaxed text-muted">
+        When the backend has <code className="technical text-accent">API_TOKEN</code> set, enter the same
+        token here. It is never written to browser storage. Leave this blank and save to clear the current
+        browser session.
+      </p>
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <label className="min-w-0 flex-1">
+          <span className="sr-only">API token</span>
+          <input
+            className="input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="No browser token"
+            value={apiToken}
+            onChange={(event) => setApiToken(event.target.value)}
+          />
+        </label>
+        <Button loading={savingAccess} onClick={() => void saveApiToken()}>
+          Save token
+        </Button>
+      </div>
+    </SettingsSection>
+  );
+
   if (!data)
     return (
-      <div className="page-pad flex items-center gap-3 text-sm text-muted">
-        <Spinner /> Loading workshop settings…
+      <div className="page-shell page-pad mx-auto max-w-3xl">
+        <PageHeader
+          kicker="Workshop configuration"
+          title="Settings"
+          description="Authenticate this browser or wait for the workshop settings to load."
+        />
+        {loadError ? (
+          <div className="mt-6 border-l-2 border-warn bg-warn/8 px-4 py-3 text-xs leading-relaxed text-warn">
+            The protected settings could not be loaded: {loadError}
+          </div>
+        ) : (
+          <div className="mt-6 flex items-center gap-3 text-sm text-muted">
+            <Spinner /> Loading workshop settings…
+          </div>
+        )}
+        <div className="mt-10">{accessSection}</div>
       </div>
     );
 
@@ -291,40 +356,7 @@ export function Settings() {
             </Link>
           </SettingsSection>
 
-          <SettingsSection
-            id="access"
-            icon="settings"
-            title="API access"
-            description="Store the optional API token in the active browser profile. Use make browser-dev or make browser to keep that profile inside the project."
-          >
-            <p className="text-xs leading-relaxed text-muted">
-              When the backend has <code className="technical text-accent">API_TOKEN</code> set, enter the
-              same token here. Leave it blank when authentication is disabled.
-            </p>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <label className="min-w-0 flex-1">
-                <span className="sr-only">API token</span>
-                <input
-                  className="input"
-                  type="password"
-                  placeholder="No browser token"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.target.value)}
-                />
-              </label>
-              <Button
-                onClick={() => {
-                  if (apiToken) localStorage.setItem("api_token", apiToken);
-                  else localStorage.removeItem("api_token");
-                  syncMediaToken(apiToken);
-                  toast("API token saved — reloading", "success");
-                  setTimeout(() => location.reload(), 400);
-                }}
-              >
-                Save token
-              </Button>
-            </div>
-          </SettingsSection>
+          {accessSection}
 
           <SettingsSection
             id="about"

@@ -129,16 +129,14 @@ describe("GeneratorView workstation", () => {
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
   });
 
-  it("clears legacy prompt drafts without touching credentials or preferences", () => {
+  it("clears legacy prompt drafts without touching unrelated preferences", () => {
     localStorage.setItem("gen-draft-image_local", JSON.stringify({ prompt: "old private prompt" }));
-    localStorage.setItem("api_token", "keep-me");
     localStorage.setItem("gen-control-depth", "full");
 
     renderGenerator();
 
     expect(screen.getByLabelText("Prompt")).toHaveValue("");
     expect(localStorage.getItem("gen-draft-image_local")).toBeNull();
-    expect(localStorage.getItem("api_token")).toBe("keep-me");
     expect(localStorage.getItem("gen-control-depth")).toBe("full");
   });
 });

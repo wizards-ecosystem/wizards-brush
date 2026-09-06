@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, jobSocket } from "../api/client";
+import { api, jobSocket, prepareBrowserSession } from "../api/client";
 import type { Asset, GeneratorSpec, Job, Presets, Stats, SystemStatus } from "../api/types";
 import { applyJobEvent } from "../lib/jobEvents";
 import { previewObjectUrl } from "../lib/wsframe";
@@ -63,6 +63,7 @@ export const useStore = create<State>((set, get) => ({
     if (get().booted) return;
     set({ booted: true });
     try {
+      await prepareBrowserSession();
       const [specs, presets] = await Promise.all([api.models(), api.presets()]);
       set({ specs, presets });
     } catch (e) {
