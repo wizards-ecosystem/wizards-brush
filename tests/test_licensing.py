@@ -61,8 +61,9 @@ def test_notice_records_the_gpl_boundary():
 
 def test_notice_records_the_agpl_and_later_study_boundaries():
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
-    for required in ("stable-diffusion-webui", "locally-uncensored", "Fooocus",
-                     "Uncensored-Local-Studio", "open-generative-ai", "AGPL-3.0"):
+    for required in ("stable-diffusion-webui", "PurpleDoubleD repository 1191052193",
+                     "Fooocus", "techjarves repository 1258932513",
+                     "open-generative-ai", "AGPL-3.0"):
         assert required in notice, f"NOTICE does not record the {required} study boundary"
 
 

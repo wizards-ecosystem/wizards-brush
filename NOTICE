@@ -51,7 +51,7 @@ SwarmUI: https://github.com/mcmonkeyprojects/SwarmUI
     took effect when it did not. backend/app/notify.py follows the design of
     SwarmUI's WebhookManager.
 
-Uncensored-Local-Studio: https://github.com/techjarves/Uncensored-Local-Studio
+techjarves repository 1258932513: https://api.github.com/repositories/1258932513
     Licensed under the MIT License.
 
     The backend diagnosis and capability surfaces follow its useful lifecycle
@@ -114,7 +114,8 @@ https://github.com/AUTOMATIC1111/stable-diffusion-webui (AGPL-3.0)
     implements its own routers, parameter versioning, geometry, and UI. The
     A1111 parameters block is an interoperability format, not copied code.
 
-locally-uncensored: https://github.com/PurpleDoubleD/locally-uncensored (AGPL-3.0)
+PurpleDoubleD repository 1191052193:
+https://api.github.com/repositories/1191052193 (AGPL-3.0)
     Its incident-driven lifecycle safeguards informed independent watchdog,
     preflight, orphan-recovery, and retry designs. No source or UI expression
     was copied.

@@ -35,8 +35,8 @@ script. A source was considered mined only after:
 | SD.Next | `684940e015911efab2911667231946d91fef9f50` | Apache-2.0 | model probing, quant dispatch, applied-state guards | patterns adapted with attribution |
 | AUTOMATIC1111 stable-diffusion-webui | source snapshot read 2026-08-30 | AGPL-3.0 | persisted formats, masking, grids, adapters, reliability | behavior studied; independently reimplemented |
 | Fooocus | v2.5.5-era snapshot read 2026-08-30 | GPL-3.0 plus stricter inpaint material | simple UX, inpaint geometry, metadata, presets | behavior studied; independently reimplemented; restricted algorithm excluded |
-| locally-uncensored | source snapshot read 2026-08-30 | AGPL-3.0 | watchdogs, lifecycle recovery, preflight ordering | behavior studied; independently reimplemented |
-| Uncensored-Local-Studio | source snapshot read 2026-08-30 | MIT | capability negotiation, diagnosis, model lifecycle | patterns independently adapted with attribution |
+| PurpleDoubleD repository 1191052193 | source snapshot read 2026-08-30 | AGPL-3.0 | watchdogs, lifecycle recovery, preflight ordering | behavior studied; independently reimplemented |
+| techjarves repository 1258932513 | source snapshot read 2026-08-30 | MIT | capability negotiation, diagnosis, model lifecycle | patterns independently adapted with attribution |
 | open-generative-ai | source snapshot read 2026-08-30 | MIT | large descriptor corpus and schema-driven UI failure modes | patterns independently adapted with attribution |
 | LUSTIFY APEX v8 conversion helper | local one-off study | project-authored | private single-file SDXL conversion | rejected from product; obsolete and model-specific |
 
@@ -289,7 +289,7 @@ identity, universal `guidance_rescale`, SDXL-only ADM controls, automatic
 checkpoint quarantine, and archiving every intermediate. Live previews provide
 the useful intermediate feedback without multiplying library assets.
 
-### locally-uncensored
+### PurpleDoubleD repository 1191052193
 
 Adopted or adapted: silent-gap watchdogs, warm-up budget, durable remote identity,
 Diagnosis wiring, quoted/redacted upstream errors, ordered preflights, cache
@@ -303,7 +303,7 @@ Rejected: killing arbitrary GPU processes, probing foreign ports, installing a
 managed Python/ComfyUI runtime, and first-run completion flags. This app owns its
 workers and makes diagnosis permanently rerunnable.
 
-### Uncensored-Local-Studio
+### techjarves repository 1258932513
 
 Adopted or adapted: capability-gated offering, unavailable reasons, context-
 aware errors, complete-versus-partial artifacts, pre-load validation, honest
