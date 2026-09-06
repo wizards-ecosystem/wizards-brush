@@ -29,7 +29,7 @@ _REQUIRED_PUBLIC_FILES = (
     "docs/distribution.md",
     "docs/model-licenses.md",
     "docs/network-security.md",
-    "docs/assets/readme-hero.svg",
+    "docs/assets/brush-header.png",
     "docs/assets/readme-social.png",
     "scripts/check-host.sh",
     "scripts/build_release.py",
@@ -183,6 +183,7 @@ def test_workflows_pin_actions_and_release_credentials_are_job_scoped():
     assert release.count("GH_TOKEN:") == 1
     assert "permissions:\n  contents: read" in release
     assert "release/*.cdx.json release/*.cdx.json.sha256" in release
+    assert '--repo "$GITHUB_REPOSITORY"' in release
     assert "subject-path: release/*" in release
 
 

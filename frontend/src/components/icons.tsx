@@ -361,11 +361,30 @@ export function Icon({
 
 export function BrushMark({ className = "" }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 42 42" aria-hidden="true">
-      <path d="M7 9h19l8 8v16H7z" fill="currentColor" opacity=".16" />
-      <path d="M8 8h19l7 7" fill="none" stroke="currentColor" strokeWidth="2" />
-      <path d="M11 27 28 10M17 32 34 15" fill="none" stroke="currentColor" strokeWidth="4" />
-      <path d="M9 35h17" fill="none" stroke="currentColor" strokeWidth="2" />
+    <svg className={className} viewBox="0 0 64 64" aria-hidden="true">
+      <path
+        d="m42 10 7 7-23 24-8-8Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18 33c-7 6-2 11-9 18 9 1 15-3 17-10"
+        fill="currentColor"
+        fillOpacity=".22"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8 54c12-1 23 0 34-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

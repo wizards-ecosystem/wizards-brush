@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/wizards-ecosystem/wizards-brush/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/wizards-ecosystem/wizards-brush/ci.yml?branch=main&amp;style=flat-square&amp;label=build&amp;color=65c98b"></a>
-  <a href="https://github.com/wizards-ecosystem/wizards-brush/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-brush?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=ff704d"></a>
-  <a href="LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-7aa2f7?style=flat-square"></a>
-  <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-f4c76b?style=flat-square"></a>
+  <a href="https://github.com/wizards-ecosystem/wizards-brush/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/wizards-ecosystem/wizards-brush/ci.yml?branch=main&amp;style=flat-square&amp;label=build&amp;color=35633b"></a>
+  <a href="https://github.com/wizards-ecosystem/wizards-brush/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wizards-ecosystem/wizards-brush?display_name=tag&amp;sort=semver&amp;style=flat-square&amp;color=994d34"></a>
+  <a href="LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-272522?style=flat-square"></a>
+  <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-85621d?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
   <img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-339933?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white">
   <img alt="NVIDIA CUDA" src="https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900?style=flat-square&amp;logo=nvidia&amp;logoColor=white">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-a5a69d?style=flat-square&amp;logo=linux&amp;logoColor=white">
-  <img alt="Local-first" src="https://img.shields.io/badge/design-local--first-8f7df0?style=flat-square">
+  <img alt="Local-first" src="https://img.shields.io/badge/design-local--first-285e63?style=flat-square">
 </p>
 
 <p align="center">
