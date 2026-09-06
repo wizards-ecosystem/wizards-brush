@@ -693,7 +693,7 @@ def test_remote_video_refuses_a_write_that_would_consume_disk_reserve(monkeypatc
 
 
 def test_video_probe_rejects_dimensions_before_reading_a_frame(monkeypatch, tmp_path):
-    import imageio_ffmpeg
+    import sys
 
     from backend.app.utils.io import validate_video_file
 
@@ -714,7 +714,9 @@ def test_video_probe_rejects_dimensions_before_reading_a_frame(monkeypatch, tmp_
             return None
 
     reader = MetadataOnly()
-    monkeypatch.setattr(imageio_ffmpeg, "read_frames", lambda _path: reader)
+    monkeypatch.setitem(
+        sys.modules, "imageio_ffmpeg", SimpleNamespace(read_frames=lambda _path: reader),
+    )
     with pytest.raises(RuntimeError, match="dimensions"):
         validate_video_file(
             tmp_path / "untrusted.mp4", max_side=4096,
@@ -735,7 +737,7 @@ def test_video_probe_rejects_dimensions_before_reading_a_frame(monkeypatch, tmp_
 def test_video_probe_rejects_unbounded_timing_metadata(
     monkeypatch, tmp_path, metadata, match,
 ):
-    import imageio_ffmpeg
+    import sys
 
     from backend.app.utils.io import validate_video_file
 
@@ -749,7 +751,9 @@ def test_video_probe_rejects_unbounded_timing_metadata(
         def close(self):
             return None
 
-    monkeypatch.setattr(imageio_ffmpeg, "read_frames", lambda _path: Reader())
+    monkeypatch.setitem(
+        sys.modules, "imageio_ffmpeg", SimpleNamespace(read_frames=lambda _path: Reader()),
+    )
     with pytest.raises(RuntimeError, match=match):
         validate_video_file(
             tmp_path / "untrusted.mp4", max_side=2048, max_pixels=4_194_304,

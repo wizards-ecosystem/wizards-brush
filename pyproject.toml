@@ -206,7 +206,7 @@ module = [
     "imageio.*", "imageio_ffmpeg.*", "spandrel.*", "facexlib.*",
     "huggingface_hub.*", "bitsandbytes.*", "nunchaku.*", "mediapipe.*",
     "controlnet_aux.*", "onnxruntime.*", "numpy.*", "cv2.*",
-    "nest_asyncio.*", "sageattention.*",
+    "nest_asyncio.*", "safetensors.*", "sageattention.*",
 ]
 ignore_missing_imports = true
 
