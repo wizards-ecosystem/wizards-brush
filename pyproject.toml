@@ -46,8 +46,8 @@ dependencies = [
     # backend in generators/quant.py): its wheels are built per torch minor and
     # currently top out at torch 2.11 (cu12.8 / cu13.0). Raising torch past 2.11
     # silently drops us back to the bitsandbytes path, so bump both together.
-    "torch==2.11.0",
-    "torchvision==0.26.0",
+    "torch==2.14.0",
+    "torchvision==0.29.0",
     "diffusers>=0.39",
     "transformers>=4.56,<6",
     "accelerate>=1.10",
@@ -57,10 +57,10 @@ dependencies = [
     # 5.29.6 fixes PYSEC-2026-1805. MediaPipe's legacy wheel declares
     # protobuf<5 even though its solutions/controlnet_aux paths pass our smoke
     # test on 5.29.6; the matching uv override below documents that exception.
-    "protobuf>=5.29.6,<6",
+    "protobuf>=5.29.6,<8",
     # Torch imports setuptools at runtime; 83.0.0 fixes PYSEC-2026-3447 and is
     # smoke-tested with the pinned Torch/CUDA pair by optional-check.
-    "setuptools==83.0.0",
+    "setuptools==84.0.0",
     "ftfy>=6.3",
     # quantization fallback when Nunchaku has no wheel for the installed torch
     "bitsandbytes>=0.48",
@@ -85,7 +85,7 @@ faces = ["facexlib>=0.3"]
 # The floor was previously uncapped, so any fresh install after 0.10.30 shipped
 # silently lost both features. Porting our own detector to the Tasks API would
 # not help controlnet_aux, so the cap stays until that package moves.
-detailer = ["mediapipe>=0.10.14,<0.10.30"]
+detailer = ["mediapipe>=0.10.14,<1.0.2"]
 # RIFE frame interpolation via ONNX (CPU works; CUDA provider used when present).
 rife = ["onnxruntime>=1.18"]
 # ControlNet depth/pose preprocessors (canny needs only cv2, which detailer brings).
@@ -141,7 +141,7 @@ cache-dir = ".runtime/cache/uv"
 # MediaPipe 0.10.x has a stale protobuf<5 declaration, and Torch 2.11's
 # setuptools<82 ceiling predates the security-fixed 83.0 release. Keep these
 # identical to the direct dependencies; the release gate imports both stacks.
-override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==83.0.0"]
+override-dependencies = ["protobuf>=5.29.6,<8", "setuptools==84.0.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
