@@ -4,19 +4,20 @@
    precise, and restrained. Legacy colour aliases intentionally resolve to the
    new system while the component layer supplies the stronger compositions. */
 @theme {
-  --color-bg: #0d0e0c;
-  --color-panel: #121411;
-  --color-panel2: #1a1d18;
-  --color-panel3: #22261f;
-  --color-edge: #30342c;
-  --color-ink: #f1efe7;
-  --color-muted: #a5a69d;
-  --color-accent: #ff704d;
-  --color-accent2: #7aa2f7;
-  --color-focus: #9bd8ff;
-  --color-ok: #65c98b;
-  --color-warn: #e6b85c;
-  --color-danger: #f06d6d;
+  --color-bg: #232522;
+  --color-panel: #292b28;
+  --color-panel2: #2d302c;
+  --color-panel3: #383b36;
+  --color-edge: #4a4d47;
+  --color-ink: #f7f6f2;
+  --color-muted: #c9c4ba;
+  --color-accent: #e5ad99;
+  --color-accent-deep: #994d34;
+  --color-accent2: #a9c0d8;
+  --color-focus: #e3c477;
+  --color-ok: #afc9ae;
+  --color-warn: #e3c477;
+  --color-danger: #e6a0aa;
 
   --font-sans: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Newsreader Variable", "Newsreader", Georgia, serif;
@@ -115,14 +116,17 @@ button:not(:disabled) {
   }
 
   .btn-primary {
-    @apply border border-accent bg-accent px-4 py-2 text-sm font-semibold text-[#17100d];
+    @apply border px-4 py-2 text-sm font-semibold;
+    border-color: var(--color-accent-deep);
+    background: var(--color-accent-deep);
+    color: #f7f6f2;
     border-radius: 6px;
     box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.26);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: #ff8265;
-    border-color: #ff8265;
+    background: #87412d;
+    border-color: #87412d;
     box-shadow:
       inset 0 -1px 0 rgb(0 0 0 / 0.2),
       var(--shadow-lift);
@@ -362,12 +366,12 @@ input[type="range"]::-moz-range-thumb {
 ::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 8px;
-  background: #42463d;
+  background: #4a4d47;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #585d51;
+  background: #62665e;
   background-clip: padding-box;
 }
 

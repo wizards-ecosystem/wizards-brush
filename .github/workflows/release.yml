@@ -93,5 +93,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           release/*.tar.xz release/*.tar.xz.sha256
           release/*.cdx.json release/*.cdx.json.sha256
+          --repo "$GITHUB_REPOSITORY"
           --verify-tag --generate-notes
           --title "The Wizard's Brush $GITHUB_REF_NAME"
