@@ -90,10 +90,10 @@ boundary below a rule, not a preference:
 
 | Upstream | Licence | What is allowed |
 |---|---|---|
-| SwarmUI, Uncensored-Local-Studio, open-generative-ai | MIT | Copy with attribution |
+| SwarmUI, techjarves repository 1258932513, open-generative-ai | MIT | Copy with attribution |
 | InvokeAI, SD.Next | Apache-2.0 | Copy with attribution - add it to `NOTICE` |
 | ComfyUI, krita-ai-diffusion, Fooocus | **GPL-3.0** | **Read and reimplement. Never paste.** |
-| stable-diffusion-webui, locally-uncensored | **AGPL-3.0** | **Read and reimplement. Never paste.** |
+| stable-diffusion-webui, PurpleDoubleD repository 1191052193 | **AGPL-3.0** | **Read and reimplement. Never paste.** |
 
 Reimplementing an idea, an algorithm or a wire format from a GPL project is fine
 and is what the two existing cases did; copying its expression is not, and would
