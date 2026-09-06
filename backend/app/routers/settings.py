@@ -8,13 +8,19 @@ from __future__ import annotations
 import ipaddress
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ..config import ROOT, settings
 from ..remote_gpu_client import remote_gpu_health
+from ..security import browser_session_token
 
 router = APIRouter(tags=["settings"])
+_BROWSER_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+_BROWSER_COOKIES = (
+    ("wb_api_token", "/api", "api"),
+    ("wb_media_token", "/files", "media"),
+)
 
 
 def _mask(secret: str) -> str:
@@ -25,6 +31,29 @@ def _mask(secret: str) -> str:
 
 def _secret_is_set(secret: str) -> bool:
     return secret.strip().lower() not in {"", "change-me-to-anything", "changeme", "secret", "test"}
+
+
+def _clear_browser_session(request: Request, response: Response) -> None:
+    secure = request.url.scheme == "https"
+    cookies = [(name, path) for name, path, _ in _BROWSER_COOKIES]
+    for name, path in (*cookies, ("wb_ws_token", "/api/jobs/ws")):
+        response.delete_cookie(
+            name, path=path, secure=secure, httponly=True, samesite="strict",
+        )
+
+
+def _set_browser_session(request: Request, response: Response) -> None:
+    secure = request.url.scheme == "https"
+    for name, path, purpose in _BROWSER_COOKIES:
+        response.set_cookie(
+            name,
+            browser_session_token(settings.api_token, purpose),
+            max_age=_BROWSER_COOKIE_MAX_AGE,
+            path=path,
+            secure=secure,
+            httponly=True,
+            samesite="strict",
+        )
 
 
 class SettingsUpdate(BaseModel):
@@ -116,6 +145,24 @@ def _settings_payload() -> dict:
 @router.get("/settings")
 async def read_settings() -> dict:
     return _settings_payload()
+
+
+@router.post("/auth/session")
+async def create_browser_session(request: Request, response: Response) -> dict:
+    """Exchange a valid API header for script-inaccessible browser cookies."""
+    response.headers["Cache-Control"] = "no-store"
+    _clear_browser_session(request, response)
+    if settings.api_token:
+        # api_auth validates the header or an existing session before routing.
+        _set_browser_session(request, response)
+    return {"ok": True, "authenticated": bool(settings.api_token)}
+
+
+@router.delete("/auth/session")
+async def delete_browser_session(request: Request, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _clear_browser_session(request, response)
+    return {"ok": True, "authenticated": False}
 
 
 @router.post("/settings")

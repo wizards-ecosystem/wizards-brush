@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../api/client", () => ({
   api: mocks.api,
+  prepareBrowserSession: () => Promise.resolve(),
   jobSocket: (onEvent: (e: unknown) => void, onFrame?: (f: unknown) => void) => {
     mocks.handler.fn = onEvent; // capture the store's event handler to drive it
     if (onFrame) mocks.frames.fn = onFrame;
