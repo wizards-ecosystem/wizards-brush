@@ -19,15 +19,20 @@ API_TOKEN=paste-the-random-value-here
 ```
 
 `make start` refuses a non-loopback listener when `API_TOKEN` is empty. Enter
-the same token in **Settings -> API access** on each browser. HTTP API calls use
-the `X-API-Token` header; media and WebSocket connections use separate,
-path-scoped `SameSite=Strict` cookies so the token never appears in a URL.
+the same token in **Settings -> API access** on each browser. Command-line API
+calls use the `X-API-Token` header. The browser exchanges that header once for
+backend-issued, path-scoped `HttpOnly` and `SameSite=Strict` cookies, so the
+reusable token is never persisted in script-readable storage or placed in a
+URL. The cookies contain purpose-bound session credentials, not the API token.
 
-`CORS_ORIGINS` is only for a browser frontend hosted at a different exact
-origin. List origins as comma-separated `scheme://host:port` values. Wildcards
-are ignored because a tokenless wildcard would make arbitrary web pages callers
-of a local API. Command-line clients may omit `Origin`; browser writes and every
-WebSocket connection are checked against their served or configured origin.
+`CORS_ORIGINS` adds exact origins for trusted development or reverse-proxy
+layouts within the same site. List origins as comma-separated
+`scheme://host:port` values. It does not turn on cross-site cookie
+authentication; serve the frontend and API from one site. The bundled Vite
+proxy is already supported without configuration. Wildcards are ignored
+because a tokenless wildcard would make arbitrary web pages callers of a local
+API. Command-line clients may omit `Origin`; browser API requests and every
+WebSocket connection are checked against the served or configured origin.
 
 Do not port-forward the Uvicorn listener or expose it directly to the internet.
 For access outside one trusted LAN, keep the app on loopback, set `API_TOKEN`,
