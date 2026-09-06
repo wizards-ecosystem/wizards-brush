@@ -10,7 +10,7 @@ React 19.2.8, React DOM 19.2.8, and Scheduler 0.27.0
 Copyright (c) Meta Platforms, Inc. and affiliates.
 https://github.com/facebook/react
 
-React Router 7.18.2 and React Router DOM 7.18.2
+React Router 7.18.3 and React Router DOM 7.18.3
 Copyright (c) React Training LLC 2015-2019
 Copyright (c) Remix Software Inc. 2020-2021
 Copyright (c) Shopify Inc. 2022-2023
@@ -33,7 +33,7 @@ Tailwind CSS 4.3.3 and @tailwindcss/postcss 4.3.3
 Copyright (c) Tailwind Labs, Inc.
 https://github.com/tailwindlabs/tailwindcss
 
-Vite 8.2.1
+Vite 8.2.2
 Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
 https://github.com/vitejs/vite
 
