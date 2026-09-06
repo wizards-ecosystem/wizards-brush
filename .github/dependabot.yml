@@ -24,6 +24,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # TypeScript 7 is outside typescript-eslint's current supported peer range.
+    # Remove this boundary when the lint stack accepts TypeScript 7.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7"]
     groups:
       frontend-runtime:
         dependency-type: production
