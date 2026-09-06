@@ -5,6 +5,17 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # These upper bounds are runtime compatibility contracts. Keep safe updates
+    # below them flowing without asking Dependabot to widen the supported stack.
+    ignore:
+      - dependency-name: torch
+        versions: [">=2.12"]
+      - dependency-name: torchvision
+        versions: [">=0.27"]
+      - dependency-name: protobuf
+        versions: [">=6"]
+      - dependency-name: mediapipe
+        versions: [">=0.10.30"]
     groups:
       python-runtime:
         patterns: ["*"]

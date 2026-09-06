@@ -300,8 +300,8 @@ def test_patched_protobuf_override_has_an_optional_processor_smoke_test():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     smoke = (ROOT / "scripts" / "check_optional_imports.py").read_text(encoding="utf-8")
     assert '"protobuf>=5.29.6,<6"' in project
-    assert '"setuptools==83.0.0"' in project
-    assert 'override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==83.0.0"]' in project
+    assert '"setuptools==84.0.0"' in project
+    assert 'override-dependencies = ["protobuf>=5.29.6,<6", "setuptools==84.0.0"]' in project
     assert "optional-check:" in makefile
     assert "OpenposeDetector" in smoke and 'hasattr(mp, "solutions")' in smoke
 
@@ -310,6 +310,7 @@ def test_dependency_check_allows_only_the_two_smoke_tested_overrides():
     checker = (ROOT / "scripts" / "check_dependencies.py").read_text(encoding="utf-8")
     assert '("mediapipe", "protobuf")' in checker
     assert '("torch", "setuptools")' in checker
+    assert 'installed["setuptools"] == "84.0.0"' in checker
     assert "_override_is_tested" in checker
     assert "scripts/check_dependencies.py" in (ROOT / "Makefile").read_text(encoding="utf-8")
 
