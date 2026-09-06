@@ -33,7 +33,7 @@ Tailwind CSS 4.3.3 and @tailwindcss/postcss 4.3.3
 Copyright (c) Tailwind Labs, Inc.
 https://github.com/tailwindlabs/tailwindcss
 
-Vite 8.2.1
+Vite 8.2.2
 Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
 https://github.com/vitejs/vite
 
