@@ -25,6 +25,20 @@ import type {
 import { decodeFrame } from "../lib/wsframe";
 import type { BinaryFrame } from "../lib/wsframe";
 
+// v0.1.0 stored the browser token in localStorage. Keep it in memory only long
+// enough to exchange it for backend-issued HttpOnly cookies, then remove the
+// old persistent copy. Fresh sessions never write a reusable token here.
+let transitionalApiToken = "";
+if (typeof localStorage !== "undefined") {
+  transitionalApiToken = localStorage.getItem("api_token") || "";
+  localStorage.removeItem("api_token");
+}
+if (typeof document !== "undefined") {
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `wb_media_token=; Path=/files; SameSite=Strict; Max-Age=0${secure}`;
+  document.cookie = `wb_ws_token=; Path=/api/jobs/ws; SameSite=Strict; Max-Age=0${secure}`;
+}
+
 /** Extract FastAPI's {detail} from an error response, falling back to raw text/status. */
 async function errorDetail(r: Response): Promise<string> {
   let detail = await r.text();
@@ -52,22 +66,37 @@ async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
 }
 
 export function authHeaders(): Record<string, string> {
-  const tok = localStorage.getItem("api_token");
-  syncMediaToken(tok || "");
-  return tok ? { "X-API-Token": tok } : {};
+  return transitionalApiToken ? { "X-API-Token": transitionalApiToken } : {};
 }
 
-/** Keep browser-only auth out of URLs. Media elements and WebSockets cannot
- * attach the API header, so each gets a narrowly scoped SameSite cookie. */
-export function syncMediaToken(token: string): void {
-  if (typeof document === "undefined") return;
-  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = token
-    ? `wb_media_token=${encodeURIComponent(token)}; Path=/files; SameSite=Strict${secure}`
-    : "wb_media_token=; Path=/files; SameSite=Strict; Max-Age=0";
-  document.cookie = token
-    ? `wb_ws_token=${encodeURIComponent(token)}; Path=/api/jobs/ws; SameSite=Strict${secure}`
-    : "wb_ws_token=; Path=/api/jobs/ws; SameSite=Strict; Max-Age=0";
+async function exchangeBrowserToken(token: string): Promise<void> {
+  const response = await safeFetch("/api/auth/session", {
+    method: "POST",
+    headers: { "X-API-Token": token },
+  });
+  await j<OkResponse & { authenticated: boolean }>(response);
+  transitionalApiToken = "";
+  localStorage.removeItem("api_token");
+}
+
+/** Upgrade the pre-v0.1.1 browser token without breaking the first API load. */
+export async function prepareBrowserSession(): Promise<void> {
+  if (transitionalApiToken) await exchangeBrowserToken(transitionalApiToken);
+}
+
+/** Store browser authentication only in backend-issued HttpOnly cookies. */
+export async function saveBrowserSession(token: string): Promise<void> {
+  if (token) {
+    await exchangeBrowserToken(token);
+    return;
+  }
+  const response = await safeFetch("/api/auth/session", {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await j<OkResponse & { authenticated: boolean }>(response);
+  transitionalApiToken = "";
+  localStorage.removeItem("api_token");
 }
 
 const get = (url: string) => safeFetch(url, { headers: authHeaders() });
@@ -256,8 +285,6 @@ export function markUsed(id: number): void {
 
 export function jobSocket(onEvent: (e: any) => void, onFrame?: (frame: BinaryFrame) => void): WebSocket {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const tok = localStorage.getItem("api_token");
-  syncMediaToken(tok || "");
   const ws = new WebSocket(`${proto}://${location.host}/api/jobs/ws`);
   ws.binaryType = "arraybuffer";
   ws.onmessage = (m) => {

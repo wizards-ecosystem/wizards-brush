@@ -8,6 +8,24 @@ contributors know which user-facing changes need release notes.
 
 No changes yet.
 
+## [0.1.1] - 2026-09-06
+
+### Changed
+
+- Browser access now uses backend-issued, path-scoped session cookies and
+  automatically migrates the previous browser profile setting.
+- The API access form remains available before protected settings have loaded,
+  including first-time sign-in and token-rotation recovery.
+- Wildcard parsing now handles malformed delimiter-heavy prompts in linear time
+  while preserving the existing prompt language.
+
+### Security
+
+- Browser session cookies are `HttpOnly`, `SameSite=Strict`, secure over HTTPS,
+  and contain purpose-bound credentials instead of the reusable API token.
+- API headers remain supported for command-line and custom clients, while
+  browser credentials remain absent from URLs and script-readable persistence.
+
 ## [0.1.0] - 2026-09-05
 
 ### Added
@@ -53,4 +71,5 @@ No changes yet.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.1
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.0

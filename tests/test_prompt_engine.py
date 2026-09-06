@@ -35,6 +35,17 @@ def test_expand_strips_whitespace_in_options():
     assert expand_prompt("{ red | blue }", 0) == "red"
 
 
+def test_empty_variant_options_keep_the_existing_language():
+    assert [expand_prompt("{|x}", i) for i in range(2)] == ["", "x"]
+    assert [expand_prompt("{a||b}", i) for i in range(3)] == ["a", "", "b"]
+
+
+def test_unclosed_variant_group_stays_literal():
+    prompt = "{" + "|" * 2000
+    assert expand_prompt(prompt) == prompt[:2000]
+    assert not has_wildcards(prompt)
+
+
 def test_a1111_emphasis_is_normalized_without_damaging_escaped_text():
     assert strip_a1111_emphasis(
         r"(masterpiece:1.4), [soft], \(literal\), unmatched (mark"
