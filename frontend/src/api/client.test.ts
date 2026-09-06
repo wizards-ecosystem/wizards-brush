@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQuery, jobSocket, syncMediaToken } from "./client";
+import { buildQuery, jobSocket, saveBrowserSession } from "./client";
 
 afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("buildQuery", () => {
@@ -21,15 +22,51 @@ describe("buildQuery", () => {
 });
 
 describe("browser authentication", () => {
-  it("writes separate path-scoped cookies for media and live events", () => {
-    const setter = vi.spyOn(Document.prototype, "cookie", "set");
-    syncMediaToken("secret value");
-    expect(setter.mock.calls.map(([value]) => value)).toEqual(
+  it("migrates a v0.1.0 token once and removes its persistent copy", async () => {
+    localStorage.setItem("api_token", "old token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, authenticated: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const cookieSetter = vi.spyOn(Document.prototype, "cookie", "set");
+    vi.resetModules();
+
+    const freshClient = await import("./client");
+    expect(localStorage.getItem("api_token")).toBeNull();
+    expect(cookieSetter.mock.calls.map(([value]) => value)).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("wb_media_token=secret%20value; Path=/files; SameSite=Strict"),
-        expect.stringContaining("wb_ws_token=secret%20value; Path=/api/jobs/ws; SameSite=Strict"),
+        expect.stringContaining("wb_media_token=; Path=/files; SameSite=Strict; Max-Age=0"),
+        expect.stringContaining("wb_ws_token=; Path=/api/jobs/ws; SameSite=Strict; Max-Age=0"),
       ]),
     );
+    await freshClient.prepareBrowserSession();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/session", {
+      method: "POST",
+      headers: { "X-API-Token": "old token" },
+    });
+    expect(freshClient.authHeaders()).toEqual({});
+  });
+
+  it("exchanges the API token without writing it to browser storage", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, authenticated: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveBrowserSession("secret value");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/session", {
+      method: "POST",
+      headers: { "X-API-Token": "secret value" },
+    });
+    expect(localStorage.getItem("api_token")).toBeNull();
   });
 
   it("never puts the API token in the WebSocket URL", () => {
@@ -42,9 +79,8 @@ describe("browser authentication", () => {
       }
     }
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    localStorage.setItem("api_token", "do-not-log-me");
     jobSocket(() => undefined);
     expect(opened).toMatch(/\/api\/jobs\/ws$/);
-    expect(opened).not.toContain("do-not-log-me");
+    expect(new URL(opened).search).toBe("");
   });
 });

@@ -7,5 +7,6 @@ authors:
     given-names: Isaac
 repository-code: "https://github.com/wizards-ecosystem/wizards-brush"
 url: "https://github.com/wizards-ecosystem/wizards-brush"
-version: 0.1.0
+version: 0.1.1
+date-released: 2026-09-06
 license: Apache-2.0

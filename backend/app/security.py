@@ -1,6 +1,8 @@
 """Small, dependency-light request-boundary checks for the local web app."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import secrets
 from http.cookies import CookieError, SimpleCookie
@@ -15,6 +17,14 @@ _FRAME_HEADERS = {
     "content-security-policy": "frame-ancestors 'none'",
     "x-frame-options": "DENY",
 }
+
+
+def browser_session_token(api_token: str, purpose: str) -> str:
+    """Derive a cookie-safe credential without storing the reusable API token."""
+    if purpose not in {"api", "media"}:
+        raise ValueError("unknown browser session purpose")
+    message = f"the-wizards-brush:browser-session:{purpose}".encode()
+    return hmac.new(api_token.encode(), message, hashlib.sha256).hexdigest()
 
 
 class _BodyTooLarge(Exception):
@@ -137,10 +147,16 @@ class BrowserSecurityMiddleware:
             if path.startswith("/api") and not self._origin_allowed(scope, headers):
                 await self._close_ws(receive, send, 4403)
                 return
-            if (path.startswith("/api") and self.settings.api_token
-                    and not secrets.compare_digest(
-                        _cookie(headers, "wb_ws_token"), self.settings.api_token
-                    )):
+            api_cookie = _cookie(headers, "wb_api_token")
+            legacy_cookie = _cookie(headers, "wb_ws_token")
+            session_ok = bool(self.settings.api_token) and (
+                secrets.compare_digest(
+                    api_cookie,
+                    browser_session_token(self.settings.api_token, "api"),
+                )
+                or secrets.compare_digest(legacy_cookie, self.settings.api_token)
+            )
+            if path.startswith("/api") and self.settings.api_token and not session_ok:
                 await self._close_ws(receive, send, 4401)
                 return
             await self.app(scope, receive, send)

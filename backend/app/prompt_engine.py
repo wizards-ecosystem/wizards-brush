@@ -20,7 +20,7 @@ from .presets import FACE_NEGATIVE, IMAGE_NEGATIVE, WAN_NEGATIVE_ZH
 
 _SEED_MAX = 2**32 - 1
 # Only treat braces containing a pipe as a wildcard group; leave plain "{x}" alone.
-_WILDCARD = re.compile(r"\{([^{}]*\|[^{}]*)\}")
+_WILDCARD = re.compile(r"\{([^{}|]*\|[^{}]*)\}")
 _FILE_WC = re.compile(r"__([a-zA-Z0-9_\-]+)__")
 _WEIGHT_SUFFIX = re.compile(r"^(.*):[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*$", re.DOTALL)
 

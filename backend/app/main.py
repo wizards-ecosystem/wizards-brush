@@ -1,6 +1,7 @@
 """FastAPI entry point: wires routers, serves /output files and the built SPA."""
 from __future__ import annotations
 
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -37,7 +38,7 @@ from .routers import (
 from .routers import (
     settings as settings_router,
 )
-from .security import BrowserSecurityMiddleware, allowed_origins
+from .security import BrowserSecurityMiddleware, allowed_origins, browser_session_token
 from .version import get_version
 
 log.setup()
@@ -164,23 +165,37 @@ app.add_middleware(
 
 def _token_ok(supplied: str) -> bool:
     """Constant-time API-token check, shared by the HTTP and WS auth layers."""
-    import secrets as _secrets
-
-    return _secrets.compare_digest(supplied or "", settings.api_token)
+    return secrets.compare_digest(supplied or "", settings.api_token)
 
 
-# Opt-in token auth (set API_TOKEN in .env). API requests use a header. Browser
-# media elements cannot set headers, so the frontend mirrors the same token into
-# a SameSite cookie scoped narrowly to /files. This keeps generated media closed
-# without putting a reusable secret in URLs, access logs, downloads, or markup.
+# Opt-in token auth (set API_TOKEN in .env). CLI callers use a header. Browsers
+# exchange that header once for server-set HttpOnly cookies: one scoped to /api
+# and one to /files for media elements. Reusable credentials stay out of URLs,
+# script-readable storage, access logs, downloads, and markup.
 @app.middleware("http")
 async def api_auth(request, call_next):
     if settings.api_token:
+        clearing_browser_session = (
+            request.method == "DELETE" and request.url.path == "/api/auth/session"
+        )
+        api_header = request.headers.get("x-api-token")
+        api_credential_ok = (
+            _token_ok(api_header)
+            if api_header is not None
+            else secrets.compare_digest(
+                request.cookies.get("wb_api_token") or "",
+                browser_session_token(settings.api_token, "api"),
+            )
+        )
         if (request.url.path.startswith("/api")
-                and not _token_ok(request.headers.get("x-api-token") or "")):
+                and not clearing_browser_session
+                and not api_credential_ok):
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
-        if (request.url.path.startswith("/files/")
-                and not _token_ok(request.cookies.get("wb_media_token") or "")):
+        media_cookie_ok = secrets.compare_digest(
+            request.cookies.get("wb_media_token") or "",
+            browser_session_token(settings.api_token, "media"),
+        )
+        if request.url.path.startswith("/files/") and not media_cookie_ok:
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
