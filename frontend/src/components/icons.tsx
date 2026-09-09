@@ -360,31 +360,5 @@ export function Icon({
 }
 
 export function BrushMark({ className = "" }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 64 64" aria-hidden="true">
-      <path
-        d="m42 10 7 7-23 24-8-8Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M18 33c-7 6-2 11-9 18 9 1 15-3 17-10"
-        fill="currentColor"
-        fillOpacity=".22"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8 54c12-1 23 0 34-4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
+  return <img src="/brand/brush-icon-dark.svg" alt="" width="64" height="64" className={className} />;
 }

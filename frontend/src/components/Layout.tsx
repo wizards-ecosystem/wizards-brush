@@ -323,8 +323,12 @@ export function Layout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-edge bg-panel px-4 lg:hidden">
           <Link to="/" className="flex items-center gap-2" aria-label="The Wizard's Brush home">
-            <BrushMark className="size-7 text-accent" />
-            <span className="display-title text-[21px] leading-none">The Wizard's Brush</span>
+            <img
+              src="/brand/brush-logo-dark.svg"
+              alt=""
+              width="216"
+              className="h-auto w-[216px] max-w-full"
+            />
           </Link>
           <button
             className="flex min-h-11 items-center gap-2 text-xs text-muted"
