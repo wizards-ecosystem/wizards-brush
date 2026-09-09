@@ -4,8 +4,8 @@
   "description": "A local-first image and video studio.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0e0c",
-  "theme_color": "#121411",
+  "background_color": "#232522",
+  "theme_color": "#292b28",
   "icons": [
     {
       "src": "/favicon.svg",

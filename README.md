@@ -1,8 +1,9 @@
-<p align="center">
-  <img src="docs/assets/brush-header.png" width="100%" alt="The Wizard's Brush - a local-first image and video atelier">
-</p>
-
-<h1 align="center">The Wizard's Brush</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brush-logo-dark.png">
+    <img src="docs/assets/brush-logo.png" alt="The Wizard's Brush" width="420">
+  </picture>
+</h1>
 
 <p align="center">
   <strong>A local-first atelier for generative images and video.</strong><br>

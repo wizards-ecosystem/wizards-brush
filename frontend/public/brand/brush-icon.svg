@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">The Wizard's Brush mark</title><style>:root{--ink:#2D3433;--paper:#F1E9D5;--gold:#BAA477;--wood:#89715A;--metal:#A1AEAD;--wax:#AA5134;--clear:none;--accent:#AF5837}@media(prefers-color-scheme:dark){:root{--ink:#DFE8DA;--paper:#F0E8D1;--gold:#C9B47E;--wood:#A38365;--metal:#9CB5B4;--wax:#CB7752;--clear:none;--accent:#E6B08F}}</style>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title"><title id="title">The Wizard's Brush mark</title><style>:root{--ink:#2D3433;--paper:#F1E9D5;--gold:#BAA477;--wood:#89715A;--metal:#A1AEAD;--wax:#AA5134;--clear:none;--accent:#AF5837}</style>
     <path d="M54 71 100 13C112 0 120 7 108 21L67 80Z" fill="var(--wood)" stroke="var(--ink)" stroke-width="3"/>
     <path d="m55 68 14 11-12 17-17-13Z" fill="var(--gold)" stroke="var(--ink)" stroke-width="3"/>
     <path d="M40 82C25 87 37 103 12 111 36 116 57 108 57 96Z" fill="var(--ink)"/>
