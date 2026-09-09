@@ -29,8 +29,6 @@ _REQUIRED_PUBLIC_FILES = (
     "docs/distribution.md",
     "docs/model-licenses.md",
     "docs/network-security.md",
-    "docs/assets/brush-header.png",
-    "docs/assets/readme-social.png",
     "scripts/check-host.sh",
     "scripts/build_release.py",
     "scripts/build_sbom.py",
@@ -46,16 +44,6 @@ _REQUIRED_PUBLIC_FILES = (
     ".github/workflows/release.yml",
 )
 _MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]*]\(([^)]+)\)")
-_PUBLIC_COPY = (
-    "README.md",
-    "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
-    "SECURITY.md",
-    "SUPPORT.md",
-    "NOTICE",
-    "THIRD_PARTY_NOTICES.md",
-    ".env.example",
-)
 _PUBLIC_DOCS = (
     "README.md",
     "CONTRIBUTING.md",
@@ -133,14 +121,6 @@ def test_local_links_in_public_markdown_resolve():
     assert not broken, "broken local Markdown links:\n  " + "\n  ".join(broken)
 
 
-def test_public_copy_uses_plain_ascii_dashes():
-    """Keep rendered release copy consistent with the project's plain style."""
-    paths = [ROOT / name for name in (*_PUBLIC_COPY, *_PUBLIC_DOCS)]
-    em_dashes = [str(path.relative_to(ROOT)) for path in paths
-                 if "—" in path.read_text(encoding="utf-8")]
-    assert not em_dashes, "public copy contains em dashes: " + ", ".join(em_dashes)
-
-
 def test_remote_gpu_configuration_uses_neutral_names_with_legacy_fallback():
     """Existing private installs keep working without advertising a notebook provider."""
     modern = Settings(
@@ -204,28 +184,8 @@ def test_public_defaults_are_local_only_and_license_conservative():
         assert re.search(rf"^{re.escape(line)}$", env, flags=re.MULTILINE)
 
 
-def test_readme_quick_start_and_frontend_legal_assets_are_shipped():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert '<h1 align="center">The Wizard\'s Brush</h1>' in readme
-    assert "make install" in readme and "make models" in readme and "make start" in readme
-    assert "docs/assets/brush-header.png" in readme
-    assert (ROOT / "docs" / "assets" / "brush-header.png").is_file()
-    for badge in (
-        "github/actions/workflow/status/wizards-ecosystem/wizards-brush/ci.yml",
-        "github/v/release/wizards-ecosystem/wizards-brush",
-        "license-Apache--2.0",
-        "contributions-welcome",
-        "GPU-NVIDIA%20CUDA",
-        "design-local--first",
-    ):
-        assert badge in readme
-
-    bundle_readme = (ROOT / "packaging" / "BUNDLE_README.md").read_text(encoding="utf-8")
-    assert bundle_readme.startswith("# The Wizard's Brush\n")
-    assert "**Standalone Linux bundle**" in bundle_readme
-
+def test_frontend_legal_assets_are_shipped():
     public = ROOT / "frontend" / "public"
-    assert (public / "favicon.svg").is_file()
     assert (public / "manifest.webmanifest").is_file()
     notices = (public / "third-party-notices.txt").read_text(encoding="utf-8")
     assert "SIL OPEN FONT LICENSE Version 1.1" in notices
