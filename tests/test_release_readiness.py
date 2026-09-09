@@ -29,7 +29,11 @@ _REQUIRED_PUBLIC_FILES = (
     "docs/distribution.md",
     "docs/model-licenses.md",
     "docs/network-security.md",
-    "docs/assets/brush-header.png",
+    "docs/assets/brush-logo.svg",
+    "docs/assets/brush-logo-dark.svg",
+    "docs/assets/brush-icon.svg",
+    "docs/assets/brush-icon-dark.svg",
+    "docs/assets/brush-icon-auto.svg",
     "docs/assets/readme-social.png",
     "scripts/check-host.sh",
     "scripts/build_release.py",
@@ -206,10 +210,15 @@ def test_public_defaults_are_local_only_and_license_conservative():
 
 def test_readme_quick_start_and_frontend_legal_assets_are_shipped():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert '<h1 align="center">The Wizard\'s Brush</h1>' in readme
+    title = re.search(r"<h1\b[^>]*>(.*?)</h1>", readme, flags=re.DOTALL)
+    assert title is not None
+    heading = title.group(1)
+    assert 'alt="The Wizard\'s Brush"' in heading
+    assert "prefers-color-scheme: dark" in heading
+    for logo in ("brush-logo.svg", "brush-logo-dark.svg"):
+        assert f"docs/assets/{logo}" in heading
+        assert (ROOT / "docs" / "assets" / logo).is_file()
     assert "make install" in readme and "make models" in readme and "make start" in readme
-    assert "docs/assets/brush-header.png" in readme
-    assert (ROOT / "docs" / "assets" / "brush-header.png").is_file()
     for badge in (
         "github/actions/workflow/status/wizards-ecosystem/wizards-brush/ci.yml",
         "github/v/release/wizards-ecosystem/wizards-brush",
