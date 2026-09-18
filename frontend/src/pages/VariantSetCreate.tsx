@@ -16,14 +16,13 @@ import {
   Spinner,
 } from "../components/ui";
 import { coerceValues } from "../lib/generators";
-import { jobFailure, runJob } from "../lib/jobApi";
+import { apiRequestText, jobFailure, runJob } from "../lib/jobApi";
 import {
   axisProblems,
   countCombinations,
   formula,
   fromRecipe,
   newDraft,
-  apiRequestText,
   newStage,
   normalizeDraft,
   toRecipe,

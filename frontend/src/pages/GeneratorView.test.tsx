@@ -99,6 +99,20 @@ describe("GeneratorView workstation", () => {
     expect(screen.getByText("A clear session canvas")).toBeInTheDocument();
   });
 
+  it("copies the current settings as a POST /api/jobs request", async () => {
+    const user = userEvent.setup(); // installs its own clipboard; spy on that one
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderGenerator();
+    await user.type(screen.getByLabelText("Prompt"), "A glass teapot");
+    await user.click(screen.getByRole("button", { name: "Copy as an API request" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const text: string = writeText.mock.calls[0][0];
+    expect(text).toContain("curl -X POST http://localhost:3000/api/jobs");
+    const body = JSON.parse(text.slice(text.indexOf("-d '") + 4, text.lastIndexOf("'")));
+    // Only the generator's own settings: the strict API refuses anything else.
+    expect(body).toEqual({ kind: "image_local", params: { prompt: "A glass teapot", batch: 1 } });
+  });
+
   it("keeps the sticky submission action and exposes validation state", () => {
     renderGenerator();
     expect(screen.getByRole("button", { name: "Generate" })).toBeEnabled();

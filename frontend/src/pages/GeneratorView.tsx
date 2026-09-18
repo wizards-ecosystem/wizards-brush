@@ -17,6 +17,7 @@ import {
   effectiveControlDefault,
   prefillableParams,
 } from "../lib/generators";
+import { apiRequestText, jobRequestFor } from "../lib/jobApi";
 import { COMBO_CAP, estimateCombinations } from "../lib/wildcards";
 import { useStore } from "../store/useStore";
 
@@ -328,6 +329,18 @@ export function GeneratorView() {
     }
   };
 
+  // The same generation as `POST /api/jobs` (docs/api.md), for scripting it.
+  const copyApiRequest = async () => {
+    if (!spec) return;
+    const { body, notes } = jobRequestFor(spec, values, composedPrompt());
+    try {
+      await navigator.clipboard.writeText(apiRequestText("/api/jobs", body, window.location.origin, notes));
+      toast("Copied as an API request: POST /api/jobs", "success");
+    } catch (e) {
+      toast(`Couldn't copy: ${e}`, "error");
+    }
+  };
+
   // Ctrl/Cmd+Enter to generate.
   const submitRef = useRef(submit);
   useEffect(() => {
@@ -485,6 +498,7 @@ export function GeneratorView() {
                     disabled={!values.prompt?.trim()}
                     onClick={() => setNaming(true)}
                   />
+                  <IconButton icon="copy" label="Copy as an API request" onClick={copyApiRequest} />
                 </div>
               </div>
 

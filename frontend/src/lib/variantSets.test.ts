@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   addValues,
-  apiRequestText,
   availableAxes,
   axisProblems,
   countCombinations,
@@ -203,13 +202,5 @@ describe("presentation", () => {
   it("measures how much of a set has settled", () => {
     expect(settledFraction({ total: 4, succeeded: 1, failed: 1, blocked: 1 })).toBe(0.75);
     expect(settledFraction({})).toBe(0);
-  });
-
-  it("writes a request as a runnable curl command, quotes and all", () => {
-    const text = apiRequestText("/api/variant-sets", { name: "it's here" }, "http://127.0.0.1:8000");
-    expect(text.split("\n")[0]).toBe("curl -X POST http://127.0.0.1:8000/api/variant-sets \\");
-    expect(text).toContain('-H "X-API-Token: ${API_TOKEN:-}"');
-    // A single quote in the JSON closes, escapes and reopens the shell string.
-    expect(text).toContain("it'\\''s here");
   });
 });

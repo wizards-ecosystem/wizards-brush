@@ -1,5 +1,5 @@
 import { api } from "../api/client";
-import type { JobCreate, JobWait } from "../api/types";
+import type { GeneratorSpec, JobCreate, JobWait } from "../api/types";
 
 /**
  * Queue one job through the unified job API and resolve once it settles.
@@ -22,4 +22,49 @@ export async function runJob(body: JobCreate, isCancelled: () => boolean = () =>
 export function jobFailure(answer: JobWait): string {
   const first = (answer.job.error || answer.job.message || answer.job.status).split("\n")[0];
   return first || "the job did not finish";
+}
+
+/** A request as a runnable curl command (docs/api.md). The token header is
+ *  harmless when the app sets none, so one command works either way. */
+export function apiRequestText(path: string, body: unknown, origin: string, notes: string[] = []): string {
+  const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
+  return [
+    ...notes.map((note) => `# ${note}`),
+    `curl -X POST ${origin}${path} \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -H "X-API-Token: \${API_TOKEN:-}" \\`,
+    `  -d '${json}'`,
+  ].join("\n");
+}
+
+/**
+ * A generator form as a `POST /api/jobs` request: only the kind's own
+ * settings, which is all the strict API accepts, with the prompt as it will
+ * actually be sent (styles applied). Inputs are asset ids there, not files, so
+ * a kind that takes images comes with a note on how to get ids.
+ */
+export function jobRequestFor(
+  spec: GeneratorSpec,
+  values: Record<string, unknown>,
+  prompt: string,
+): { body: JobCreate; notes: string[] } {
+  const names = new Set(spec.controls.map((control) => control.name));
+  const params: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(values)) {
+    if (names.has(name) && value !== undefined) params[name] = value;
+  }
+  if (names.has("prompt")) params.prompt = prompt;
+  const body: JobCreate = { kind: spec.kind, params };
+  const notes: string[] = [];
+  if (spec.needs_image) {
+    body.inputs = { images: [], ...(spec.needs_mask ? { mask: null } : {}) };
+    notes.push(
+      "Put input asset ids in inputs.images" +
+        (spec.needs_mask ? " and the mask's id in inputs.mask" : "") +
+        "; import local files with POST /api/assets/import" +
+        (spec.needs_mask ? " (role=mask for the mask)." : "."),
+    );
+  }
+  notes.push("Then wait for it: GET /api/jobs/{job_id}/wait (see docs/api.md).");
+  return { body, notes };
 }

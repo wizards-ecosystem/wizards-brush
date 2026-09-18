@@ -454,15 +454,3 @@ export function settledNotice(
 export function isVariantGroup(groupId: string | null | undefined): boolean {
   return !!groupId && groupId.startsWith("vset-");
 }
-
-/** A request as a runnable curl command (docs/api.md). The token header is
- *  harmless when the app sets none, so one command works either way. */
-export function apiRequestText(path: string, body: unknown, origin: string): string {
-  const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
-  return [
-    `curl -X POST ${origin}${path} \\`,
-    `  -H 'Content-Type: application/json' \\`,
-    `  -H "X-API-Token: \${API_TOKEN:-}" \\`,
-    `  -d '${json}'`,
-  ].join("\n");
-}
