@@ -301,6 +301,9 @@ def test_matte_is_refused_up_front_when_it_cannot_run(client, enqueued, monkeypa
     assert r.status_code == 503 and "onnxruntime" in r.json()["detail"]
     kinds = {k["kind"]: k for k in client.get("/api/jobs/kinds").json()}
     assert kinds["matte"]["available"] is False
+    # A malformed request is still a 400: retrying it later could never succeed.
+    bad = _job(client, kind="matte", params={"mode": "sparkle"}, inputs={"images": [source.id]})
+    assert bad.status_code == 400 and "mode must be one of" in bad.json()["detail"]
 
 
 # ---- import and download ----------------------------------------------------------------------

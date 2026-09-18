@@ -282,6 +282,10 @@ async def create_job(body: JobCreate) -> JobSubmission:
     a value outside its control's range is refused with a 400 naming it, rather
     than clamped. A `combinatorial` prompt with `{a|b}` choices fans out into one
     job per combination, exactly as the form does.
+
+    The request itself is judged before the server's state: a malformed request
+    is a 400 even when the kind is unavailable here, because a 503 would tell the
+    client to retry something that can never succeed.
     """
     catalogue = _catalogue()
     info = catalogue.get(body.kind)
@@ -292,13 +296,13 @@ async def create_job(body: JobCreate) -> JobSubmission:
     request_id = normalize_request_id(body.request_id)
     if request_id and (existing := db.job_for_request(request_id)) is not None:
         return _submission(_submission_response(existing), duplicate=True)
-    if not info.available:
-        raise HTTPException(status_code=503, detail=info.unavailable_reason)
 
     if body.kind in tools.TOOLS:
         tool = tools.TOOLS[body.kind]
         clean = _validated(body.kind, body.params, {str(c["name"]): c for c in tool.controls})
         _resolve(body.kind, inputs_for(body.kind), body.inputs)
+        if not info.available:
+            raise HTTPException(status_code=503, detail=info.unavailable_reason)
         result = await tools.submit_tool(body.kind, body.inputs.images[0], clean,
                                          request_id=request_id)
         return _submission(result, duplicate=False)
@@ -307,9 +311,11 @@ async def create_job(body: JobCreate) -> JobSubmission:
 
     spec = registry_specs()[body.kind]
     clean = _validated(body.kind, body.params, _controls_of(spec))
+    paths, mask_path, last_path = _resolve(body.kind, inputs_for(body.kind, spec), body.inputs)
+    if not info.available:
+        raise HTTPException(status_code=503, detail=info.unavailable_reason)
     if body.kind in _LOCAL_GPU:
         images.require_local_gpu()
-    paths, mask_path, last_path = _resolve(body.kind, inputs_for(body.kind, spec), body.inputs)
     raw = {**clean, "request_id": request_id}
     if body.kind in _IMAGE_KINDS:
         params = images.build_params(body.kind, raw, paths, mask_path)
