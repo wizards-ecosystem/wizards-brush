@@ -12,6 +12,10 @@ import type {
   HumanGradeInput,
   ImportedMetadata,
   Job,
+  JobCreate,
+  JobKindInfo,
+  JobSubmission,
+  JobWait,
   LoraCatalog,
   OkResponse,
   Presets,
@@ -259,9 +263,26 @@ export const api = {
   },
 
   tool: (
-    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video",
+    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video" | "matte",
     body: Record<string, any>,
   ) => postJson(`/api/tools/${kind}`, body).then((r) => j<{ job_id: number }>(r)),
+
+  // ---- the unified job API (docs/api.md) ------------------------------------
+  jobKinds: () => get("/api/jobs/kinds").then((r) => j<JobKindInfo[]>(r)),
+  createJob: (body: JobCreate) => postJson("/api/jobs", body).then((r) => j<JobSubmission>(r)),
+  /** Long-poll: resolves when the job settles or after `timeout` seconds. */
+  waitJob: (id: number, timeout = 30) =>
+    get(`/api/jobs/${id}/wait?timeout=${timeout}`).then((r) => j<JobWait>(r)),
+  /** Bring a local image into the library; transparency is kept. */
+  importAsset: (file: File, options: { role?: "source" | "mask"; tags?: string[] } = {}) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (options.role) body.append("role", options.role);
+    if (options.tags?.length) body.append("tags", options.tags.join(","));
+    return safeFetch("/api/assets/import", { method: "POST", body, headers: authHeaders() }).then((r) =>
+      j<Asset>(r),
+    );
+  },
 
   // ---- Variant Sets ----------------------------------------------------------
   variantCapabilities: () => get("/api/variant-sets/capabilities").then((r) => j<VariantCapabilities>(r)),

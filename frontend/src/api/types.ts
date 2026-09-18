@@ -6,8 +6,11 @@ export interface ShowIf {
 export interface Control {
   name: string;
   label: string;
-  type: "textarea" | "slider" | "number" | "select" | "toggle" | "segmented" | "aspect" | "lora";
+  type:
+    "textarea" | "slider" | "number" | "select" | "toggle" | "segmented" | "aspect" | "lora" | "finishing";
   default: any;
+  /** type "finishing": the processors this install offers, with their options. */
+  processors?: VariantProcessor[];
   min?: number;
   max?: number;
   step?: number;
@@ -532,6 +535,44 @@ export interface VariantNamingSpec {
   prefix: string;
 }
 
+// ---- the unified job API (POST /api/jobs; docs/api.md) -------------------------
+export interface JobCreate {
+  kind: string;
+  params?: Record<string, unknown>;
+  inputs?: { images?: number[]; mask?: number | null; last_frame?: number | null };
+  request_id?: string;
+}
+
+export interface JobSubmission {
+  job_id: number;
+  job_ids: number[];
+  group_id: string | null;
+  duplicate: boolean;
+}
+
+export interface JobWait {
+  job: Job;
+  settled: boolean;
+  assets: Asset[];
+}
+
+export interface JobKindInfo {
+  kind: string;
+  title: string;
+  description: string;
+  category: "generator" | "tool";
+  output: string;
+  lane: "local" | "remote";
+  available: boolean;
+  unavailable_reason: string | null;
+  inputs: {
+    images: { min: number; max: number; asset_kind: string };
+    mask: "none" | "required";
+    last_frame: boolean;
+  };
+  params: Record<string, any>;
+}
+
 export interface VariantFinishingStep {
   processor: string;
   [option: string]: unknown;
@@ -697,5 +738,7 @@ export interface VariantSetSummary {
 }
 
 export interface VariantSetDetail extends VariantSetSummary {
+  /** The frozen recipe snapshot the set executes. */
+  recipe?: VariantRecipeSpec;
   items: VariantItem[];
 }

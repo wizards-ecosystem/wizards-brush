@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   previewVariantSet: vi.fn(),
   createVariantSet: vi.fn(),
   saveVariantRecipe: vi.fn(),
+  importAsset: vi.fn(),
+  createJob: vi.fn(),
+  waitJob: vi.fn(),
+  variantSet: vi.fn(),
+  asset: vi.fn(),
   toast: vi.fn(),
   cap: 1000,
 }));
@@ -23,6 +28,11 @@ vi.mock("../api/client", () => ({
     saveVariantRecipe: mocks.saveVariantRecipe,
     variantRecipe: vi.fn(),
     uploadVariantMask: vi.fn(),
+    importAsset: mocks.importAsset,
+    createJob: mocks.createJob,
+    waitJob: mocks.waitJob,
+    variantSet: mocks.variantSet,
+    asset: mocks.asset,
   },
 }));
 
@@ -111,9 +121,9 @@ function caps(cap: number): VariantCapabilities {
   };
 }
 
-function renderCreate() {
+function renderCreate(path = "/variants/new") {
   return render(
-    <MemoryRouter initialEntries={["/variants/new"]}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/variants/new" element={<VariantSetCreate />} />
         <Route path="/variants/:id" element={<div>set page</div>} />
@@ -208,5 +218,78 @@ describe("Variant Set editor", () => {
     expect(body.request_id).toBeTruthy();
     expect(body.collection).toEqual({ mode: "new" });
     expect(await screen.findByText("set page")).toBeInTheDocument();
+  });
+
+  it("imports a source straight from this computer", async () => {
+    mocks.importAsset.mockResolvedValue({ ...source, id: 77, filename: "photo.png" });
+    renderCreate();
+    const button = await screen.findByRole("button", { name: /upload a source image/i });
+    await userEvent.click(button);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, new File(["png"], "photo.png", { type: "image/png" }));
+    expect(mocks.importAsset).toHaveBeenCalledWith(expect.any(File));
+    expect(await screen.findByRole("button", { name: "Remove source 77" })).toBeInTheDocument();
+    expect(screen.getByText("1/3")).toBeInTheDocument();
+  });
+
+  it("makes the mask in one click through the job API", async () => {
+    const withInpaint = caps(1000);
+    withInpaint.operations = [
+      { ...withInpaint.operations[0], kind: "inpaint", title: "Inpaint", mask: "required", max_sources: 1 },
+    ];
+    mocks.variantCapabilities.mockResolvedValue(withInpaint);
+    const mask = { ...source, id: 88, generator: "mask", filename: "mask.png" };
+    mocks.createJob.mockResolvedValue({ job_id: 41, job_ids: [41], group_id: null, duplicate: false });
+    mocks.waitJob
+      .mockResolvedValueOnce({ job: { id: 41, status: "running" }, settled: false, assets: [] })
+      .mockResolvedValueOnce({ job: { id: 41, status: "done" }, settled: true, assets: [mask] });
+    renderCreate();
+    await userEvent.click(await screen.findByRole("button", { name: /add from gallery/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Open image/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Select the subject" }));
+    expect(mocks.createJob).toHaveBeenCalledWith({
+      kind: "matte",
+      params: { mode: "mask" },
+      inputs: { images: [12] },
+    });
+    expect(await screen.findByText(/Mask ready/)).toBeInTheDocument();
+    expect(mocks.waitJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("copies the set as an API request", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderCreate();
+    await addAxis("material", "wood, steel", 0);
+    await userEvent.click(screen.getByRole("button", { name: /Copy API request/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const text: string = writeText.mock.calls[0][0];
+    expect(text).toMatch(/^curl -X POST .*\/api\/variant-sets/);
+    const body = JSON.parse(text.slice(text.indexOf("-d '") + 4, text.lastIndexOf("'")));
+    expect(body.recipe.stages[0].axes).toEqual([{ name: "material", values: ["wood", "steel"] }]);
+  });
+
+  it("duplicates a set that already ran from its recipe snapshot", async () => {
+    mocks.variantSet.mockResolvedValue({
+      id: 9,
+      name: "Finish study",
+      recipe: {
+        sources: [12],
+        seed: { mode: "per_variant", value: 1234 },
+        stages: [
+          {
+            operation: "image_edit",
+            prompt: "Make it {{finish}}",
+            axes: [{ name: "finish", values: ["matte", "gloss"] }],
+            finishing: [{ processor: "background_removal" }],
+          },
+        ],
+      },
+    });
+    renderCreate("/variants/new?from_set=9");
+    expect(await screen.findByDisplayValue("Finish study (again)")).toBeInTheDocument();
+    expect(screen.getByLabelText("Instruction template")).toHaveValue("Make it {{finish}}");
+    expect(screen.getByTestId("variant-total")).toHaveTextContent("2 variants");
+    expect(mocks.variantSet).toHaveBeenCalledWith(9);
   });
 });

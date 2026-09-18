@@ -1,5 +1,12 @@
 import { useRef, useState } from "react";
-import type { Control, GeneratorSpec, Presets, VariantCapabilities, VariantOperation } from "../api/types";
+import type {
+  Asset,
+  Control,
+  GeneratorSpec,
+  Presets,
+  VariantCapabilities,
+  VariantOperation,
+} from "../api/types";
 import { applyDependentDefaults } from "../lib/generators";
 import {
   addValues,
@@ -13,6 +20,8 @@ import {
   type StageDraft,
 } from "../lib/variantSets";
 import { DynamicControls } from "./DynamicControls";
+import { FinishingStepsEditor } from "./FinishingStepsEditor";
+import { GalleryPicker } from "./GalleryPicker";
 import { Icon } from "./icons";
 import { IconButton, SegmentedControl } from "./ui";
 
@@ -220,6 +229,7 @@ export function VariantStageEditor({
   caps,
   spec,
   presets,
+  assetById = () => undefined,
   onChange,
   onRemove,
 }: {
@@ -230,15 +240,25 @@ export function VariantStageEditor({
   caps: VariantCapabilities | null;
   spec: GeneratorSpec | undefined;
   presets: Presets | null;
+  /** Thumbnails for reference images that may not be in the recent snapshot. */
+  assetById?: (id: number) => Asset | undefined;
   onChange: (stage: StageDraft) => void;
   onRemove?: () => void;
 }) {
   const [simple, setSimple] = useState(true);
+  const [pickingReference, setPickingReference] = useState(false);
   const controls = operationControls(spec, caps);
   const axes = availableAxes(stages, index);
   const choices = index === 0 ? operations : operations.filter((op) => op.takes_source);
-  const processors = new Map((caps?.finishing ?? []).map((p) => [p.name, p]));
-  const matting = processors.get("background_removal");
+  const op = choices.find((candidate) => candidate.kind === stage.operation);
+  // A later stage's own output is always its first input; an operation that
+  // takes several images can add up to two fixed references alongside it.
+  const referenceSlots = index > 0 && op ? Math.min(2, Math.max(0, op.max_sources - 1)) : 0;
+  const perValue = Object.entries(stage.valueParams ?? {}).flatMap(([axis, byValue]) =>
+    Object.entries(byValue).map(
+      ([value, settings]) => `${axis}=${value}: ${Object.keys(settings).join(", ")}`,
+    ),
+  );
   const setAxis = (i: number, axis: AxisDraft) =>
     onChange({ ...stage, axes: stage.axes.map((a, j) => (j === i ? axis : a)) });
   const setParam = (name: string, value: any) =>
@@ -251,7 +271,6 @@ export function VariantStageEditor({
         ...applyDependentDefaults(controls, name, stage.params[name], value, stage.params),
       },
     });
-  const f = stage.finishing;
   const v = stage.validation;
   const limits = caps?.limits;
 
@@ -301,6 +320,53 @@ export function VariantStageEditor({
           />
         </div>
       </div>
+
+      {referenceSlots > 0 && (
+        <div>
+          <div className="flex items-baseline justify-between">
+            <div className="label mb-0">Reference images (optional)</div>
+            <span className="technical text-[10px] text-muted">
+              {stage.references.length}/{referenceSlots}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {stage.references.map((id) => {
+              const asset = assetById(id);
+              return (
+                <div key={id} className="media-tile relative size-16">
+                  {asset ? (
+                    <img src={asset.thumb_url || asset.url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="technical flex h-full items-center justify-center text-[10px] text-muted">
+                      #{id}
+                    </div>
+                  )}
+                  <IconButton
+                    icon="close"
+                    label={`Remove reference ${id}`}
+                    className="absolute right-0 top-0 bg-black/60 text-white"
+                    onClick={() =>
+                      onChange({ ...stage, references: stage.references.filter((r) => r !== id) })
+                    }
+                  />
+                </div>
+              );
+            })}
+            {stage.references.length < referenceSlots && (
+              <button
+                type="button"
+                className="flex size-16 flex-col items-center justify-center gap-1 border border-dashed border-edge text-[10px] text-muted hover:text-ink"
+                onClick={() => setPickingReference(true)}
+              >
+                <Icon name="plus" size={14} /> Add
+              </button>
+            )}
+          </div>
+          <div className="mt-1 text-[11px] text-muted">
+            Sent after the previous stage's output, the same images for every variant of this stage.
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="flex items-baseline justify-between">
@@ -369,83 +435,32 @@ export function VariantStageEditor({
         ) : (
           <div className="text-xs text-muted">This operation has no further settings.</div>
         )}
+        {perValue.length > 0 && (
+          <div className="border-l-2 border-edge pl-3 text-[11px] text-muted">
+            <div className="text-ink/80">Per-value settings from the recipe (kept as they are):</div>
+            {perValue.map((line) => (
+              <div key={line} className="technical">
+                {line}
+              </div>
+            ))}
+            <button
+              type="button"
+              className="mt-1 text-accent underline"
+              onClick={() => onChange({ ...stage, valueParams: {} })}
+            >
+              Remove them
+            </button>
+          </div>
+        )}
       </Section>
 
       <Section title="Finishing">
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={f.removeBackground}
-            disabled={!matting?.available && !f.removeBackground}
-            onChange={(e) => onChange({ ...stage, finishing: { ...f, removeBackground: e.target.checked } })}
-          />
-          <span>
-            Remove background (real PNG alpha)
-            <span className="block text-[11px] text-muted">
-              {matting?.available ? matting.description : matting?.unavailable_reason || "Unavailable."}
-            </span>
-          </span>
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={f.resize}
-            onChange={(e) => onChange({ ...stage, finishing: { ...f, resize: e.target.checked } })}
-          />
-          Resize to an exact size
-        </label>
-        {f.resize && (
-          <div className="grid grid-cols-2 gap-2 pl-6">
-            <input
-              className="input text-xs"
-              type="number"
-              aria-label="Finished width"
-              min={1}
-              max={8192}
-              value={f.width}
-              onChange={(e) => onChange({ ...stage, finishing: { ...f, width: Number(e.target.value) } })}
-            />
-            <input
-              className="input text-xs"
-              type="number"
-              aria-label="Finished height"
-              min={1}
-              max={8192}
-              value={f.height}
-              onChange={(e) => onChange({ ...stage, finishing: { ...f, height: Number(e.target.value) } })}
-            />
-            <select
-              className="input text-xs"
-              aria-label="Fit"
-              value={f.mode}
-              onChange={(e) =>
-                onChange({ ...stage, finishing: { ...f, mode: e.target.value as typeof f.mode } })
-              }
-            >
-              <option value="contain">contain (pad)</option>
-              <option value="cover">cover (crop)</option>
-              <option value="stretch">stretch</option>
-            </select>
-            <select
-              className="input text-xs"
-              aria-label="Padding"
-              value={f.background}
-              onChange={(e) => onChange({ ...stage, finishing: { ...f, background: e.target.value } })}
-            >
-              <option value="transparent">transparent padding</option>
-              <option value="#ffffff">white padding</option>
-              <option value="#000000">black padding</option>
-            </select>
-          </div>
-        )}
-        {f.extra.length > 0 && (
-          <div className="text-[11px] text-muted">
-            Also runs: {f.extra.map((step) => step.processor).join(", ")}
-          </div>
-        )}
-        <div className="text-[11px] text-muted">
-          Runs inside each variant's job, after the operation's own finishing preset.
-        </div>
+        <FinishingStepsEditor
+          steps={stage.finishing}
+          processors={caps?.finishing ?? []}
+          onChange={(finishing) => onChange({ ...stage, finishing })}
+          note="Runs inside each variant's job, in this order, after the operation's own finishing preset."
+        />
       </Section>
 
       <Section title="Validation">
@@ -572,6 +587,17 @@ export function VariantStageEditor({
           />
         </div>
       </Section>
+      {pickingReference && (
+        <GalleryPicker
+          title="Choose a reference image"
+          filter={(asset) => asset.generator !== "mask" && !stage.references.includes(asset.id)}
+          onClose={() => setPickingReference(false)}
+          onPick={(asset) => {
+            setPickingReference(false);
+            onChange({ ...stage, references: [...stage.references, asset.id].slice(0, referenceSlots) });
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -92,6 +92,47 @@ describe("useStore", () => {
     expect(useStore.getState().jobs).toBe(jobs);
   });
 
+  it("does not re-announce failures replayed by the connect-time snapshot", async () => {
+    // The server replays the last twenty jobs on every connect. Toasting the
+    // failures among them meant every reload re-reported old errors.
+    await useStore.getState().boot();
+    useStore.setState({ toasts: [] });
+    emit({ type: "job", id: 40, kind: "image_local", status: "error", snapshot: true });
+    expect(useStore.getState().jobs[40].status).toBe("error");
+    expect(useStore.getState().toasts).toHaveLength(0);
+    emit({ type: "job", id: 41, kind: "image_local", status: "error", error: "boom\ntrace" });
+    expect(useStore.getState().toasts.map((t) => t.text)).toEqual(["Job #41 failed: boom"]);
+  });
+
+  it("summarises a Variant Set once when it settles instead of per failed child", async () => {
+    await useStore.getState().boot();
+    useStore.setState({ toasts: [] });
+    emit({ type: "variant_set", id: 9, name: "Colourways", status: "active", counts: { total: 3 } });
+    for (const id of [50, 51]) {
+      emit({ type: "job", id, kind: "image_edit", status: "error", error: "x", group_id: "vset-a" });
+    }
+    expect(useStore.getState().toasts).toHaveLength(0);
+    emit({
+      type: "variant_set",
+      id: 9,
+      name: "Colourways",
+      status: "incomplete",
+      counts: { total: 3, succeeded: 1, failed: 2 },
+    });
+    // Repeated terminal events for the same set are not news.
+    emit({ type: "variant_set", id: 9, status: "incomplete", counts: { total: 3 } });
+    expect(useStore.getState().toasts.map((t) => [t.text, t.kind])).toEqual([
+      ["“Colourways” finished with problems: 1 done, 2 failed", "error"],
+    ]);
+  });
+
+  it("does not announce a set that had already settled before the page loaded", async () => {
+    await useStore.getState().boot();
+    useStore.setState({ toasts: [] });
+    emit({ type: "variant_set", id: 12, status: "complete", counts: { total: 2, succeeded: 2 } });
+    expect(useStore.getState().toasts).toHaveLength(0);
+  });
+
   it("refreshJobs prunes previews for jobs no longer running", async () => {
     await useStore.getState().boot();
     useStore.setState({ previews: { 9: "blob:stale-preview" } });

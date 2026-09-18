@@ -16,13 +16,16 @@ import {
   Spinner,
 } from "../components/ui";
 import { coerceValues } from "../lib/generators";
+import { jobFailure, runJob } from "../lib/jobApi";
 import {
   axisProblems,
   countCombinations,
   formula,
   fromRecipe,
   newDraft,
+  apiRequestText,
   newStage,
+  normalizeDraft,
   toRecipe,
   type SetDraft,
 } from "../lib/variantSets";
@@ -33,7 +36,7 @@ const DRAFT_KEY = "variant-set-draft-v1";
 function loadDraft(): SetDraft | null {
   try {
     const raw = localStorage.getItem(DRAFT_KEY);
-    return raw ? (JSON.parse(raw) as SetDraft) : null;
+    return raw ? normalizeDraft(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
@@ -67,6 +70,14 @@ export function VariantSetCreate() {
   const [busy, setBusy] = useState(false);
   const [maskFile, setMaskFile] = useState<File | null>(null);
   const [maskImage, setMaskImage] = useState<{ assetId: number; file: File } | null>(null);
+  const [matting, setMatting] = useState<"" | "mask" | "inverse_mask">("");
+  const [uploading, setUploading] = useState(false);
+  // Phones: the preview panel folds behind a summary so the form keeps the screen.
+  const [panelOpen, setPanelOpen] = useState(false);
+  // Assets the form names that the recent-assets snapshot may not hold: an
+  // upload, a mask made here, or the sources of a recipe loaded from elsewhere.
+  const [fetched, setFetched] = useState<Record<number, Asset>>({});
+  const uploadInput = useRef<HTMLInputElement>(null);
   const submitting = useRef(false);
 
   useEffect(() => {
@@ -80,8 +91,9 @@ export function VariantSetCreate() {
   // new. The local cases are settled during render, the React way to derive
   // state from a value that just arrived; only a recipe needs a fetch.
   const recipeParam = params.get("recipe");
+  const fromSetParam = params.get("from_set");
   const firstKind = caps?.operations[0]?.kind || "image_edit";
-  if (caps && !draft && !recipeParam) {
+  if (caps && !draft && !recipeParam && !fromSetParam) {
     const saved = loadDraft();
     const known = new Set(caps.operations.map((op) => op.kind));
     setDraft(saved && saved.stages?.every((s) => known.has(s.operation)) ? saved : newDraft(firstKind));
@@ -101,6 +113,59 @@ export function VariantSetCreate() {
       live = false;
     };
   }, [caps, recipeParam, firstKind, toast]);
+
+  // "Duplicate as new set": the frozen recipe of a set that already ran.
+  useEffect(() => {
+    if (!caps || !fromSetParam || recipeParam) return;
+    let live = true;
+    api
+      .variantSet(Number(fromSetParam))
+      .then((set) => {
+        if (!live) return;
+        if (!set.recipe) throw new Error("this set has no recipe snapshot");
+        setDraft(fromRecipe(set.recipe, `${set.name} (again)`.slice(0, 120)));
+      })
+      .catch((e) => {
+        if (!live) return;
+        toast(`Couldn't load that set: ${e}`, "error");
+        setDraft(newDraft(firstKind));
+      });
+    return () => {
+      live = false;
+    };
+  }, [caps, fromSetParam, recipeParam, firstKind, toast]);
+
+  // Fill in any named asset the snapshot does not hold, for thumbnails.
+  const assetById = useCallback(
+    (id: number | null | undefined) =>
+      id == null ? undefined : (fetched[id] ?? assets.find((a) => a.id === id)),
+    [fetched, assets],
+  );
+  const namedIds = useMemo(
+    () =>
+      draft
+        ? [
+            ...draft.sources,
+            ...draft.stages.flatMap((s) => s.references),
+            ...(draft.maskAssetId != null ? [draft.maskAssetId] : []),
+          ]
+        : [],
+    [draft],
+  );
+  useEffect(() => {
+    const missing = namedIds.filter((id) => !assetById(id));
+    if (!missing.length) return;
+    let live = true;
+    Promise.all(missing.map((id) => api.asset(id).catch(() => null))).then((found) => {
+      if (!live) return;
+      const next: Record<number, Asset> = {};
+      for (const asset of found) if (asset) next[asset.id] = asset;
+      if (Object.keys(next).length) setFetched((prev) => ({ ...prev, ...next }));
+    });
+    return () => {
+      live = false;
+    };
+  }, [namedIds, assetById]);
 
   useEffect(() => {
     if (!draft) return;
@@ -176,7 +241,7 @@ export function VariantSetCreate() {
 
   // The mask is painted over the first source image.
   const firstSource = draft?.sources[0];
-  const firstSourceAsset = assets.find((a) => a.id === firstSource);
+  const firstSourceAsset = assetById(firstSource);
   const maskSource =
     needsMask && firstSourceAsset && maskImage?.assetId === firstSourceAsset.id ? maskImage.file : null;
   useEffect(() => {
@@ -216,8 +281,11 @@ export function VariantSetCreate() {
         : `Choose ${firstOp.min_sources === firstOp.max_sources ? firstOp.min_sources : `${firstOp.min_sources}-${firstOp.max_sources}`} source image(s).`
       : "";
   const maskProblem =
-    needsMask && !maskFile && draft?.maskAssetId == null ? "Paint the region to change." : "";
+    needsMask && !maskFile && draft?.maskAssetId == null
+      ? "Choose the region to change: select the subject or background, or paint it."
+      : "";
   const overCap = !!counts && counts.total > cap;
+  const problemCount = [...problems, sourceProblem, maskProblem].filter(Boolean).length;
   const canCreate =
     !!recipe &&
     !!counts &&
@@ -271,6 +339,60 @@ export function VariantSetCreate() {
     }
   };
 
+  const upload = async (file: File | undefined) => {
+    if (!draft || !file) return;
+    setUploading(true);
+    try {
+      const asset = await api.importAsset(file);
+      setFetched((prev) => ({ ...prev, [asset.id]: asset }));
+      setDraft((current) =>
+        current && !current.sources.includes(asset.id)
+          ? { ...current, sources: [...current.sources, asset.id], maskAssetId: null }
+          : current,
+      );
+    } catch (e) {
+      toast(`Couldn't import that image: ${String(e).replace(/^Error: /, "")}`, "error");
+    } finally {
+      setUploading(false);
+      if (uploadInput.current) uploadInput.current.value = "";
+    }
+  };
+
+  // One click instead of painting: the matte tool, queued through the job API.
+  const autoMask = async (mode: "mask" | "inverse_mask") => {
+    if (firstSource == null) return;
+    setMatting(mode);
+    try {
+      const answer = await runJob({ kind: "matte", params: { mode }, inputs: { images: [firstSource] } });
+      const mask = answer.assets[0];
+      if (answer.job.status !== "done" || !mask) throw new Error(jobFailure(answer));
+      setFetched((prev) => ({ ...prev, [mask.id]: mask }));
+      setMaskFile(null);
+      setDraft((current) => (current ? { ...current, maskAssetId: mask.id } : current));
+    } catch (e) {
+      toast(`Couldn't make the mask: ${String(e).replace(/^Error: /, "")}`, "error");
+    } finally {
+      setMatting("");
+    }
+  };
+
+  const copyApiRequest = async () => {
+    if (!draft) return;
+    try {
+      const current = await withMask(draft);
+      const body = {
+        name: current.name,
+        recipe: buildRecipe(current),
+        request_id: "choose-a-unique-id-per-set",
+        collection: { mode: current.collection ? "new" : "none" },
+      };
+      await navigator.clipboard.writeText(apiRequestText("/api/variant-sets", body, window.location.origin));
+      toast("API request copied: POST /api/variant-sets", "success");
+    } catch (e) {
+      toast(`Couldn't copy the request: ${String(e).replace(/^Error: /, "")}`, "error");
+    }
+  };
+
   const saveRecipe = async (name: string) => {
     if (!draft) return;
     try {
@@ -301,12 +423,14 @@ export function VariantSetCreate() {
     );
   }
 
-  const chosen = draft.sources.map((id) => assets.find((a) => a.id === id));
+  const chosen = draft.sources.map((id) => assetById(id));
+  const maskAsset = assetById(draft.maskAssetId);
+  const canMatte = !!caps.finishing.find((p) => p.name === "background_removal")?.available;
   const totalLabel =
     draft.stages.length > 1 ? counts.totals.join(" + ") + ` = ${counts.total}` : `${counts.total}`;
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 bg-bg lg:grid-cols-[minmax(0,1fr)_clamp(320px,30vw,420px)]">
+    <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] bg-bg lg:grid-cols-[minmax(0,1fr)_clamp(320px,30vw,420px)] lg:grid-rows-1">
       <div className="min-h-0 overflow-y-auto page-pad">
         <PageHeader
           kicker="Variant set"
@@ -362,13 +486,35 @@ export function VariantSetCreate() {
                   </div>
                 ))}
                 {draft.sources.length < firstOp.max_sources && (
-                  <button
-                    type="button"
-                    className="flex size-24 flex-col items-center justify-center gap-1 border border-dashed border-edge text-xs text-muted hover:text-ink"
-                    onClick={() => setPicking(true)}
-                  >
-                    <Icon name="plus" size={16} /> Add from gallery
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="flex size-24 flex-col items-center justify-center gap-1 border border-dashed border-edge text-xs text-muted hover:text-ink"
+                      aria-label="Add from gallery"
+                      onClick={() => setPicking(true)}
+                    >
+                      <Icon name="plus" size={16} /> From gallery
+                    </button>
+                    <button
+                      type="button"
+                      className="flex size-24 flex-col items-center justify-center gap-1 border border-dashed border-edge text-xs text-muted hover:text-ink disabled:opacity-60"
+                      disabled={uploading}
+                      aria-label="Upload a source image from this computer"
+                      onClick={() => uploadInput.current?.click()}
+                    >
+                      {uploading ? <Spinner /> : <Icon name="arrow-up" size={16} />}
+                      {uploading ? "Importing…" : "Upload"}
+                    </button>
+                    <input
+                      ref={uploadInput}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      onChange={(e) => upload(e.target.files?.[0])}
+                    />
+                  </>
                 )}
               </div>
               <div className="mt-1 text-[11px] text-muted">
@@ -377,22 +523,68 @@ export function VariantSetCreate() {
             </div>
           )}
 
-          {needsMask && maskSource && (
+          {needsMask && firstSource != null && (
             <div>
               <div className="label">Region to change</div>
-              {draft.maskAssetId != null && !maskFile ? (
-                <div className="flex items-center gap-2 text-xs text-ok">
-                  <Icon name="check" size={14} /> Mask saved (asset #{draft.maskAssetId}).
-                  <button
-                    type="button"
-                    className="text-accent underline"
-                    onClick={() => update({ ...draft, maskAssetId: null })}
+              {canMatte && (
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    icon="spark"
+                    loading={matting === "mask"}
+                    disabled={!!matting}
+                    onClick={() => autoMask("mask")}
                   >
-                    Paint again
-                  </button>
+                    Select the subject
+                  </Button>
+                  <Button
+                    size="sm"
+                    icon="layers"
+                    loading={matting === "inverse_mask"}
+                    disabled={!!matting}
+                    onClick={() => autoMask("inverse_mask")}
+                  >
+                    Select the background
+                  </Button>
+                  <span className="text-[11px] text-muted">
+                    {matting ? "Finding the subject…" : "or paint the region below."}
+                  </span>
                 </div>
-              ) : (
+              )}
+              {draft.maskAssetId != null && !maskFile ? (
+                <div className="flex items-center gap-3">
+                  <div className="media-tile size-24 bg-black">
+                    {maskAsset ? (
+                      <img
+                        src={maskAsset.thumb_url || maskAsset.url}
+                        alt="The mask: white is what changes"
+                        className="h-full w-full object-contain"
+                      />
+                    ) : (
+                      <div className="technical flex h-full items-center justify-center text-[10px] text-muted">
+                        #{draft.maskAssetId}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1 text-xs">
+                    <div className="flex items-center gap-1 text-ok">
+                      <Icon name="check" size={14} /> Mask ready: white is what changes.
+                    </div>
+                    <button
+                      type="button"
+                      className="text-accent underline"
+                      onClick={() => update({ ...draft, maskAssetId: null })}
+                    >
+                      Paint instead
+                    </button>
+                  </div>
+                </div>
+              ) : maskSource ? (
                 <MaskEditor image={maskSource} onMask={setMaskFile} />
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  <Spinner /> Loading the source image…
+                </div>
               )}
             </div>
           )}
@@ -450,6 +642,7 @@ export function VariantSetCreate() {
               caps={caps}
               spec={specByKind.get(stage.operation)}
               presets={presets}
+              assetById={assetById}
               onChange={(next) =>
                 update({ ...draft, stages: draft.stages.map((s, j) => (j === index ? next : s)) })
               }
@@ -479,7 +672,10 @@ export function VariantSetCreate() {
         className="flex min-h-0 flex-col border-t border-edge bg-panel lg:border-l lg:border-t-0"
         aria-label="Variant set preview"
       >
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        <div
+          id="variant-set-panel"
+          className={`min-h-0 flex-1 space-y-4 overflow-y-auto p-5 ${panelOpen ? "max-h-[45vh] lg:max-h-none" : "hidden lg:block"}`}
+        >
           <div>
             <div className="page-kicker">Combinations</div>
             <div
@@ -558,6 +754,26 @@ export function VariantSetCreate() {
           </div>
         </div>
         <div className="shrink-0 space-y-2 border-t border-edge p-4">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-xs text-muted lg:hidden"
+            aria-expanded={panelOpen}
+            aria-controls="variant-set-panel"
+            onClick={() => setPanelOpen((open) => !open)}
+          >
+            <span className={overCap ? "text-danger" : "text-ink"}>
+              {counts.total} variant{counts.total === 1 ? "" : "s"}
+              {problemCount > 0 && <span className="text-warn"> · {problemCount} to fix</span>}
+            </span>
+            <span className="flex items-center gap-1 text-accent">
+              {panelOpen ? "Hide preview" : "Preview"}
+              <Icon
+                name="chevron-down"
+                size={14}
+                className={`transition-transform ${panelOpen ? "rotate-180" : ""}`}
+              />
+            </span>
+          </button>
           {blockedReason && (
             <div className="flex items-start gap-2 text-xs leading-relaxed text-warn">
               <Icon name="alert" size={15} className="mt-0.5 shrink-0" />
@@ -567,14 +783,28 @@ export function VariantSetCreate() {
           <Button variant="primary" className="w-full" loading={busy} disabled={!canCreate} onClick={create}>
             {busy ? "Creating…" : `Create set · ${counts.total}`}
           </Button>
-          <Button
-            className="w-full"
-            icon="bookmark"
-            disabled={!recipe || !!problems.length}
-            onClick={() => setNaming(true)}
-          >
-            Save as recipe
-          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              size="sm"
+              icon="bookmark"
+              disabled={!recipe || !!problems.length}
+              onClick={() => setNaming(true)}
+            >
+              Save as recipe
+            </Button>
+            <Button
+              size="sm"
+              icon="braces"
+              disabled={!recipe || !!problems.length}
+              onClick={copyApiRequest}
+              title="Copy this set as a POST /api/variant-sets request (see docs/api.md)"
+              aria-label="Copy API request"
+            >
+              <span>
+                <span className="hidden sm:inline">Copy </span>API request
+              </span>
+            </Button>
+          </div>
         </div>
       </aside>
 

@@ -26,17 +26,6 @@ export interface AxisDraft {
   content: Record<string, string>;
 }
 
-export interface FinishingDraft {
-  removeBackground: boolean;
-  resize: boolean;
-  width: number;
-  height: number;
-  mode: "contain" | "cover" | "stretch";
-  background: string;
-  /** Steps this form has no control for, kept so a loaded recipe is not changed. */
-  extra: VariantFinishingStep[];
-}
-
 export interface ValidationDraft {
   png: boolean;
   exactSize: boolean;
@@ -59,7 +48,13 @@ export interface StageDraft {
   negative: string;
   /** Registry control values for the operation. */
   params: Record<string, any>;
-  finishing: FinishingDraft;
+  /** axis -> value -> settings that value changes. Edited through the API or a
+   *  saved recipe; the form carries them so a round trip never drops one. */
+  valueParams: Record<string, Record<string, Record<string, any>>>;
+  /** Extra reference images for a later image_edit stage (asset ids). */
+  references: number[];
+  /** Ordered finishing processors; see FinishingStepsEditor. */
+  finishing: VariantFinishingStep[];
   validation: ValidationDraft;
   naming: { template: string; prefix: string };
 }
@@ -90,15 +85,9 @@ export function newStage(operation: string, name = ""): StageDraft {
     prompt: "",
     negative: "",
     params: {},
-    finishing: {
-      removeBackground: false,
-      resize: false,
-      width: 1024,
-      height: 1024,
-      mode: "contain",
-      background: "transparent",
-      extra: [],
-    },
+    valueParams: {},
+    references: [],
+    finishing: [],
     validation: {
       png: false,
       exactSize: false,
@@ -196,19 +185,19 @@ export function axisProblems(stages: Pick<StageDraft, "axes">[]): string[] {
   const names = new Map<string, string>();
   stages.forEach((stage, index) => {
     const where = stages.length > 1 ? `Stage ${index + 1}: ` : "";
-    for (const axis of stage.axes) {
+    stage.axes.forEach((axis, position) => {
+      // An unnamed axis is referred to by its place, never as `axis ""`.
+      const label = axis.name ? `Axis "${axis.name}"` : `Axis ${position + 1}`;
       if (!axis.name) {
-        problems.push(`${where}every axis needs a name.`);
+        problems.push(`${where}${label} needs a name.`);
       } else if (!AXIS_NAME.test(axis.name)) {
-        problems.push(
-          `${where}axis "${axis.name}" must start with a letter and use only letters, digits and _.`,
-        );
+        problems.push(`${where}${label} must start with a letter and use only letters, digits and _.`);
       } else {
         const folded = axis.name.toLowerCase();
         if (names.has(folded)) problems.push(`Axis name "${axis.name}" is used twice.`);
         names.set(folded, axis.name);
       }
-      if (!axis.values.length) problems.push(`${where}axis "${axis.name || "…"}" has no values.`);
+      if (!axis.values.length) problems.push(`${where}${label} needs at least one value.`);
       const ids = new Map<string, string>();
       for (const value of axis.values) {
         if (value.includes("{{") || value.includes("}}")) {
@@ -219,7 +208,7 @@ export function axisProblems(stages: Pick<StageDraft, "axes">[]): string[] {
         else if (ids.has(id)) problems.push(`${where}"${ids.get(id)}" and "${value}" are the same value.`);
         ids.set(id, value);
       }
-    }
+    });
   });
   return [...new Set(problems)];
 }
@@ -243,19 +232,54 @@ export function availableAxes(stages: Pick<StageDraft, "axes">[], index: number)
 }
 
 // ---- draft <-> recipe ---------------------------------------------------------------------
-function finishingSteps(finishing: FinishingDraft): VariantFinishingStep[] {
+/** A stage's finishing as saved by an earlier version of this form
+ *  (`variant-set-draft-v1` before steps became an ordered list). */
+interface LegacyFinishing {
+  removeBackground?: boolean;
+  resize?: boolean;
+  width?: number;
+  height?: number;
+  mode?: string;
+  background?: string;
+  extra?: VariantFinishingStep[];
+}
+
+function legacySteps(old: LegacyFinishing): VariantFinishingStep[] {
   const steps: VariantFinishingStep[] = [];
-  if (finishing.removeBackground) steps.push({ processor: "background_removal" });
-  if (finishing.resize) {
+  if (old.removeBackground) steps.push({ processor: "background_removal" });
+  if (old.resize) {
     steps.push({
       processor: "resize",
-      width: finishing.width,
-      height: finishing.height,
-      mode: finishing.mode,
-      background: finishing.background,
+      width: old.width ?? 1024,
+      height: old.height ?? 1024,
+      mode: old.mode ?? "contain",
+      background: old.background ?? "transparent",
     });
   }
-  return [...steps, ...finishing.extra];
+  return [...steps, ...(old.extra ?? [])];
+}
+
+/** A draft read back from storage, upgraded to the current shape. Anything
+ *  unreadable is dropped rather than crashing the form. */
+export function normalizeDraft(raw: unknown): SetDraft | null {
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as SetDraft).stages)) return null;
+  const draft = raw as SetDraft;
+  return {
+    ...draft,
+    stages: draft.stages.map((stage) => {
+      const fresh = newStage(stage.operation, stage.name);
+      const finishing = Array.isArray(stage.finishing)
+        ? stage.finishing
+        : legacySteps((stage.finishing ?? {}) as LegacyFinishing);
+      return {
+        ...fresh,
+        ...stage,
+        finishing,
+        valueParams: stage.valueParams ?? {},
+        references: stage.references ?? [],
+      };
+    }),
+  };
 }
 
 function validationSpec(validation: ValidationDraft): VariantValidationSpec {
@@ -294,8 +318,10 @@ export function toRecipe(draft: SetDraft, maskOps: Set<string>): VariantRecipeSp
     prompt: stage.prompt,
     negative_prompt: stage.negative,
     params: stage.params,
+    value_params: stage.valueParams,
+    references: stage.references,
     mask: maskOps.has(stage.operation) ? MASK_NAME : null,
-    finishing: finishingSteps(stage.finishing),
+    finishing: stage.finishing,
     validation: validationSpec(stage.validation),
     naming: { template: stage.naming.template, prefix: stage.naming.prefix },
   }));
@@ -308,8 +334,9 @@ export function toRecipe(draft: SetDraft, maskOps: Set<string>): VariantRecipeSp
   };
 }
 
-/** A saved recipe back into the form. Unknown finishing steps are carried
- *  through untouched, so loading and saving never silently drops one. */
+/** A saved recipe back into the form. Everything the form cannot edit directly
+ *  (per-value settings, references) is carried through untouched, so loading
+ *  and saving never silently drops a part of the recipe. */
 export function fromRecipe(recipe: VariantRecipeSpec, name = ""): SetDraft {
   const content = recipe.content || {};
   const stages = recipe.stages.map((spec) => {
@@ -324,16 +351,9 @@ export function fromRecipe(recipe: VariantRecipeSpec, name = ""): SetDraft {
     stage.prompt = spec.prompt || "";
     stage.negative = spec.negative_prompt || "";
     stage.params = { ...(spec.params || {}) };
-    for (const step of spec.finishing || []) {
-      if (step.processor === "background_removal") stage.finishing.removeBackground = true;
-      else if (step.processor === "resize") {
-        stage.finishing.resize = true;
-        stage.finishing.width = Number(step.width) || 1024;
-        stage.finishing.height = Number(step.height) || 1024;
-        stage.finishing.mode = (step.mode as FinishingDraft["mode"]) || "contain";
-        stage.finishing.background = String(step.background || "transparent");
-      } else stage.finishing.extra.push(step);
-    }
+    stage.valueParams = structuredClone(spec.value_params || {});
+    stage.references = [...(spec.references || [])];
+    stage.finishing = (spec.finishing || []).map((step) => ({ ...step }));
     const v = spec.validation || {};
     stage.validation = {
       png: v.format === "PNG",
@@ -404,4 +424,45 @@ export function settledFraction(counts: {
     (counts.canceled || 0) +
     (counts.blocked || 0);
   return Math.min(1, settled / total);
+}
+
+type NoticeCounts = Parameters<typeof settledFraction>[0];
+
+/** The one announcement a set earns when it settles, instead of one toast per
+ *  failed child. Only a transition seen live counts: a set that was already
+ *  finished when the page loaded is not news, and a cancel was the user's own. */
+export function settledNotice(
+  previous: string | undefined,
+  event: { name?: string; status?: string; counts?: NoticeCounts },
+): { text: string; kind: "success" | "error" } | null {
+  if (previous !== "active") return null;
+  if (event.status !== "complete" && event.status !== "incomplete") return null;
+  const c = event.counts ?? {};
+  const name = event.name ? `“${event.name}”` : "Variant set";
+  const done = c.succeeded || 0;
+  if (event.status === "complete") {
+    return { text: `${name} finished: ${done} variant${done === 1 ? "" : "s"} ready`, kind: "success" };
+  }
+  const parts = [`${done} done`];
+  for (const key of ["failed", "invalid", "blocked", "canceled"] as const) {
+    if (c[key]) parts.push(`${c[key]} ${key}`);
+  }
+  return { text: `${name} finished with problems: ${parts.join(", ")}`, kind: "error" };
+}
+
+/** A job that belongs to a Variant Set reports through its set, not on its own. */
+export function isVariantGroup(groupId: string | null | undefined): boolean {
+  return !!groupId && groupId.startsWith("vset-");
+}
+
+/** A request as a runnable curl command (docs/api.md). The token header is
+ *  harmless when the app sets none, so one command works either way. */
+export function apiRequestText(path: string, body: unknown, origin: string): string {
+  const json = JSON.stringify(body, null, 2).replace(/'/g, "'\\''");
+  return [
+    `curl -X POST ${origin}${path} \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -H "X-API-Token: \${API_TOKEN:-}" \\`,
+    `  -d '${json}'`,
+  ].join("\n");
 }

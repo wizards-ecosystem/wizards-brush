@@ -19,12 +19,12 @@ export function CompareSlider({ before, after }: { before: string; after: string
         }}
         onPointerMove={(event) => event.currentTarget.hasPointerCapture(event.pointerId) && drag(event)}
       >
-        <img src={after} alt="after" className="w-full block" />
+        <img src={after} alt="after" className="transparency-grid block w-full" />
         {/* clip-path (not a measured-width overlay) so render never reads the ref */}
         <img
           src={before}
           alt="before"
-          className="absolute inset-0 w-full h-full"
+          className="transparency-grid absolute inset-0 h-full w-full"
           style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }}
         />
         <div className="pointer-events-none absolute inset-y-0 w-px bg-white" style={{ left: `${pos}%` }}>

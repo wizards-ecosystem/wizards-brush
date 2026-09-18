@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Control, Presets, StyleItem } from "../api/types";
+import { FinishingStepsEditor } from "./FinishingStepsEditor";
 import { Icon } from "./icons";
 import { LoraPicker } from "./LoraPicker";
 import {
@@ -313,6 +314,20 @@ function FieldInner({
           ))}
         </select>
         {optionHint && <div className="mt-1 text-xs text-ink/65">{optionHint}</div>}
+        {hint && <div className="text-[10px] text-white/40 mt-1">{hint}</div>}
+      </div>
+    );
+  }
+
+  if (c.type === "finishing") {
+    return (
+      <div>
+        <div className="label">{c.label}</div>
+        <FinishingStepsEditor
+          steps={Array.isArray(v) ? v : []}
+          processors={c.processors ?? []}
+          onChange={(next) => onChange(c.name, next)}
+        />
         {hint && <div className="text-[10px] text-white/40 mt-1">{hint}</div>}
       </div>
     );

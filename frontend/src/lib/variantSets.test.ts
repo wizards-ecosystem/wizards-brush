@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addValues,
+  apiRequestText,
   availableAxes,
   axisProblems,
   countCombinations,
@@ -10,6 +11,7 @@ import {
   liveState,
   newDraft,
   newStage,
+  normalizeDraft,
   parseAxisValues,
   settledFraction,
   slug,
@@ -63,9 +65,14 @@ describe("axis values", () => {
       { uid: "3", name: "color", values: ["x", "{{y}}"], describe: false, content: {} },
     ];
     const problems = axisProblems([stage]).join(" | ");
-    expect(problems).toContain('axis "1bad" must start with a letter');
+    expect(problems).toContain('Axis "1bad" must start with a letter');
     expect(problems).toContain('Axis name "color" is used twice');
-    expect(problems).toContain('axis "Color" has no values');
+    expect(problems).toContain('Axis "Color" needs at least one value');
+    // A blank axis is named by its place, not as an empty string.
+    expect(axisProblems([newStage("image_edit")])).toEqual([
+      "Axis 1 needs a name.",
+      "Axis 1 needs at least one value.",
+    ]);
     expect(problems).toContain("contains {{ or }}");
   });
 });
@@ -106,11 +113,13 @@ describe("draft ⇄ recipe", () => {
     ];
     stage.prompt = "Lit by {{lighting}}";
     stage.params = { quality: "High" };
-    stage.finishing.removeBackground = true;
-    stage.finishing.resize = true;
-    stage.finishing.width = 512;
-    stage.finishing.height = 512;
-    stage.finishing.extra = [{ processor: "upscale", scale: 2 }];
+    stage.finishing = [
+      { processor: "background_removal" },
+      { processor: "resize", width: 512, height: 512, mode: "contain", background: "transparent" },
+      { processor: "upscale", scale: 2 },
+    ];
+    stage.valueParams = { lighting: { dramatic: { guidance: 3 } } };
+    stage.references = [31];
     stage.validation.png = true;
     stage.validation.alpha = "required";
     stage.validation.corners = true;
@@ -134,13 +143,45 @@ describe("draft ⇄ recipe", () => {
       min_transparent_fraction: 0.2,
     });
     expect(recipe.stages[0].mask).toBeNull();
+    expect(recipe.stages[0].value_params).toEqual({ lighting: { dramatic: { guidance: 3 } } });
+    expect(recipe.stages[0].references).toEqual([31]);
 
     const back = fromRecipe(recipe, "Lighting");
     expect(back.name).toBe("Lighting");
     expect(back.stages[0].axes[0].values).toEqual(["soft", "dramatic"]);
-    expect(back.stages[0].finishing.extra).toEqual([{ processor: "upscale", scale: 2 }]);
+    // Order is kept: resize-then-upscale is not the same image as the reverse.
+    expect(back.stages[0].finishing.map((s) => s.processor)).toEqual([
+      "background_removal",
+      "resize",
+      "upscale",
+    ]);
     expect(back.stages[0].validation.minTransparent).toBe(20);
     expect(toRecipe(back, new Set()).stages[0]).toEqual(recipe.stages[0]);
+  });
+
+  it("upgrades a draft saved before finishing became an ordered list", () => {
+    const old = newDraft("image_edit") as any;
+    old.stages[0].finishing = {
+      removeBackground: true,
+      resize: true,
+      width: 640,
+      height: 480,
+      mode: "cover",
+      background: "#ffffff",
+      extra: [{ processor: "face_restore" }],
+    };
+    delete old.stages[0].valueParams;
+    delete old.stages[0].references;
+    const draft = normalizeDraft(JSON.parse(JSON.stringify(old)))!;
+    expect(draft.stages[0].finishing).toEqual([
+      { processor: "background_removal" },
+      { processor: "resize", width: 640, height: 480, mode: "cover", background: "#ffffff" },
+      { processor: "face_restore" },
+    ]);
+    expect(draft.stages[0].valueParams).toEqual({});
+    expect(draft.stages[0].references).toEqual([]);
+    expect(normalizeDraft({ nonsense: true })).toBeNull();
+    expect(normalizeDraft(null)).toBeNull();
   });
 
   it("names the mask only for operations that need one", () => {
@@ -162,5 +203,13 @@ describe("presentation", () => {
   it("measures how much of a set has settled", () => {
     expect(settledFraction({ total: 4, succeeded: 1, failed: 1, blocked: 1 })).toBe(0.75);
     expect(settledFraction({})).toBe(0);
+  });
+
+  it("writes a request as a runnable curl command, quotes and all", () => {
+    const text = apiRequestText("/api/variant-sets", { name: "it's here" }, "http://127.0.0.1:8000");
+    expect(text.split("\n")[0]).toBe("curl -X POST http://127.0.0.1:8000/api/variant-sets \\");
+    expect(text).toContain('-H "X-API-Token: ${API_TOKEN:-}"');
+    // A single quote in the JSON closes, escapes and reopens the shell string.
+    expect(text).toContain("it'\\''s here");
   });
 });
