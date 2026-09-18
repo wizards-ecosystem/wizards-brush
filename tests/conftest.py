@@ -47,9 +47,12 @@ os.environ["REMOTE_GPU_BASE_URL"] = ""  # env beats .env — keep tests off any 
 # a heavy import on a background thread, so it lands in sys.modules at a
 # nondeterministic point and trips the guard below from an unrelated test.
 os.environ["ENRICH_CAPTIONS"] = "false"
-os.environ.pop("API_TOKEN", None)
+# Set empty rather than removed: a variable that is absent lets pydantic fall
+# back to the developer's own .env, so a token set there turned every API test
+# into a 401. An empty value beats .env, like REMOTE_GPU_BASE_URL above.
+os.environ["API_TOKEN"] = ""
 # Never authenticate against a developer's real tunnel from the test suite.
-os.environ.pop("REMOTE_GPU_SHARED_SECRET", None)
+os.environ["REMOTE_GPU_SHARED_SECRET"] = ""
 
 import pytest
 
