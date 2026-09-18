@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..controls import ControlError, check_value
 from ..finishing import MAX_STEPS, FinishingError, sanitize_steps
 from ..prompt_engine import MAX_PROMPT_CHARS
 from ..validators import ValidationSpec
@@ -174,32 +175,10 @@ def check_param(control: Mapping[str, Any], value: Any, where: str) -> Any:
     The route's own sanitization still runs when the child is built; this is
     what makes a wrong value an error at submission rather than a silent clamp.
     """
-    name, kind = control.get("name"), control.get("type")
-    if kind in ("select", "segmented", "aspect"):
-        options = [str(o) for o in control.get("options") or []]
-        if str(value) not in options:
-            raise RecipeError(f"{where}: {name} must be one of {', '.join(options)}")
-        return value
-    if kind in ("slider", "number"):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise RecipeError(f"{where}: {name} must be a number")
-        low, high = control.get("min"), control.get("max")
-        if (low is not None and value < low) or (high is not None and value > high):
-            raise RecipeError(f"{where}: {name} must be between {low} and {high}")
-        return value
-    if kind == "toggle":
-        if not isinstance(value, bool):
-            raise RecipeError(f"{where}: {name} must be true or false")
-        return value
-    if kind == "textarea":
-        if not isinstance(value, str) or len(value) > MAX_PROMPT_CHARS:
-            raise RecipeError(f"{where}: {name} must be text of at most {MAX_PROMPT_CHARS} characters")
-        return value
-    if kind == "lora":
-        if not isinstance(value, list):
-            raise RecipeError(f"{where}: {name} must be a list")
-        return value
-    raise RecipeError(f"{where}: {name} cannot be set by a recipe")
+    try:
+        return check_value(control, value)
+    except ControlError as error:
+        raise RecipeError(f"{where}: {error}") from None
 
 
 def _check_params(params: Mapping[str, Any], controls: Mapping[str, Mapping[str, Any]],
@@ -212,6 +191,7 @@ def _check_params(params: Mapping[str, Any], controls: Mapping[str, Mapping[str,
                 f"{where}: '{name}' is not a setting of this operation"
                 + (" (the set supplies it)" if name in ("prompt", "negative_prompt", "batch",
                                                         "combinatorial", "seed", "seed_mode")
+                   else " (use the stage's `finishing` list)" if name == "finish_steps"
                    else "")
             )
         clean[name] = check_param(control, value, where)

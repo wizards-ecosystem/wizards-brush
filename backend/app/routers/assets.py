@@ -4,14 +4,16 @@ from __future__ import annotations
 import asyncio
 import io
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .. import db, scoring
 from ..config import settings
-from ..models import AssetRead
+from ..models import AssetKind, AssetRead
 
 router = APIRouter(tags=["assets"])
 
@@ -132,6 +134,118 @@ async def get_asset(asset_id: int) -> AssetRead:
     if not a:
         raise HTTPException(status_code=404, detail="asset not found")
     return AssetRead.of(a)
+
+
+@router.get("/assets/{asset_id}/file", response_class=FileResponse,
+            responses={200: {"content": {"image/png": {}, "video/mp4": {}},
+                             "description": "The asset's original file."}})
+async def get_asset_file(
+    asset_id: int,
+    download: bool = Query(False, description="Send as an attachment with its file name."),
+) -> FileResponse:
+    """The original file, authenticated like the rest of /api.
+
+    `/files/...` URLs are for the browser: with API_TOKEN set they accept only
+    the HttpOnly session cookie, so a program holding the token in a header
+    fetches bytes here instead. Trashed assets are not served.
+    """
+    a = db.get_asset(asset_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="asset not found")
+    path = Path(a.path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="the asset's file is missing from disk")
+    import mimetypes
+
+    media = mimetypes.guess_type(a.filename)[0] or (
+        "video/mp4" if a.kind == AssetKind.video.value else "application/octet-stream")
+    return FileResponse(path, media_type=media, filename=a.filename,
+                        content_disposition_type="attachment" if download else "inline")
+
+
+def _import_image(data: bytes, role: str) -> Image.Image:
+    """Decode an untrusted upload for the library, keeping what matters.
+
+    Transparency survives — a cut-out product shot is exactly the kind of
+    source a Variant Set starts from — and a mask becomes single-channel.
+    Orientation is applied, and everything else the file carried (EXIF,
+    location, the original encoder's chunks) is dropped by the re-encode.
+    """
+    from PIL import ImageOps
+
+    from .common import validate_upload_dimensions
+
+    validate_upload_dimensions(data)
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            opened.load()
+            image = ImageOps.exif_transpose(opened)
+    except Exception as exc:
+        raise ValueError("upload is not a valid image") from exc
+    if role == "mask":
+        return image.convert("L")
+    alpha = "A" in image.getbands() or "transparency" in image.info
+    return image.convert("RGBA" if alpha else "RGB")
+
+
+@router.post("/assets/import")
+async def import_asset(
+    file: UploadFile,
+    role: Literal["source", "mask"] = Form(
+        "source", description="`mask` stores a single-channel mask (white = change)."),
+    tags: str = Form("", description="Comma-separated tags."),
+    collection_id: int | None = Form(None, description="Also add it to this collection."),
+) -> AssetRead:
+    """Bring an image into the library so jobs and Variant Sets can use it by id.
+
+    PNG, JPEG, WebP and the other formats Pillow reads, up to the upload
+    limits. The file is re-encoded as PNG with its transparency intact.
+    """
+    from .common import MAX_UPLOAD_BYTES, _enrich
+
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+    if collection_id is not None and not any(c.id == collection_id
+                                             for c, _n in db.list_collections()):
+        raise HTTPException(status_code=404, detail=f"collection {collection_id} not found")
+    clean_tags = [t.strip()[:64] for t in tags.split(",") if t.strip()][:20]
+    original = Path(file.filename or "").name[:200]
+
+    def _store() -> int:
+        from ..utils.io import save_image
+
+        try:
+            image = _import_image(data, role)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        if role == "mask" and image.getbbox() is None:
+            raise HTTPException(status_code=400,
+                                detail="the mask is empty: white marks what should change")
+        saved = save_image(image, "mask" if role == "mask" else "import")
+        meta: dict = ({"mask": {"source": "upload"}} if role == "mask"
+                      else {"import": {"filename": original, "mode": image.mode}})
+        asset = db.add_asset(AssetKind.image.value, saved.path, thumb=saved.thumb,
+                             width=saved.width, height=saved.height,
+                             generator="mask" if role == "mask" else "import", meta=meta,
+                             content_hash=saved.content_hash, size_bytes=saved.size_bytes,
+                             mime_type="image/png")
+        assert asset.id is not None
+        if clean_tags:
+            db.update_asset(asset.id, tags=clean_tags)
+        if collection_id is not None:
+            db.add_to_collection(collection_id, [asset.id])
+        return int(asset.id)
+
+    asset_id = await asyncio.to_thread(_store)
+    if role != "mask":
+        _enrich(asset_id)  # captions make an import searchable like anything generated
+    stored = db.get_asset(asset_id)
+    assert stored is not None
+    return AssetRead.of(stored)
 
 
 def _first_frame_png(p: Path) -> bytes:

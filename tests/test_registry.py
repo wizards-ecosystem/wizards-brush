@@ -5,7 +5,9 @@ from __future__ import annotations
 from backend.app.generators.registry import registry
 from backend.app.presets import TUNING_HINTS
 
-VALID_TYPES = {"textarea", "toggle", "number", "select", "slider", "segmented", "aspect", "lora"}
+# Every type here must be rendered by frontend DynamicControls.
+VALID_TYPES = {"textarea", "toggle", "number", "select", "slider", "segmented", "aspect", "lora",
+               "finishing"}
 
 
 def _entries():

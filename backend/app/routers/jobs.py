@@ -241,10 +241,13 @@ async def jobs_ws(ws: WebSocket) -> None:
     await ws.accept()
     q = hub.subscribe()
     try:
-        # Send a snapshot of recent jobs on connect.
+        # Send a snapshot of recent jobs on connect. Marked as one: a client
+        # must not announce a failure it is only now catching up on — every
+        # reload would otherwise re-toast the last twenty jobs' errors.
         for j in db.list_jobs(limit=20):
             await ws.send_json({"type": "job", "id": j.id, "kind": j.kind, "status": j.status,
-                                "progress": j.progress, "message": j.message})
+                                "progress": j.progress, "message": j.message,
+                                "group_id": j.group_id, "snapshot": True})
         while True:
             try:
                 event = await asyncio.wait_for(q.get(), timeout=30)

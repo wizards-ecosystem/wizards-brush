@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -22,6 +22,7 @@ from ..models import AssetKind
 from ..queue import lane_for, on_job_terminal
 from ..variant_sets import expansion, operations, service, store
 from ..variant_sets.recipe import RecipeError, RecipeSpec, compile_recipe
+from ..variant_sets.schemas import ItemView, RecipeView, SetDetail, SetView, SetWait
 from .common import MAX_UPLOAD_BYTES, load_uploaded_image, normalize_request_id
 
 router = APIRouter(tags=["variant-sets"])
@@ -74,6 +75,19 @@ class RetryBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_canceled: bool = False
+
+
+class RetryResult(BaseModel):
+    retried: int = Field(description="Items reset for another attempt.")
+    submitted: int = Field(description="Jobs queued now; later-stage items wait for parents.")
+
+
+class CancelResult(BaseModel):
+    canceled: int = Field(description="Variants stopped: waiting ones canceled, running ones told to stop.")
+
+
+class OkResult(BaseModel):
+    ok: bool = True
 
 
 class RerunBody(BaseModel):
@@ -167,18 +181,18 @@ def _with_placeholder_sources(spec: RecipeSpec) -> RecipeSpec:
     return spec.model_copy(update={"sources": [0] * need})
 
 
-@router.get("/variant-recipes")
+@router.get("/variant-recipes", response_model=list[RecipeView])
 async def list_recipes() -> list[dict[str, Any]]:
     return [_recipe_view(r) for r in store.list_recipes()]
 
 
-@router.post("/variant-recipes")
+@router.post("/variant-recipes", response_model=RecipeView)
 async def create_recipe(body: RecipeBody) -> dict[str, Any]:
     row = store.save_recipe(body.name.strip(), body.description, _validate_definition(body.recipe))
     return _recipe_view(row)
 
 
-@router.get("/variant-recipes/{recipe_id}")
+@router.get("/variant-recipes/{recipe_id}", response_model=RecipeView)
 async def get_recipe(recipe_id: int) -> dict[str, Any]:
     row = store.get_recipe(recipe_id)
     if row is None:
@@ -186,7 +200,7 @@ async def get_recipe(recipe_id: int) -> dict[str, Any]:
     return _recipe_view(row)
 
 
-@router.put("/variant-recipes/{recipe_id}")
+@router.put("/variant-recipes/{recipe_id}", response_model=RecipeView)
 async def update_recipe(recipe_id: int, body: RecipeBody) -> dict[str, Any]:
     """Edit a definition. Sets made from it keep their own snapshot, so their
     meaning never changes."""
@@ -197,7 +211,7 @@ async def update_recipe(recipe_id: int, body: RecipeBody) -> dict[str, Any]:
     return _recipe_view(row)
 
 
-@router.post("/variant-recipes/{recipe_id}/clone")
+@router.post("/variant-recipes/{recipe_id}/clone", response_model=RecipeView)
 async def clone_recipe(recipe_id: int) -> dict[str, Any]:
     row = store.get_recipe(recipe_id)
     if row is None:
@@ -206,7 +220,7 @@ async def clone_recipe(recipe_id: int) -> dict[str, Any]:
     return _recipe_view(store.save_recipe(name, row.description, row.config))
 
 
-@router.delete("/variant-recipes/{recipe_id}")
+@router.delete("/variant-recipes/{recipe_id}", response_model=OkResult)
 async def delete_recipe(recipe_id: int) -> dict[str, Any]:
     if not store.delete_recipe(recipe_id):
         raise HTTPException(status_code=404, detail="recipe not found")
@@ -226,8 +240,13 @@ async def preview_set(body: PreviewBody) -> dict[str, Any]:
         raise _http(error) from None
 
 
-@router.post("/variant-sets")
+@router.post("/variant-sets", response_model=SetDetail, response_model_exclude_unset=True)
 async def create_set(body: CreateSetBody) -> dict[str, Any]:
+    """Create a set and queue its first stage.
+
+    Idempotent on `request_id`: resubmitting it returns the original set with
+    `created: false` instead of queuing it again.
+    """
     spec, recipe_id = _recipe_from(body.recipe, body.recipe_id, body.sources)
     request_id = normalize_request_id(body.request_id)
     if body.collection.mode == "existing" and body.collection.id is None:
@@ -245,39 +264,81 @@ async def create_set(body: CreateSetBody) -> dict[str, Any]:
     return {**service.set_view(made.set), "created": made.created}
 
 
-@router.get("/variant-sets")
+@router.get("/variant-sets", response_model=list[SetView])
 async def list_sets(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     return [service.set_view(r) for r in store.list_sets(limit=max(1, min(limit, 500)),
                                                          offset=max(0, offset))]
 
 
-@router.get("/variant-sets/{set_id}")
-async def get_set(set_id: int, items: bool = True) -> dict[str, Any]:
-    """The set, with every item's live state. Reading also reconciles: anything a
-    missed notification left behind is settled before it is shown."""
+async def _detail(set_id: int, *, items: bool) -> dict[str, Any]:
     if store.get_set(set_id) is None:
         raise HTTPException(status_code=404, detail="variant set not found")
     await service.reconcile_set(set_id)
     row = store.get_set(set_id)
     assert row is not None
-    out = service.set_view(row)
+    out = {**service.set_view(row), "recipe": row.recipe}
     if items:
         out["items"] = service.item_views(store.items_for_set(set_id))
     return out
 
 
-@router.get("/variant-sets/{set_id}/items")
-async def list_items(set_id: int, stage: int | None = None,
-                     state: str | None = None) -> list[dict[str, Any]]:
+@router.get("/variant-sets/{set_id}", response_model=SetDetail,
+            response_model_exclude_unset=True)
+async def get_set(set_id: int, items: bool = True) -> dict[str, Any]:
+    """The set, its frozen recipe snapshot and every item's live state.
+
+    Reading also reconciles: anything a missed notification left behind is
+    settled before it is shown.
+    """
+    return await _detail(set_id, items=items)
+
+
+@router.get("/variant-sets/{set_id}/wait", response_model=SetWait,
+            response_model_exclude_unset=True)
+async def wait_set(
+    set_id: int,
+    timeout: float = Query(30.0, ge=0.0, le=60.0,
+                           description="Seconds to wait for the set to settle."),
+    items: bool = Query(False, description="Include every item in the answer."),
+) -> dict[str, Any]:
+    """Long-poll: return once the set is no longer active, or at `timeout`.
+
+    A set settles as `complete`, `incomplete` (some variants failed, were
+    invalid or blocked; `POST .../retry` runs them again) or `canceled`.
+    `settled: false` means it is still running; wait again.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        row = store.get_set(set_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="variant set not found")
+        if row.status != store.ACTIVE or loop.time() >= deadline:
+            break
+        await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
+    view = await _detail(set_id, items=items)   # reconciles, so the answer is settled truth
+    return {"set": view, "settled": view["status"] != store.ACTIVE}
+
+
+@router.get("/variant-sets/{set_id}/items", response_model=list[ItemView],
+            response_model_exclude_unset=True)
+async def list_items(
+    set_id: int, stage: int | None = None, state: str | None = None,
+    limit: int | None = Query(None, ge=1, le=10_000, description="Page size; all by default."),
+    offset: int = Query(0, ge=0),
+) -> list[dict[str, Any]]:
+    """Items in stage-then-combination order, optionally filtered and paged."""
     if store.get_set(set_id) is None:
         raise HTTPException(status_code=404, detail="variant set not found")
     rows = store.items_for_set(set_id, stage=stage)
     if state:
         rows = [r for r in rows if r.state == state]
+    rows = rows[offset:offset + limit] if limit is not None else rows[offset:]
     return service.item_views(rows)
 
 
-@router.get("/variant-sets/{set_id}/items/{item_id}")
+@router.get("/variant-sets/{set_id}/items/{item_id}", response_model=ItemView,
+            response_model_exclude_unset=True)
 async def get_item(set_id: int, item_id: int) -> dict[str, Any]:
     item = store.get_item(item_id)
     if item is None or item.set_id != set_id:
@@ -287,7 +348,7 @@ async def get_item(set_id: int, item_id: int) -> dict[str, Any]:
     return view
 
 
-@router.post("/variant-sets/{set_id}/retry")
+@router.post("/variant-sets/{set_id}/retry", response_model=RetryResult)
 async def retry(set_id: int, body: RetryBody | None = None) -> dict[str, Any]:
     try:
         return await service.retry(set_id, include_canceled=bool(body and body.include_canceled))
@@ -295,7 +356,8 @@ async def retry(set_id: int, body: RetryBody | None = None) -> dict[str, Any]:
         raise _http(error) from None
 
 
-@router.post("/variant-sets/{set_id}/items/{item_id}/rerun")
+@router.post("/variant-sets/{set_id}/items/{item_id}/rerun", response_model=ItemView,
+             response_model_exclude_unset=True)
 async def rerun_item(set_id: int, item_id: int, body: RerunBody | None = None) -> dict[str, Any]:
     options = body or RerunBody()
     try:
@@ -306,7 +368,7 @@ async def rerun_item(set_id: int, item_id: int, body: RerunBody | None = None) -
     return service.item_views([item])[0]
 
 
-@router.post("/variant-sets/{set_id}/cancel")
+@router.post("/variant-sets/{set_id}/cancel", response_model=CancelResult)
 async def cancel(set_id: int) -> dict[str, Any]:
     try:
         return await service.cancel(set_id)
@@ -314,7 +376,7 @@ async def cancel(set_id: int) -> dict[str, Any]:
         raise _http(error) from None
 
 
-@router.delete("/variant-sets/{set_id}")
+@router.delete("/variant-sets/{set_id}", response_model=OkResult)
 async def delete_set(set_id: int) -> dict[str, Any]:
     """Remove the set record. Its jobs and images stay in the library."""
     try:

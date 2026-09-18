@@ -87,8 +87,8 @@ def emit(set_row: VariantSet | None) -> None:
     try:
         from ..queue import hub
 
-        hub.emit({"type": "variant_set", "id": set_row.id, "status": set_row.status,
-                  "counts": set_row.counts})
+        hub.emit({"type": "variant_set", "id": set_row.id, "name": set_row.name,
+                  "status": set_row.status, "counts": set_row.counts})
     except Exception:  # a notification must never fail the state change
         logger.debug("could not announce variant set %s", set_row.id, exc_info=True)
 

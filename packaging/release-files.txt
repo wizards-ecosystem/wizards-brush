@@ -12,10 +12,12 @@ remote_gpu.py
 install.sh
 start.sh
 backend
+docs/api.md
 docs/model-licenses.md
 docs/network-security.md
 docs/remote-gpu.md
 models/loras/README.md
+scripts/api_example.py
 scripts/bootstrap-tools.sh
 scripts/check-host.sh
 scripts/doctor.py

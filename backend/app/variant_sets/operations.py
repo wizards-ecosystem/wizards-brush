@@ -21,9 +21,10 @@ from ..models import JobKind
 
 # Controls a set supplies itself, so a recipe may not set them as plain params:
 # the prompt and negative come from templates, one combination is one image,
-# and seeds follow the set's seed policy.
+# seeds follow the set's seed policy, and finishing is the stage's own list.
 SET_CONTROLLED = frozenset({
     "prompt", "negative_prompt", "batch", "combinatorial", "seed", "seed_mode",
+    "finish_steps",
 })
 
 

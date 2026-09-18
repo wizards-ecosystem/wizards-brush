@@ -253,3 +253,42 @@ def test_tables_are_separate_from_jobs():
     assert "variant" not in " ".join(c.name for c in db.Job.__table__.columns)
     assert {"set_id", "job_id", "key"} <= {c.name for c in VariantItem.__table__.columns}
     assert "group_id" in {c.name for c in VariantSet.__table__.columns}
+
+
+# ---- the API as a client meets it ---------------------------------------------------------
+def test_detail_carries_the_recipe_snapshot_and_items_page(client, enqueued, source):
+    made = _create(client, _edit(source.id, axes=[{"name": "a", "values": ["x", "y", "z"]}]))
+    body = made.json()
+    assert made.status_code == 200 and body["created"] is True
+    set_id = body["id"]
+    detail = client.get(f"/api/variant-sets/{set_id}").json()
+    assert detail["recipe"]["stages"][0]["prompt"] == "Make it {{a}}"
+    assert detail["recipe"]["seed"]["value"] >= 0, "the snapshot records the seed that ran"
+    assert "created" not in detail
+    summary = client.get(f"/api/variant-sets/{set_id}", params={"items": False}).json()
+    assert "items" not in summary and summary["recipe"] == detail["recipe"]
+    page = client.get(f"/api/variant-sets/{set_id}/items",
+                      params={"limit": 2, "offset": 1}).json()
+    assert [i["key"] for i in page] == ["a=y", "a=z"]
+    assert "params" not in page[0], "params are for single-item reads"
+    listed = next(s for s in client.get("/api/variant-sets").json() if s["id"] == set_id)
+    assert "recipe" not in listed and "items" not in listed and "created" not in listed
+
+
+def test_wait_returns_when_the_set_settles(client, enqueued, source):
+    set_id = _create(client, _edit(source.id)).json()["id"]
+    running = client.get(f"/api/variant-sets/{set_id}/wait", params={"timeout": 0}).json()
+    assert running["settled"] is False and running["set"]["status"] == "active"
+    assert "items" not in running["set"]
+    client.post(f"/api/variant-sets/{set_id}/cancel")
+    settled = client.get(f"/api/variant-sets/{set_id}/wait",
+                         params={"timeout": 5, "items": True}).json()
+    assert settled["settled"] is True and settled["set"]["status"] == "canceled"
+    assert len(settled["set"]["items"]) == 2
+    assert client.get("/api/variant-sets/999999/wait").status_code == 404
+
+
+def test_finish_steps_belong_to_the_stage_not_its_params(client, enqueued, source):
+    r = _create(client, _edit(source.id, params={"finish_steps": []}))
+    assert r.status_code == 400
+    assert "use the stage's `finishing` list" in r.json()["detail"]

@@ -379,6 +379,9 @@ TUNING_HINTS = {
               "(slow, and quadruples the file) · custom exposes each step separately.",
     "post_scale": "Real-ESRGAN upscale factor applied after generation. Output is "
                   "proportionally capped at a 4096 px long side for safe files.",
+    "finish_steps": "Named processors run in order after the finishing preset: remove the "
+                    "background (transparent PNG), resize or pad to an exact size, upscale, "
+                    "restore faces. Deterministic, and recorded on the image.",
     "seed_mode": "Across a batch: increment (varied) · fixed (same seed) · random (independent).",
     "combinatorial": "Queue one job per {a|b|c} combination (capped at 32). "
                      "__wildcards__ remain reproducible seed-keyed picks.",

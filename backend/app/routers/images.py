@@ -407,7 +407,7 @@ def _local_handler(mode: str):
     return handler
 
 
-async def _maybe_fanout(kind: str, params: dict, handler) -> dict | None:
+async def maybe_fanout(kind: str, params: dict, handler) -> dict | None:
     """Combinatorial toggle: queue one job per {a|b|c} combination (batch 1 each)."""
     if not params.get("combinatorial"):
         return None
@@ -423,7 +423,7 @@ async def gen_local(payload: str = Form(...)) -> dict:
     require_local_gpu()
     params = common_params(parse_payload(payload), JobKind.image_local.value)
     require_model_access(params)
-    fanned = await _maybe_fanout(JobKind.image_local.value, params, _local_handler("txt2img"))
+    fanned = await maybe_fanout(JobKind.image_local.value, params, _local_handler("txt2img"))
     return fanned or await submit(JobKind.image_local.value, params, _local_handler("txt2img"))
 
 
@@ -627,7 +627,7 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
 @router.post("/generate/image/colab", deprecated=True)
 async def gen_remote(payload: str = Form(...)) -> dict:
     params = common_params(parse_payload(payload), JobKind.image_colab.value)
-    fanned = await _maybe_fanout(JobKind.image_colab.value, params, _remote_image_handler)
+    fanned = await maybe_fanout(JobKind.image_colab.value, params, _remote_image_handler)
     return fanned or await submit(JobKind.image_colab.value, params, _remote_image_handler)
 
 

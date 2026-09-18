@@ -455,6 +455,9 @@ class JobQueue:
                                                job_id, preview))
 
         job = db.get_job(job_id)
+        # Terminal events name the job's group so a client can tell one failure
+        # from one child of a fan-out and summarise the latter per group.
+        group = {"group_id": job.group_id} if job and job.group_id else {}
         # Wrapped so the handler's reads are recorded. A control that is declared,
         # rendered and never read is invisible otherwise — see app/params.py.
         params: dict[str, Any] = TrackedParams(job.params if job else {})
@@ -516,18 +519,18 @@ class JobQueue:
                 raise RuntimeError("transient retry loop exhausted without a result")
             db.mark_done(job_id, result)
             hub.emit({"type": "job", "id": job_id, "kind": kind, "status": JobStatus.done.value,
-                      "progress": 1.0, "result": result})
+                      "progress": 1.0, "result": result, **group})
         except CancelledJob:
             result = terminal_result()
             db.mark_canceled(job_id, "canceled", result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
-                      "status": JobStatus.canceled.value, "result": result})
+                      "status": JobStatus.canceled.value, "result": result, **group})
         except SkipItem:
             # Single-item job (batch handlers catch SkipItem themselves).
             result = terminal_result()
             db.mark_canceled(job_id, "skipped", result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
-                      "status": JobStatus.canceled.value, "result": result})
+                      "status": JobStatus.canceled.value, "result": result, **group})
         except Exception as e:  # noqa: BLE001 — surface any handler failure to the UI
             # Two things beyond recording the traceback: say something the user
             # can act on, and put the GPU back in a state where the *next* job
@@ -543,7 +546,7 @@ class JobQueue:
             db.mark_error(job_id, err, tip=tip, result=result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
                       "status": JobStatus.error.value, "error": str(e), "tip": tip,
-                      "result": result})
+                      "result": result, **group})
         finally:
             _CANCELLED.discard(job_id)
             _SKIPPED.discard(job_id)
@@ -562,7 +565,7 @@ LANES: dict[str, JobQueue] = {"local": JobQueue("local"), "remote": JobQueue("re
 
 # Local-GPU/CPU work serializes in the local lane; everything else uses Remote GPU.
 _LOCAL_KINDS = {"image_local", "img2img", "inpaint", "outpaint", "upscale",
-                "face_restore", "interpolate", "detail", "control_local"}
+                "face_restore", "interpolate", "detail", "control_local", "matte"}
 
 
 def lane_for(kind: str) -> str:

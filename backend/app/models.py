@@ -124,6 +124,7 @@ class JobKind(str, Enum):
     face_restore = "face_restore"
     interpolate = "interpolate"
     detail = "detail"
+    matte = "matte"
 
 
 class AssetKind(str, Enum):
