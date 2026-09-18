@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
-import zipfile
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile
@@ -15,7 +12,6 @@ from pydantic import BaseModel, Field
 from .. import db, scoring
 from ..config import settings
 from ..models import AssetRead
-from ..version import get_version
 
 router = APIRouter(tags=["assets"])
 
@@ -247,11 +243,12 @@ async def export_zip(req: IdsReq) -> FileResponse:
     while individual video sidecars keep each clip self-describing on its own.
     Spooled to disk, not BytesIO — a selection of videos is easily multi-GB.
     """
-    import asyncio
     import os
     import tempfile
 
     from starlette.background import BackgroundTask
+
+    from .. import exports
 
     settings.ensure_dirs()
     include_generation = settings.effective_bool("embed_metadata")
@@ -262,51 +259,8 @@ async def export_zip(req: IdsReq) -> FileResponse:
         rows = db.get_assets(req.ids)  # one SELECT, not one session per id
         selected = {asset.id: asset for asset in rows}
         ordered = [selected[asset_id] for asset_id in req.ids if asset_id in selected]
-        used_names: set[str] = set()
-        manifest_assets: list[dict] = []
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-            for asset in ordered:
-                source = Path(asset.path)
-                if not source.exists():
-                    continue
-                archive_name = asset.filename
-                if archive_name in used_names:
-                    archive_name = f"asset-{asset.id}-{archive_name}"
-                used_names.add(archive_name)
-                zf.write(source, arcname=archive_name)
-                sidecar = source.with_suffix(source.suffix + ".json")
-                if include_generation and asset.kind == "video" and sidecar.exists():
-                    zf.write(sidecar, arcname=archive_name + ".json")
-                content = db.content_of(int(asset.id)) if asset.id is not None else None
-                manifest_assets.append({
-                    "asset_id": asset.id,
-                    "archive_path": archive_name,
-                    "kind": asset.kind,
-                    "width": asset.width,
-                    "height": asset.height,
-                    "generator": asset.generator,
-                    "job_id": asset.job_id,
-                    "created_at": asset.created_at.isoformat(),
-                    "content": ({"hash": content.hash, "size_bytes": content.size_bytes,
-                                 "mime_type": content.mime_type} if content else None),
-                    "generation": asset.meta if include_generation else None,
-                    "library": {
-                        "favorite": bool(asset.favorite),
-                        "rating": int(asset.rating or 0),
-                        "grade": asset.grade,
-                        "tags": asset.tags,
-                        "caption": asset.caption or "",
-                        "used_count": int(asset.used_count or 0),
-                    },
-                })
-            manifest = {
-                "schema": "wizards-brush-export/v1",
-                "app": {"name": "The Wizard's Brush", "version": get_version()},
-                "exported_at": datetime.now(UTC).isoformat(),
-                "assets": manifest_assets,
-            }
-            zf.writestr("wizards-brush-manifest.json", json.dumps(
-                manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        exports.write_zip(Path(tmp), [exports.Entry(asset) for asset in ordered],
+                          include_generation=include_generation)
 
     try:
         await asyncio.to_thread(_build)

@@ -493,3 +493,137 @@ def test_the_listener_ignores_ordinary_jobs(client):
     job = db.create_job("image_local", {"prompt": "ordinary"})
     assert service.on_job_terminal(db.get_job(job.id)) is None
     assert json.loads(json.dumps(service.is_variant_group("vset-abc")))
+
+
+# ---- export -------------------------------------------------------------------------------------------
+def _two_by_two(source_id, **stage):
+    return {"sources": [source_id], "seed": {"mode": "fixed", "value": 11}, "stages": [{
+        "operation": "image_edit", "prompt": "Make it {{tone}} and {{size}}",
+        "axes": [{"name": "tone", "values": ["warm", "cool"]},
+                 {"name": "size", "values": ["small", "large"]}],
+        "naming": {"template": "{{tone}}-{{size}}", "prefix": "set-"}, **stage}]}
+
+
+def _zip(response):
+    import zipfile
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    return archive, json.loads(archive.read("wizards-brush-manifest.json"))
+
+
+def test_export_is_the_successful_set_under_deterministic_names(client, enqueued, source, remote):
+    set_id = client.post("/api/variant-sets", json={
+        "name": "Tone study", "recipe": _two_by_two(source.id)}).json()["id"]
+    items = _items(set_id)
+    db.update_job(items[3].job_id, params={**db.get_job(items[3].job_id).params,
+                                            "prompt": f"{FAIL_REMOTE} x"})
+    for item in items:
+        run_child(int(item.job_id))
+
+    r = client.post(f"/api/variant-sets/{set_id}/export", json={})
+    assert r.status_code == 200, r.text
+    assert f"tone-study-{set_id}.zip" in r.headers["content-disposition"]
+    archive, manifest = _zip(r)
+    assert sorted(n for n in archive.namelist() if n.endswith(".png")) == [
+        "set-cool-small.png", "set-warm-large.png", "set-warm-small.png"]
+
+    by_name = {a["archive_path"]: a for a in manifest["assets"]}
+    record = by_name["set-warm-large.png"]
+    variant = record["variant"]
+    assert variant["key"] == "tone=warm,size=large"
+    assert variant["values"] == {"tone": "warm", "size": "large"}
+    assert variant["output_name"] == "set-warm-large.png"
+    assert variant["source_asset_ids"] == [source.id] and variant["parent"] is None
+    assert variant["operation"] == "image_edit"
+    assert variant["prompt"] == "Make it warm and large" and variant["seed"] == 11
+    assert variant["model"] == settings.qwen_edit_model
+    assert variant["validation"]["state"] == "passed"
+    assert record["asset_id"] == store.get_item(items[1].id).asset_ids[0]
+
+    summary = manifest["variant_set"]
+    assert summary["exported"] == 3 and summary["expected"] == 4
+    assert summary["missing"] == [{"key": "tone=cool,size=large", "stage": 0, "state": "failed",
+                                   "reason": "remote exploded"}]
+    assert summary["recipe"]["stages"][0]["prompt"] == "Make it {{tone}} and {{size}}"
+    assert summary["replay"]["base_seed"] == 11
+    # Server paths never leave in a manifest; lineage is by asset id.
+    text = json.dumps(manifest)
+    assert str(settings.output_path) not in text and "image_paths" not in text
+
+    # The manifest endpoint describes the same export without building it.
+    preview = client.get(f"/api/variant-sets/{set_id}/manifest").json()
+    assert [a["archive_path"] for a in preview["assets"]] == \
+        [a["archive_path"] for a in manifest["assets"]]
+
+
+def test_export_honours_the_generation_metadata_privacy_setting(client, enqueued, source, remote):
+    set_id = client.post("/api/variant-sets", json={"recipe": _two_by_two(source.id)}).json()["id"]
+    for item in _items(set_id):
+        run_child(int(item.job_id))
+    previous = settings.load_overrides()
+    settings.save_overrides({**previous, "embed_metadata": False})
+    try:
+        archive, manifest = _zip(client.post(f"/api/variant-sets/{set_id}/export"))
+    finally:
+        settings.save_overrides(previous)
+    assert len([n for n in archive.namelist() if n.endswith(".png")]) == 4
+    variant = manifest["assets"][0]["variant"]
+    for secret in ("prompt", "negative_prompt", "seed", "model", "params"):
+        assert secret not in variant
+    assert manifest["assets"][0]["generation"] is None
+    recipe = manifest["variant_set"]["recipe"]
+    assert "prompt" not in recipe["stages"][0] and "content" not in recipe
+    assert recipe["stages"][0]["axes"][0]["name"] == "tone"
+    assert "base_seed" not in manifest["variant_set"]["replay"]
+    assert "Make it" not in json.dumps(manifest)
+
+
+def test_export_of_a_staged_set_and_of_trashed_outputs(client, enqueued, source, remote):
+    set_id = client.post("/api/variant-sets", json={"recipe": _staged(source.id)}).json()["id"]
+    for stage in (0, 1):
+        for item in [i for i in _items(set_id) if i.stage == stage]:
+            run_child(int(item.job_id))
+    _archive, final_only = _zip(client.post(f"/api/variant-sets/{set_id}/export"))
+    assert sorted(a["archive_path"] for a in final_only["assets"]) == [
+        "steel_front.png", "steel_side.png", "wood_front.png", "wood_side.png"]
+    child = next(a for a in final_only["assets"] if a["archive_path"] == "wood_front.png")
+    parent = _items(set_id)[0]
+    assert child["variant"]["parent"] == {"item_id": parent.id, "key": "material=wood",
+                                          "asset_id": parent.asset_ids[0]}
+    assert child["variant"]["source_asset_ids"] == [parent.asset_ids[0]]
+
+    _archive, everything = _zip(client.post(f"/api/variant-sets/{set_id}/export",
+                                            json={"include_intermediate": True}))
+    assert {"stage-1/wood.png", "stage-1/steel.png"} <= {
+        a["archive_path"] for a in everything["assets"]}
+
+    # A trashed output is not exported and is accounted for.
+    trashed = next(i for i in _items(set_id) if i.stage == 1)
+    db.delete_asset(trashed.asset_ids[0])
+    _archive, after = _zip(client.post(f"/api/variant-sets/{set_id}/export"))
+    assert len(after["assets"]) == 3
+    assert after["variant_set"]["missing"][0]["key"] == trashed.key
+    assert "trash" in after["variant_set"]["missing"][0]["reason"]
+
+
+def test_a_deleted_set_never_lends_its_ids_or_jobs_to_the_next(client, enqueued, source):
+    """Regression: SQLite recycles the highest freed rowid. A set deleted while
+    its jobs and assets survive must not have its ids — and so its deterministic
+    child request ids and provenance — handed to the next set."""
+    recipe = {"sources": [source.id], "stages": [{"operation": "image_edit", "prompt": "p {{a}}",
+                                                  "axes": [{"name": "a", "values": ["x", "y"]}]}]}
+    first = client.post("/api/variant-sets", json={"recipe": recipe}).json()
+    old_items = _items(first["id"])
+    client.post(f"/api/variant-sets/{first['id']}/cancel")
+    client.get(f"/api/variant-sets/{first['id']}")
+    assert client.delete(f"/api/variant-sets/{first['id']}").status_code == 200
+
+    second = client.post("/api/variant-sets", json={"recipe": recipe}).json()
+    assert second["id"] != first["id"]
+    new_items = _items(second["id"])
+    assert not {i.id for i in new_items} & {i.id for i in old_items}
+    new_jobs = [db.get_job(i.job_id) for i in new_items]
+    assert all(i.state == "queued" for i in new_items) and len(enqueued) == 4
+    assert {j.group_id for j in new_jobs} == {second["group_id"]}
+    assert all(j.params["variant"]["group_id"] == second["group_id"] for j in new_jobs)
+    assert all(second["group_id"] in j.request_id for j in new_jobs)

@@ -13,6 +13,7 @@ import asyncio
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .. import db, finishing, validators
@@ -359,3 +360,66 @@ async def upload_mask(mask: UploadFile) -> dict[str, Any]:
 
     asset_id = await asyncio.to_thread(_store)
     return {"asset_id": asset_id}
+
+
+# ---- export ---------------------------------------------------------------------------------------
+class ExportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include_intermediate: bool = False
+
+
+@router.get("/variant-sets/{set_id}/manifest")
+async def manifest(set_id: int, include_intermediate: bool = False) -> dict[str, Any]:
+    """The manifest an export would contain, without building the archive."""
+    from ..variant_sets import export
+
+    try:
+        return await asyncio.to_thread(
+            export.manifest, set_id, include_intermediate=include_intermediate,
+            include_generation=settings.effective_bool("embed_metadata"))
+    except service.VariantSetError as error:
+        raise _http(error) from None
+
+
+@router.post("/variant-sets/{set_id}/export")
+async def export_set(set_id: int, body: ExportBody | None = None) -> FileResponse:
+    """Every successful output under its deterministic name, plus a manifest
+    mapping each file to its variant. The same writer as the gallery export."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from starlette.background import BackgroundTask
+
+    from .. import exports
+    from ..variant_sets import export
+    from ..variant_sets.expansion import slug
+
+    options = body or ExportBody()
+    include_generation = settings.effective_bool("embed_metadata")
+    try:
+        plan = await asyncio.to_thread(export.plan, set_id,
+                                       include_intermediate=options.include_intermediate,
+                                       include_generation=include_generation)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+    settings.ensure_dirs()
+    fd, tmp = tempfile.mkstemp(suffix=".zip", dir=settings.temp_path)
+    os.close(fd)
+
+    def _build() -> None:
+        exports.write_zip(Path(tmp), plan.entries, include_generation=include_generation,
+                          extra=plan.extra)
+        for entry in plan.entries:          # an export is a use, as in the gallery
+            if entry.asset.id is not None:
+                db.mark_used(int(entry.asset.id))
+
+    try:
+        await asyncio.to_thread(_build)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    filename = f"{slug(plan.row.name) or 'variant-set'}-{plan.row.id}.zip"
+    return FileResponse(tmp, media_type="application/zip", filename=filename,
+                        background=BackgroundTask(lambda: Path(tmp).unlink(missing_ok=True)))

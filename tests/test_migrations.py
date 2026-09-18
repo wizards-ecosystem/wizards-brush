@@ -223,3 +223,14 @@ def test_the_orm_reads_and_writes_a_migration_built_variant_table(tmp_path):
         item = s.exec(select(VariantItem)).one()
         assert item.values == {"a": "x"} and item.state == "pending"
         assert s.exec(select(VariantSet)).one().group_id == "vset-probe"
+
+
+def test_variant_ids_are_never_recycled(tmp_path):
+    eng = _legacy_engine(tmp_path)
+    db._migrate(engine=eng)
+    with eng.begin() as conn:
+        conn.execute(text("INSERT INTO variantset (group_id) VALUES ('vset-a'), ('vset-b')"))
+        conn.execute(text("DELETE FROM variantset WHERE group_id = 'vset-b'"))
+        conn.execute(text("INSERT INTO variantset (group_id) VALUES ('vset-c')"))
+        ids = dict(conn.execute(text("SELECT group_id, id FROM variantset")).all())
+    assert ids["vset-c"] == 3, "AUTOINCREMENT: the deleted id 2 is not handed out again"

@@ -338,6 +338,10 @@ class VariantRecipe(SQLModel, table=True):
     `clear_all()` for the same reason presets do: it is something the user
     built, not something a run produced.
     """
+    # Never reused: a deleted recipe's id must not come back as a different
+    # recipe behind a set's `recipe_id` or a link someone kept.
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     name: str = ""
     description: str = ""
@@ -358,6 +362,11 @@ class VariantSet(SQLModel, table=True):
     no special case. `counts_json` is a cache recomputed from the items, never
     incremented, so it cannot drift from what the items say.
     """
+    # Ids are never reused (AUTOINCREMENT). Deleting a set keeps its jobs and
+    # assets, whose provenance names this id; SQLite would otherwise hand the
+    # same id to the next set and make that provenance point at the wrong run.
+    __table_args__ = {"sqlite_autoincrement": True}
+
     id: int | None = Field(default=None, primary_key=True)
     name: str = ""
     # Informational: which saved recipe this came from, if any. The snapshot in
@@ -404,7 +413,10 @@ class VariantItem(SQLModel, table=True):
     `pending` or `blocked` without inventing a job status for it, and why a
     restart needs no special handling for work that never started.
     """
-    __table_args__ = (Index("ux_variantitem_set_stage_key", "set_id", "stage", "key", unique=True),)
+    __table_args__ = (
+        Index("ux_variantitem_set_stage_key", "set_id", "stage", "key", unique=True),
+        {"sqlite_autoincrement": True},   # never reused; see VariantSet
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     set_id: int = Field(index=True)

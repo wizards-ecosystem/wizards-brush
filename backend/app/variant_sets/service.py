@@ -70,8 +70,10 @@ def is_variant_group(group_id: str | None) -> bool:
     return bool(group_id) and str(group_id).startswith(GROUP_PREFIX)
 
 
-def _request_id(set_id: int, item_id: int, attempt: int) -> str:
-    return f"variant-set-{set_id}-item-{item_id}-attempt-{attempt}"
+def _request_id(group_id: str, item_id: int, attempt: int) -> str:
+    """One attempt of one item, globally unique: built on the set's random
+    group id, never on a row id alone, so no other set can ever claim it."""
+    return f"{group_id}-item-{item_id}-attempt-{attempt}"
 
 
 def _now() -> datetime:
@@ -281,8 +283,8 @@ def _effective_params(row: VariantSet, recipe: RecipeSpec, item: VariantItem,
     op = operations.OPERATIONS[recipe.stages[item.stage].operation]
     params = op.build(stored, paths, mask_path)
     params["variant"] = {
-        "set_id": row.id, "item_id": item.id, "stage": item.stage, "key": item.key,
-        "values": item.values, "source_asset_ids": source_ids,
+        "set_id": row.id, "group_id": row.group_id, "item_id": item.id, "stage": item.stage,
+        "key": item.key, "values": item.values, "source_asset_ids": source_ids,
     }
     return params
 
@@ -321,12 +323,16 @@ async def submit_items(row: VariantSet, items: Iterable[VariantItem]) -> int:
         op = operations.OPERATIONS[kind]
         results = await submit_group(
             kind, op.handler(), [params for _i, params, _s in batch], group_id=row.group_id,
-            request_ids=[_request_id(int(row.id), int(i.id or 0), i.attempts + 1)
+            request_ids=[_request_id(row.group_id, int(i.id or 0), i.attempts + 1)
                          for i, _p, _s in batch],
             record_history=False,
         )
         for (item, params, source_ids), (job, _created) in zip(batch, results, strict=False):
             assert item.id is not None and job.id is not None
+            if job.group_id != row.group_id:   # impossible with group-scoped ids; never adopt
+                logger.error("variant item %s resolved to job %s of another run", item.id, job.id)
+                _fail(item, "its job identity collided with another run")
+                continue
             won = store.transition(
                 item.id, when_state=(PENDING,), state=QUEUED, state_reason="",
                 job_id=job.id, attempts=item.attempts + 1,

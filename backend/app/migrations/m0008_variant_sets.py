@@ -13,6 +13,10 @@ added, and that column belongs in a migration of its own.
 In a normal start `SQLModel.create_all()` has already built these tables, so the
 CREATE statements are no-ops and only the indexes are checked. Everything here
 is idempotent, which is what lets the runner adopt either shape.
+
+Ids are AUTOINCREMENT, never reused: deleting a set keeps its jobs and assets,
+whose provenance names the set and item ids, so a recycled id would silently
+re-point that provenance at a different run.
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ from .ops import add_index, add_unique_index
 
 _TABLES = (
     """CREATE TABLE IF NOT EXISTS variantrecipe (
-           id           INTEGER PRIMARY KEY,
+           id           INTEGER PRIMARY KEY AUTOINCREMENT,
            name         VARCHAR NOT NULL DEFAULT '',
            description  VARCHAR NOT NULL DEFAULT '',
            config_json  VARCHAR NOT NULL DEFAULT '{}',
@@ -30,7 +34,7 @@ _TABLES = (
            updated_at   DATETIME
        )""",
     """CREATE TABLE IF NOT EXISTS variantset (
-           id                     INTEGER PRIMARY KEY,
+           id                     INTEGER PRIMARY KEY AUTOINCREMENT,
            name                   VARCHAR NOT NULL DEFAULT '',
            recipe_id              INTEGER,
            recipe_json            VARCHAR NOT NULL DEFAULT '{}',
@@ -48,7 +52,7 @@ _TABLES = (
            updated_at             DATETIME
        )""",
     """CREATE TABLE IF NOT EXISTS variantitem (
-           id                     INTEGER PRIMARY KEY,
+           id                     INTEGER PRIMARY KEY AUTOINCREMENT,
            set_id                 INTEGER NOT NULL,
            stage                  INTEGER NOT NULL DEFAULT 0,
            ordinal                INTEGER NOT NULL DEFAULT 0,
