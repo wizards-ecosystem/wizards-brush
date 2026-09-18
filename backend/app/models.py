@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel
+from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
 
@@ -123,6 +124,7 @@ class JobKind(str, Enum):
     face_restore = "face_restore"
     interpolate = "interpolate"
     detail = "detail"
+    matte = "matte"
 
 
 class AssetKind(str, Enum):
@@ -318,6 +320,149 @@ class UserPreset(SQLModel, table=True):
     @property
     def payload(self) -> dict[str, Any]:
         return json.loads(self.payload_json or "{}")
+
+
+def _json_or(raw: str | None, fallback: Any) -> Any:
+    """Decode a JSON column, degrading to `fallback` for an old or corrupt row."""
+    try:
+        value = json.loads(raw or "null")
+    except (TypeError, ValueError):
+        return fallback
+    return value if isinstance(value, type(fallback)) else fallback
+
+
+class VariantRecipe(SQLModel, table=True):
+    """A reusable Variant Set definition: configuration only.
+
+    It never points at the jobs or results of a run, so editing it cannot change
+    what an earlier set meant — every set carries its own snapshot. Survives
+    `clear_all()` for the same reason presets do: it is something the user
+    built, not something a run produced.
+    """
+    # Never reused: a deleted recipe's id must not come back as a different
+    # recipe behind a set's `recipe_id` or a link someone kept.
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    description: str = ""
+    config_json: str = "{}"
+    created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now)
+
+    @property
+    def config(self) -> dict[str, Any]:
+        return _json_or(self.config_json, {})
+
+
+class VariantSet(SQLModel, table=True):
+    """One execution of a recipe: an immutable snapshot plus live state.
+
+    Every child is an ordinary job of an existing kind, grouped by `group_id` —
+    the same column X/Y grids use — so lanes, rerun and restart handle them with
+    no special case. `counts_json` is a cache recomputed from the items, never
+    incremented, so it cannot drift from what the items say.
+    """
+    # Ids are never reused (AUTOINCREMENT). Deleting a set keeps its jobs and
+    # assets, whose provenance names this id; SQLite would otherwise hand the
+    # same id to the next set and make that provenance point at the wrong run.
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    # Informational: which saved recipe this came from, if any. The snapshot in
+    # recipe_json is what the set actually ran and is what replay reads.
+    recipe_id: int | None = Field(default=None, index=True)
+    recipe_json: str = "{}"
+    operation: str = ""                     # stage 1's job kind, for listing
+    source_asset_ids_json: str = "[]"
+    group_id: str = Field(index=True, unique=True)
+    # Caller-supplied submission identity; a retried create returns this set.
+    request_id: str | None = Field(default=None, index=True, unique=True)
+    status: str = Field(default="active", index=True)
+    expected: int = 0                       # every item across every stage
+    counts_json: str = "{}"
+    collection_id: int | None = None        # optional output collection
+    # Replay context: the resolved seed and the versions that produced it.
+    replay_json: str = "{}"
+    canceled_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now)
+
+    @property
+    def recipe(self) -> dict[str, Any]:
+        return _json_or(self.recipe_json, {})
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return _json_or(self.counts_json, {})
+
+    @property
+    def source_asset_ids(self) -> list[int]:
+        return [int(v) for v in _json_or(self.source_asset_ids_json, []) if isinstance(v, int)]
+
+    @property
+    def replay(self) -> dict[str, Any]:
+        return _json_or(self.replay_json, {})
+
+
+class VariantItem(SQLModel, table=True):
+    """One materialized combination at one stage, with its own state machine.
+
+    The row exists from the moment the set is created; a Job row exists only
+    once the item is runnable. That is what lets a dependent stage sit in
+    `pending` or `blocked` without inventing a job status for it, and why a
+    restart needs no special handling for work that never started.
+    """
+    __table_args__ = (
+        Index("ux_variantitem_set_stage_key", "set_id", "stage", "key", unique=True),
+        {"sqlite_autoincrement": True},   # never reused; see VariantSet
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    set_id: int = Field(index=True)
+    stage: int = 0                          # 0-based position in the recipe's stage list
+    ordinal: int = 0                        # deterministic position within the stage
+    key: str = ""                           # canonical, accumulated across stages
+    values_json: str = "{}"                 # axis -> selected value, every stage so far
+    parent_item_id: int | None = Field(default=None, index=True)
+    source_asset_ids_json: str = "[]"       # what this attempt consumed
+    params_json: str = "{}"                 # effective child params, latest attempt
+    job_id: int | None = Field(default=None, index=True)
+    attempts: int = 0
+    history_json: str = "[]"                # earlier attempts, oldest first
+    asset_ids_json: str = "[]"
+    state: str = Field(default="pending", index=True)
+    state_reason: str = ""
+    validation_state: str = "pending"
+    validation_json: str = "[]"
+    output_name: str = ""                   # deterministic export path
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+    @property
+    def values(self) -> dict[str, str]:
+        return {str(k): str(v) for k, v in _json_or(self.values_json, {}).items()}
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return migrate_params(_json_or(self.params_json, {}))
+
+    @property
+    def asset_ids(self) -> list[int]:
+        return [int(v) for v in _json_or(self.asset_ids_json, []) if isinstance(v, int)]
+
+    @property
+    def source_asset_ids(self) -> list[int]:
+        return [int(v) for v in _json_or(self.source_asset_ids_json, []) if isinstance(v, int)]
+
+    @property
+    def history(self) -> list[dict[str, Any]]:
+        return [h for h in _json_or(self.history_json, []) if isinstance(h, dict)]
+
+    @property
+    def validation(self) -> list[dict[str, Any]]:
+        return [r for r in _json_or(self.validation_json, []) if isinstance(r, dict)]
 
 
 # --------------------------------------------------------------------------

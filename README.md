@@ -31,6 +31,7 @@
   <a href="#from-prompt-to-library">Workflow</a> ·
   <a href="docs/user-guide.md">User guide</a> ·
   <a href="docs/README.md">Documentation</a> ·
+  <a href="docs/api.md">API</a> ·
   <a href="docs/remote-gpu.md">Remote GPU</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
@@ -56,13 +57,16 @@ only when you want it.
 | **Create and transform** | Text-to-image, img2img, inpaint, outpaint, ControlNet, instruction editing, image-to-video, text-to-video, and finishing |
 | **Use the right controls** | Each generator publishes its real capabilities, defaults, and limits; the interface adapts to the selected model |
 | **Keep work moving** | Durable queues, live previews, restart recovery, cancellation, and independent local and remote lanes |
+| **Produce whole sets** | Variant Sets: named axes over shared source material, every combination tracked, validated, retried and exported as one durable set |
+| **Script everything** | A documented HTTP API: import images, queue any generator or tool as JSON, wait for results, run and export variant sets |
 | **Build a real library** | Search, captions, tags, collections, favorites, ratings, comparison, soft delete, and portable export |
 | **Reproduce with confidence** | Seeds, effective parameters, adapters, model identity, lineage, and finishing operations stay with each asset |
 | **Own the workspace** | Localhost defaults, project-contained storage, optional API authentication, and metadata controls |
 
 Finishing uses tiled Real-ESRGAN upscaling and GFPGAN face restoration, with
-optional auto-detailing and RIFE frame interpolation. These are explicit,
-recorded steps rather than invisible changes to the generated file.
+optional auto-detailing, RIFE frame interpolation, exact resizing and background
+removal to a real PNG alpha channel. These are explicit, recorded steps rather
+than invisible changes to the generated file.
 
 ## Quick start
 
@@ -140,6 +144,11 @@ The Simple form is the default and always includes a prompt. Full controls adds
 model choice, schedulers, guidance, adapters, masks, deterministic seeds,
 wildcards, X/Y grids, and explicit finishing steps when the selected generator
 can actually use them.
+
+The interface is one client of the same API a script can use. Any generation or
+variant set can be copied as a runnable request, and the
+[API guide](docs/api.md) covers the whole programmatic loop with a working
+example client in `scripts/api_example.py`.
 
 ## Local and remote compute
 

@@ -18,7 +18,7 @@ export const GEN_TO_SPEC: Record<string, string> = {
 };
 
 /** Tool job kinds that run on the local GPU/CPU (no generator spec of their own). */
-export const LOCAL_TOOL_KINDS = new Set(["upscale", "face_restore", "interpolate", "detail"]);
+export const LOCAL_TOOL_KINDS = new Set(["upscale", "face_restore", "interpolate", "detail", "matte"]);
 
 /** Params keys that are server-side paths/blobs — never render or prefill them. */
 export const HIDE_KEYS = new Set([
@@ -35,6 +35,8 @@ export const HIDE_KEYS = new Set([
   "source_asset_id",
   "src_width",
   "src_height",
+  // Variant Set lineage: set by the set, never a form value.
+  "variant",
 ]);
 
 export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "A100" {

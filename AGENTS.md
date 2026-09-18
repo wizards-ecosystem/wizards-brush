@@ -81,6 +81,43 @@
   controls on those features through `_remote_has()`, so the UI never offers what the live
   session cannot actually do
 - `backend/app/enrichment.py` - async post-save worker (Florence-2 captions/auto-tags on CPU); never blocks generation
+- `backend/app/variant_sets/` - Variant Sets: named axes x one template over shared sources.
+  **No new job kind and no new job status**: children are ordinary jobs of existing kinds,
+  built by `routers.images.build_params` and created by `routers.common.submit_group` (the
+  one fan-out primitive, also behind grids and combinatorial prompts) under the set's
+  `vset-<uuid>` `group_id`. Pending/blocked/validation state lives on `variantitem`; a job
+  exists only once an item can run. Child request ids are scoped by that random group id,
+  never by row ids alone (a deleted set's ids were once recycled and its jobs adopted), and
+  the three tables are AUTOINCREMENT. Completion is a compare-and-set on the finishing job;
+  `queue.on_job_terminal` is an optimisation and `reconcile_set` (startup + every read) is
+  the truth. The recipe snapshot on a set is immutable; retry reuses an item's stored
+  effective params. Nothing in the package may know what an axis *means*
+- `backend/app/finishing.py` + `backend/app/validators/` - named finishing processors behind
+  the `finish_steps` registry control (type `finishing`; `registry()` attaches the processor
+  catalogue to it; runs after the unchanged `finish` preset; a failed step keeps the prior
+  image and goes to `warnings`, never to `post`), and Pillow-only output checks. A Variant
+  Set stage has its own `finishing` list, so `finish_steps` is in `SET_CONTROLLED`. Background removal is BiRefNet-lite ONNX (MIT, pinned + SHA-256, in NOTICE);
+  BRIA RMBG weights are non-commercial and must not be used
+- `backend/app/exports.py` - the single ZIP writer for gallery and Variant Set exports; the
+  `embed_metadata` privacy setting governs manifests, and server paths never enter one
+- `backend/app/routers/job_api.py` - **the API is a first-class client surface** (guide:
+  `docs/api.md`). `POST /api/jobs` takes `{kind, params, inputs: {images, mask, last_frame},
+  request_id}` with gallery asset ids, validates params **strictly** via `controls.py` (unknown
+  name or out-of-range value = 400 naming it; the multipart routes keep clamping), then builds
+  through the routes' own builders and the one `submit` path, so an API job is identical to a
+  form job. `GET /api/jobs/kinds` publishes inputs + a JSON Schema derived from the same
+  controls. Its router is included **before** `jobs.router` (`/jobs/kinds` vs
+  `/jobs/{job_id}`). `GENERATOR_INPUTS` must agree with `variant_sets/operations.py` and every
+  kind must appear in `docs/api.md` - both are tests. `scripts/api_example.py` is run by the
+  suite through the real queue, so a breaking API change fails it
+- `backend/app/controls.py` - registry controls as a validation contract and JSON Schema,
+  shared by the job API and Variant Set recipes. A new control `type` must be handled here
+  and rendered by `DynamicControls` (`tests/test_registry.py` `VALID_TYPES`)
+- `backend/app/routers/tools.py` `TOOLS` - one catalogue for tools (asset kind, controls,
+  params builder, handler) read by the per-tool routes and the job API. A new tool = a
+  `TOOLS` entry + `JobKind` + `_LOCAL_KINDS`/`errors._LOCAL_GPU_KINDS` if local +
+  `metadata._COMPOSITE_KINDS` if it keeps source pixels + frontend `LOCAL_TOOL_KINDS`.
+  `matte` (BiRefNet-lite) writes `matte:cutout` or a `mask` asset
 - `frontend/src/lib/generators.ts` - GEN_TO_SPEC / laneOf / HIDE_KEYS shared maps; `lib/jobEvents.ts` - pure WS reducer (previews kept OUT of the jobs map)
 
 ## Licence boundary
@@ -140,6 +177,13 @@ on a file inside it. The retained decisions and evidence live in
 ## Gotchas
 
 - `tests/conftest.py` must set its project-local temporary `OUTPUT_DIR` env **before any backend import** (module-level engine binds at import).
+- **Every test module's app runs live lanes.** The `client` fixture cancels rows earlier
+  modules left `queued` (they stub the queue with `no_queue`) before its lifespan resumes the
+  queue, and `JobQueue.start()` replaces a worker whose event loop has closed. A test that
+  enqueues without `no_queue`/a patched `enqueue` therefore really executes the handler.
+- The job WebSocket's connect-time snapshot events carry `snapshot: true`, and terminal job
+  events carry `group_id`; clients must not announce snapshot outcomes, and Variant Set
+  children are summarised by their set, not toasted one by one.
 - Wan needs 4k+1 frames (enforced in `_video_params`); the Wan-specific clamp is skipped for other engines.
 - Local model swap (Turbo ↔ Quality) drops the resident pipeline - first use reloads (~1–2 min); that's why it's an explicit control, not tied to the quality tier.
 - Remote GPU jobs poll `GET /result/{token}`; a UI cancel also POSTs `/cancel/{token}` so the A100

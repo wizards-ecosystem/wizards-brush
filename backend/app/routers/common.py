@@ -6,7 +6,7 @@ import contextlib
 import io
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 
 from .. import db, log
 from ..config import settings
-from ..models import AssetKind
+from ..models import AssetKind, Job
 from ..prompt_engine import MAX_PROMPT_CHARS, prepare_prompt, seed_for
 from ..queue import ProgressCb
 from ..queue import submit as enqueue
@@ -192,6 +192,11 @@ def derivative_meta(
         if operation == "upscale" and record.get("scale"):
             scale = max(1, int(record["scale"]))
             next_size = (current[0] * scale, current[1] * scale)
+        # A finishing processor measures its own output (a resize changes the
+        # size with no scale to infer it from), and that measurement wins.
+        own = record.get("output_size")
+        if isinstance(own, dict) and own.get("width") and own.get("height"):
+            next_size = (int(own["width"]), int(own["height"]))
         if index == len(requested) - 1:
             # The encoder's actual result is authoritative over an advertised
             # scale (and over rounding performed by a particular tool).
@@ -238,6 +243,12 @@ def image_meta(params: dict[str, Any], img: Image.Image, *, prompt: str, seed: i
         "finish": params.get("finish", ""),
         **extra,
     }
+    # Variant Set lineage — the set, item, combination and source assets that
+    # produced this file. Only Variant Set children carry it, so an ordinary
+    # asset's metadata is unchanged.
+    variant = params.get("variant")
+    if isinstance(variant, dict) and variant:
+        meta["variant"] = variant
     if not meta.get("warnings"):
         meta.pop("warnings", None)
     # Inline finishing is still a derivative. Split its file dimensions from
@@ -374,25 +385,77 @@ def _submission_response(job) -> dict[str, Any]:
     return {"job_id": int(job.id)}
 
 
-async def submit(kind: str, params: dict[str, Any], handler: Callable,
-                 group_id: str | None = None, request_id: str | None = None) -> dict:
-    """Create or recover one idempotent job, enqueueing only a new row."""
-    params = dict(params)
-    embedded_request_id = params.pop("request_id", None)
-    request_id = normalize_request_id(request_id or embedded_request_id)
+async def _create_and_enqueue(
+    kind: str, params: dict[str, Any], handler: Callable, *, group_id: str | None,
+    request_id: str | None, record_history: bool = True,
+) -> tuple[Job, bool]:
+    """Create or recover one ordinary job; only a new row is enqueued.
+
+    The single place a job is born. Every submission path — a plain generate,
+    a grid cell, a combinatorial prompt, a Variant Set child — goes through
+    here, so model-key resolution, rerun registration and history cannot differ
+    between them.
+    """
     job, created = db.create_job_once(
         kind, params, group_id=group_id,
         model_key=model_key_for(kind, params), request_id=request_id,
     )
     register_handler(kind, handler)  # remember how to re-run this kind
     if not created:
-        return _submission_response(job)
-    # Record the prompt for history/recall (no-op for tool jobs with no prompt).
-    with contextlib.suppress(Exception):  # history is best-effort, never block a job
-        db.add_history(kind, params.get("prompt", ""), params.get("negative_prompt", ""), params)
+        return job, False
+    if record_history:
+        # Record the prompt for history/recall (no-op for tool jobs with no prompt).
+        with contextlib.suppress(Exception):  # history is best-effort, never block a job
+            db.add_history(kind, params.get("prompt", ""), params.get("negative_prompt", ""), params)
     assert job.id is not None  # committed row always has a pk
     await enqueue(kind, job.id, handler)
+    return job, True
+
+
+async def submit(kind: str, params: dict[str, Any], handler: Callable,
+                 group_id: str | None = None, request_id: str | None = None) -> dict:
+    """Create or recover one idempotent job, enqueueing only a new row."""
+    params = dict(params)
+    embedded_request_id = params.pop("request_id", None)
+    request_id = normalize_request_id(request_id or embedded_request_id)
+    job, created = await _create_and_enqueue(
+        kind, params, handler, group_id=group_id, request_id=request_id)
+    if not created:
+        return _submission_response(job)
     return {"job_id": job.id}
+
+
+async def submit_group(
+    kind: str, handler: Callable, children: Sequence[dict[str, Any]], *, group_id: str,
+    request_ids: Sequence[str | None] | None = None, record_history: bool = True,
+) -> list[tuple[Job, bool]]:
+    """Fan out into sibling jobs sharing `group_id`: the one fan-out primitive.
+
+    Each child is an ordinary job of `kind` — individually cancelable,
+    rerunnable, reorderable and resumable after a restart — and each dict in
+    `children` is persisted verbatim as that job's params. X/Y grids,
+    combinatorial prompts and Variant Sets all produce their children here.
+
+    `request_ids` gives each child its own idempotency key. A child whose key
+    already names a job *in this group* is recovered rather than created (a
+    retried Variant Set submission). A key that names a job in a *different*
+    group means this whole fan-out already happened under an earlier request,
+    so the loop stops there instead of duplicating that request's siblings; the
+    caller decides what to return.
+
+    Returns (job, created) per child submitted, in order.
+    """
+    out: list[tuple[Job, bool]] = []
+    for index, params in enumerate(children):
+        request_id = request_ids[index] if request_ids is not None else None
+        job, created = await _create_and_enqueue(
+            kind, dict(params), handler, group_id=group_id, request_id=request_id,
+            record_history=record_history,
+        )
+        out.append((job, created))
+        if not created and job.group_id != group_id:
+            break
+    return out
 
 
 async def submit_fanout(kind: str, base_params: dict[str, Any], handler: Callable,
@@ -412,17 +475,19 @@ async def submit_fanout(kind: str, base_params: dict[str, Any], handler: Callabl
         return _submission_response(existing)
 
     group_id = uuid.uuid4().hex
-    job_ids: list[int] = []
-    for index, variant in enumerate(variants):
+    children: list[dict[str, Any]] = []
+    for variant in variants:
         params = {**base_params, **variant, "grid_id": group_id}
         params.pop("request_id", None)  # only the first child owns the group identity
-        r = await submit(
-            kind, params, handler, group_id=group_id,
-            request_id=request_id if index == 0 else None,
-        )
-        if "job_ids" in r:  # concurrent retry recovered the original group
-            return r
-        job_ids.append(r["job_id"])
+        children.append(params)
+    submitted = await submit_group(
+        kind, handler, children, group_id=group_id,
+        request_ids=[request_id if index == 0 else None for index in range(len(children))],
+    )
+    first, created = submitted[0]
+    if not created:  # a concurrent retry recovered the original group
+        return _submission_response(first)
+    job_ids = [int(job.id) for job, _created in submitted if job.id is not None]
     return {"job_id": job_ids[0], "job_ids": job_ids, "group_id": group_id}
 
 
@@ -473,7 +538,7 @@ def resolve_finish(p: dict) -> tuple[str, bool, bool, bool]:
 # ---- post-processing applied inline after a generation --------------------
 def apply_image_post(
     img: Image.Image, params: dict, cb: ProgressCb, *, start: float = 0.85, end: float = 1.0,
-    metrics: dict[str, float] | None = None,
+    metrics: dict[str, float] | None = None, warnings: list[str] | None = None,
 ) -> tuple[Image.Image, list[Any]]:
     """Run optional detailer / upscale / face-restore on a freshly generated image.
 
@@ -485,9 +550,15 @@ def apply_image_post(
     Every step catches broadly (not just ToolUnavailable): the expensive part —
     the generation — already succeeded, so a post step crashing (CUDA OOM, a
     mediapipe runtime error) must degrade to the un-postprocessed image, never
-    discard it. Cancel/skip still propagates via the progress callback."""
+    discard it. Cancel/skip still propagates via the progress callback.
+
+    `finish_steps` (see app/finishing.py) run after the preset's steps, in the
+    order given. A step that fails is reported in `warnings`, when the caller
+    passes a list, and never appears in `applied`."""
     applied: list[Any] = []
-    if not (params.get("post_detail") or params.get("post_face") or params.get("post_upscale")):
+    steps = params.get("finish_steps") or []
+    if not (params.get("post_detail") or params.get("post_face") or params.get("post_upscale")
+            or steps):
         return img, applied  # common path: no post steps — skip importing the tool stack
 
     from ..generators import postprocess as pp
@@ -498,6 +569,7 @@ def apply_image_post(
             ("detail", params.get("post_detail")),
             ("face", params.get("post_face")),
             ("upscale", params.get("post_upscale")),
+            ("steps", bool(steps)),
         ) if on
     ]
 
@@ -576,6 +648,13 @@ def apply_image_post(
             emit(hi, f"upscale skipped: {e}")
         else:
             emit(hi, "upscale complete")
+    if steps:
+        from .. import finishing
+
+        lo, hi = stage("steps")
+        img, records = finishing.run_steps(
+            img, list(steps), lambda f, m: emit(lo + (hi - lo) * f, m), warnings)
+        applied.extend(records)
     # `applied` only lists steps that SUCCEEDED — a step that degraded to a
     # warning must not claim credit in the metadata.
     return img, applied
@@ -585,7 +664,8 @@ def image_progress_window(params: dict, index: int, batch: int) -> tuple[float, 
     """(item start, denoise end, item end) with real room for finishing."""
     count = max(1, int(batch))
     item_start, item_end = index / count, (index + 1) / count
-    has_post = bool(params.get("post_detail") or params.get("post_face") or params.get("post_upscale"))
+    has_post = bool(params.get("post_detail") or params.get("post_face") or params.get("post_upscale")
+                    or params.get("finish_steps"))
     denoise_end = item_start + (item_end - item_start) * (0.85 if has_post else 1.0)
     return item_start, denoise_end, item_end
 

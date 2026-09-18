@@ -8,12 +8,15 @@ export function GalleryPicker({
   onPick,
   onClose,
   title = "Choose an image from your gallery",
+  filter,
 }: {
   onPick: (a: Asset) => void;
   onClose: () => void;
   title?: string;
+  /** Narrow the choice further, e.g. to leave out masks. */
+  filter?: (a: Asset) => boolean;
 }) {
-  const images = useStore((s) => s.assets).filter((a) => a.kind === "image");
+  const images = useStore((s) => s.assets).filter((a) => a.kind === "image" && (!filter || filter(a)));
 
   return (
     <Modal onClose={onClose} size="wide" label={title}>

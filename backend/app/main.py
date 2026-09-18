@@ -27,11 +27,13 @@ from .routers import (
     collections,
     grid,
     images,
+    job_api,
     jobs,
     library,
     loras,
     system,
     tools,
+    variant_sets,
     videos,
     wildcards,
 )
@@ -134,6 +136,16 @@ async def lifespan(app: FastAPI):
     resumed = await resume_queued()
     if resumed:
         logger.info("resumed %d queued job(s)", resumed)
+    # Then Variant Sets: settle children that finished or were canceled while no
+    # listener was running, and queue items that became runnable meanwhile.
+    try:
+        from .variant_sets.service import reconcile_all
+
+        settled = await reconcile_all()
+        if settled:
+            logger.info("reconciled %d active variant set(s)", settled)
+    except Exception as e:  # noqa: BLE001 — a set that cannot recover must not stop startup
+        logger.warning("variant set reconciliation skipped: %s", e)
     threading.Thread(target=_warm_and_sweep, daemon=True).start()
     try:
         yield
@@ -141,7 +153,35 @@ async def lifespan(app: FastAPI):
         release_process_lock()
 
 
-app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifespan)
+_API_DESCRIPTION = """\
+Everything the app does is available here; the web UI is one client of this API.
+
+**Authentication.** When `API_TOKEN` is set, send `X-API-Token: <token>` with every
+`/api` request. With it unset (the default) the API is open to this machine only.
+
+**The short path.** `GET /api/jobs/kinds` lists what can run and each kind's settings
+schema. Bring inputs in with `POST /api/assets/import`, queue work with
+`POST /api/jobs`, block on `GET /api/jobs/{id}/wait`, then fetch outputs with
+`GET /api/assets/{id}/file`. Variant Sets fan one source out into every combination
+of named axes: `POST /api/variant-sets`, then `GET /api/variant-sets/{id}/wait`.
+
+Every submission accepts a `request_id`; resubmitting it returns the original work
+instead of queuing it twice, so a client can retry blindly after a network error.
+The full guide with examples is `docs/api.md` in the repository.
+"""
+
+_API_TAGS = [
+    {"name": "jobs", "description": "Queue any generator or tool, follow it, wait for it."},
+    {"name": "variant-sets", "description": "Durable fan-outs over named axes, with "
+                                            "finishing, validation and export."},
+    {"name": "assets", "description": "The gallery: import, search, download, export."},
+    {"name": "images", "description": "Multipart image generation routes used by the UI."},
+    {"name": "videos", "description": "Multipart video generation routes used by the UI."},
+    {"name": "tools", "description": "Per-tool routes; `POST /api/jobs` covers them too."},
+]
+
+app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifespan,
+              description=_API_DESCRIPTION, openapi_tags=_API_TAGS)
 
 # CORS is deliberately NOT "*".
 #
@@ -203,9 +243,11 @@ async def api_auth(request, call_next):
 app.add_middleware(BrowserSecurityMiddleware, settings=settings)
 
 # API routers (grid after images — it reuses images' registered handlers)
+# job_api precedes jobs: GET /jobs/kinds must match before GET /jobs/{job_id}.
 for r in (system.router, settings_router.router, images.router, videos.router,
-          tools.router, jobs.router, assets.router, library.router, wildcards.router,
-          loras.router, collections.router, grid.router):
+          tools.router, job_api.router, jobs.router, assets.router, library.router,
+          wildcards.router, loras.router, collections.router, grid.router,
+          variant_sets.router):
     app.include_router(r, prefix="/api")
 
 # Cache policy for generated media.

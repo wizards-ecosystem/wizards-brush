@@ -35,12 +35,12 @@ IPTC_NS = "http://iptc.org/std/DigitalSourceType/2021-04-27/"
 # Job kinds whose output contains real pixels alongside generated ones.
 _COMPOSITE_KINDS = frozenset({
     "img2img", "inpaint", "outpaint", "image_edit", "upscale", "face_restore",
-    "detail", "interpolate", "extend_video", "i2v",
+    "detail", "interpolate", "extend_video", "i2v", "matte",
     # File writers pass the persisted generator identifier, not the route's job
     # kind. Keep both vocabularies explicit so real source pixels are never
     # mislabeled as a wholly synthetic image in the XMP packet.
     "local_image:img2img", "local_image:inpaint", "local_image:outpaint",
-    "local_flux:img2img", "local_flux:inpaint", "colab_edit",
+    "local_flux:img2img", "local_flux:inpaint", "colab_edit", "matte:cutout",
 })
 
 NATIVE_CHUNK = "wizards_brush"

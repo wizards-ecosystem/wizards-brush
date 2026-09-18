@@ -190,6 +190,25 @@ async def rerun(job_id: int, reseed: bool = False) -> dict:
     handler = get_handler(job.kind)
     if not handler:
         raise HTTPException(status_code=400, detail=f"kind '{job.kind}' cannot be re-run")
+    if not reseed:
+        # A Retry of a Variant Set child retries its variant, so the set tracks
+        # the new attempt. Generate more (reseed) stays an ordinary creative branch.
+        from ..variant_sets import service as variant_sets
+
+        if variant_sets.is_variant_group(job.group_id):
+            try:
+                redirected = await variant_sets.retry_for_job(job_id)
+            except variant_sets.VariantSetError as error:
+                raise HTTPException(status_code=error.status, detail=error.detail) from None
+            if redirected is not None:
+                # Like an ordinary Retry, the failed attempt leaves the live queue;
+                # the item keeps it in its history.
+                if job.status == JobStatus.error.value:
+                    db.update_job(job_id, status=JobStatus.canceled.value,
+                                  message=f"superseded by retry #{redirected['job_id']}")
+                    hub.emit({"type": "job", "id": job_id, "kind": job.kind,
+                              "status": JobStatus.canceled.value})
+                return redirected
     params = dict(job.params)
     if reseed and "seed" in params:
         params["seed"] = resolve_seed(None)
@@ -222,10 +241,13 @@ async def jobs_ws(ws: WebSocket) -> None:
     await ws.accept()
     q = hub.subscribe()
     try:
-        # Send a snapshot of recent jobs on connect.
+        # Send a snapshot of recent jobs on connect. Marked as one: a client
+        # must not announce a failure it is only now catching up on — every
+        # reload would otherwise re-toast the last twenty jobs' errors.
         for j in db.list_jobs(limit=20):
             await ws.send_json({"type": "job", "id": j.id, "kind": j.kind, "status": j.status,
-                                "progress": j.progress, "message": j.message})
+                                "progress": j.progress, "message": j.message,
+                                "group_id": j.group_id, "snapshot": True})
         while True:
             try:
                 event = await asyncio.wait_for(q.get(), timeout=30)

@@ -172,3 +172,65 @@ def test_content_table_hash_is_unique(tmp_path):
         conn.execute(text("INSERT INTO assetcontent (hash, size_bytes) VALUES ('abc', 1)"))
     with pytest.raises(Exception, match="UNIQUE"), eng.begin() as conn:
         conn.execute(text("INSERT INTO assetcontent (hash, size_bytes) VALUES ('abc', 2)"))
+
+
+def test_variant_set_tables_arrive_on_a_legacy_database(tmp_path):
+    """0008 adds three tables and touches no existing one."""
+    eng = _legacy_engine(tmp_path)
+    job_cols_before = _cols(eng, "job")
+    db._migrate(engine=eng)
+    assert {"id", "name", "config_json", "updated_at"} <= _cols(eng, "variantrecipe")
+    assert {"group_id", "request_id", "recipe_json", "expected", "counts_json",
+            "collection_id", "status"} <= _cols(eng, "variantset")
+    assert {"set_id", "stage", "key", "values_json", "parent_item_id", "params_json",
+            "job_id", "state", "validation_state", "validation_json", "output_name",
+            "history_json"} <= _cols(eng, "variantitem")
+    # Additive only: the job table gains nothing from this migration.
+    assert job_cols_before <= _cols(eng, "job")
+    assert "variant" not in " ".join(_cols(eng, "job"))
+    with eng.begin() as conn:
+        idx = {r[1] for r in conn.execute(text("PRAGMA index_list(variantitem)"))}
+    assert {"ux_variantitem_set_stage_key", "ix_variantitem_job_id"} <= idx
+
+
+def test_variant_item_identity_is_unique_per_stage(tmp_path):
+    eng = _legacy_engine(tmp_path)
+    db._migrate(engine=eng)
+    insert = text("INSERT INTO variantitem (set_id, stage, \"key\") VALUES (1, 0, 'a=x')")
+    with eng.begin() as conn:
+        conn.execute(insert)
+        conn.execute(text("INSERT INTO variantitem (set_id, stage, \"key\") VALUES (1, 1, 'a=x')"))
+    with pytest.raises(Exception, match="UNIQUE"), eng.begin() as conn:
+        conn.execute(insert)
+
+
+def test_the_orm_reads_and_writes_a_migration_built_variant_table(tmp_path):
+    """The frozen DDL and the live model must agree well enough to round-trip."""
+    from sqlmodel import Session, select
+
+    from backend.app.models import VariantItem, VariantSet
+
+    eng = _legacy_engine(tmp_path)
+    db._migrate(engine=eng)
+    with Session(eng) as s:
+        vs = VariantSet(name="probe", group_id="vset-probe", expected=2)
+        s.add(vs)
+        s.commit()
+        s.refresh(vs)
+        s.add(VariantItem(set_id=vs.id, key="a=x", values_json='{"a": "x"}'))
+        s.commit()
+    with Session(eng) as s:
+        item = s.exec(select(VariantItem)).one()
+        assert item.values == {"a": "x"} and item.state == "pending"
+        assert s.exec(select(VariantSet)).one().group_id == "vset-probe"
+
+
+def test_variant_ids_are_never_recycled(tmp_path):
+    eng = _legacy_engine(tmp_path)
+    db._migrate(engine=eng)
+    with eng.begin() as conn:
+        conn.execute(text("INSERT INTO variantset (group_id) VALUES ('vset-a'), ('vset-b')"))
+        conn.execute(text("DELETE FROM variantset WHERE group_id = 'vset-b'"))
+        conn.execute(text("INSERT INTO variantset (group_id) VALUES ('vset-c')"))
+        ids = dict(conn.execute(text("SELECT group_id, id FROM variantset")).all())
+    assert ids["vset-c"] == 3, "AUTOINCREMENT: the deleted id 2 is not handed out again"

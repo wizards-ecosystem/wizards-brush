@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, jobSocket, prepareBrowserSession } from "../api/client";
 import type { Asset, GeneratorSpec, Job, Presets, Stats, SystemStatus } from "../api/types";
 import { applyJobEvent } from "../lib/jobEvents";
+import { isVariantGroup, settledNotice } from "../lib/variantSets";
 import { previewObjectUrl } from "../lib/wsframe";
 import type { LoadState } from "../lib/jobEvents";
 
@@ -30,6 +31,10 @@ interface State {
   /** Monotonic signal for pages with their own paginated asset query. The
    * recent-assets snapshot is data, not a reliable invalidation channel. */
   assetRevision: number;
+  /** Bumped by every `variant_set` event on the job socket. Variant Set pages
+   *  refetch when it moves, so a set's state changes that are not job events —
+   *  a variant validated, blocked or unblocked — still reach the screen. */
+  variantRevision: number;
   toasts: Toast[];
   ws: WebSocket | null;
   booted: boolean;
@@ -55,6 +60,7 @@ export const useStore = create<State>((set, get) => ({
   loads: {},
   assets: [],
   assetRevision: 0,
+  variantRevision: 0,
   toasts: [],
   ws: null,
   booted: false,
@@ -88,6 +94,9 @@ export const useStore = create<State>((set, get) => ({
     let hadOpen = false;
     let reconnectAttempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    // Last status seen for each Variant Set, so a set's settling is announced
+    // once, as it happens — see settledNotice.
+    const variantStatus = new Map<number, string>();
     const connect = () => {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -113,6 +122,15 @@ export const useStore = create<State>((set, get) => ({
                 assetRefreshTimer = null;
                 get().refreshAssets();
               }, 250);
+            }
+            return;
+          }
+          if (e.type === "variant_set") {
+            set((state) => ({ variantRevision: state.variantRevision + 1 }));
+            if (typeof e.id === "number") {
+              const notice = settledNotice(variantStatus.get(e.id), e);
+              if (e.status) variantStatus.set(e.id, e.status);
+              if (notice) get().toast(notice.text, notice.kind);
             }
             return;
           }
@@ -145,8 +163,14 @@ export const useStore = create<State>((set, get) => ({
               get().refreshJobs();
             }, 300);
           }
+          // The connect-time snapshot replays recent jobs so the store is right;
+          // what they did happened earlier and is not announced again.
+          if (e.snapshot) return;
           if (e.status === "done" || e.status === "error") {
-            if (e.status === "error") {
+            // A Variant Set child is summarised once by its set (settledNotice),
+            // not toasted one failure at a time.
+            const group = e.group_id ?? get().jobs[id]?.group_id;
+            if (e.status === "error" && !isVariantGroup(group)) {
               get().toast(`Job #${id} failed: ${(e.error || "error").split("\n")[0]}`, "error");
             }
             // Debounced: a grid/batch finishing cell-by-cell must not fire three

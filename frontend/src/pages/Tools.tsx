@@ -18,11 +18,30 @@ export function Tools() {
   const [lastJob, setLastJob] = useState<number | null>(null);
   const [after, setAfter] = useState<Asset | null>(null);
   const [filter, setFilter] = useState<"" | "image" | "video">("");
+  // Why background matting cannot run here, if it cannot (optional dependency).
+  const [matteBlocked, setMatteBlocked] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api
+      .jobKinds()
+      .then((kinds) => {
+        const matte = kinds.find((k) => k.kind === "matte");
+        if (live)
+          setMatteBlocked(matte && !matte.available ? matte.unavailable_reason || "unavailable" : null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
-  const run = async (kind: "upscale" | "face-restore" | "interpolate" | "detail") => {
+  const run = async (
+    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "matte",
+    extra: Record<string, unknown> = {},
+  ) => {
     if (!sel) return;
     setAfter(null);
-    const body: any = { asset_id: sel.id };
+    const body: any = { asset_id: sel.id, ...extra };
     if (kind === "upscale") body.scale = scale;
     if (kind === "interpolate") body.factor = factor;
     try {
@@ -95,7 +114,7 @@ export function Tools() {
                 <img
                   src={sel.url}
                   alt={sel.meta?.prompt || sel.filename}
-                  className="max-h-[60vh] w-full object-contain"
+                  className="transparency-grid max-h-[60vh] max-w-full object-contain"
                 />
               )}
             </div>
@@ -175,6 +194,35 @@ export function Tools() {
             <Button className="w-full" onClick={() => run("detail")}>
               Auto-detail faces
             </Button>
+            <div className="space-y-2 border-t border-edge pt-4">
+              <div className="label mb-0">Background</div>
+              <Button
+                className="w-full"
+                icon="layers"
+                disabled={!!matteBlocked}
+                onClick={() => run("matte", { mode: "cutout" })}
+              >
+                Cut out the subject
+              </Button>
+              <Button
+                className="w-full"
+                disabled={!!matteBlocked}
+                onClick={() => run("matte", { mode: "mask" })}
+              >
+                Mask the subject
+              </Button>
+              <Button
+                className="w-full"
+                disabled={!!matteBlocked}
+                onClick={() => run("matte", { mode: "inverse_mask" })}
+              >
+                Mask the background
+              </Button>
+              <p className="text-[11px] leading-relaxed text-muted">
+                {matteBlocked ||
+                  "A transparent PNG, or a mask saved to the gallery for inpainting and variant sets (white = change). BiRefNet-lite (MIT), on this machine."}
+              </p>
+            </div>
           </div>
         )}
 

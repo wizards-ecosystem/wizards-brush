@@ -3,19 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
-import zipfile
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .. import db, scoring
 from ..config import settings
-from ..models import AssetRead
-from ..version import get_version
+from ..models import AssetKind, AssetRead
 
 router = APIRouter(tags=["assets"])
 
@@ -138,6 +136,118 @@ async def get_asset(asset_id: int) -> AssetRead:
     return AssetRead.of(a)
 
 
+@router.get("/assets/{asset_id}/file", response_class=FileResponse,
+            responses={200: {"content": {"image/png": {}, "video/mp4": {}},
+                             "description": "The asset's original file."}})
+async def get_asset_file(
+    asset_id: int,
+    download: bool = Query(False, description="Send as an attachment with its file name."),
+) -> FileResponse:
+    """The original file, authenticated like the rest of /api.
+
+    `/files/...` URLs are for the browser: with API_TOKEN set they accept only
+    the HttpOnly session cookie, so a program holding the token in a header
+    fetches bytes here instead. Trashed assets are not served.
+    """
+    a = db.get_asset(asset_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="asset not found")
+    path = Path(a.path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="the asset's file is missing from disk")
+    import mimetypes
+
+    media = mimetypes.guess_type(a.filename)[0] or (
+        "video/mp4" if a.kind == AssetKind.video.value else "application/octet-stream")
+    return FileResponse(path, media_type=media, filename=a.filename,
+                        content_disposition_type="attachment" if download else "inline")
+
+
+def _import_image(data: bytes, role: str) -> Image.Image:
+    """Decode an untrusted upload for the library, keeping what matters.
+
+    Transparency survives — a cut-out product shot is exactly the kind of
+    source a Variant Set starts from — and a mask becomes single-channel.
+    Orientation is applied, and everything else the file carried (EXIF,
+    location, the original encoder's chunks) is dropped by the re-encode.
+    """
+    from PIL import ImageOps
+
+    from .common import validate_upload_dimensions
+
+    validate_upload_dimensions(data)
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            opened.load()
+            image = ImageOps.exif_transpose(opened)
+    except Exception as exc:
+        raise ValueError("upload is not a valid image") from exc
+    if role == "mask":
+        return image.convert("L")
+    alpha = "A" in image.getbands() or "transparency" in image.info
+    return image.convert("RGBA" if alpha else "RGB")
+
+
+@router.post("/assets/import")
+async def import_asset(
+    file: UploadFile,
+    role: Literal["source", "mask"] = Form(
+        "source", description="`mask` stores a single-channel mask (white = change)."),
+    tags: str = Form("", description="Comma-separated tags."),
+    collection_id: int | None = Form(None, description="Also add it to this collection."),
+) -> AssetRead:
+    """Bring an image into the library so jobs and Variant Sets can use it by id.
+
+    PNG, JPEG, WebP and the other formats Pillow reads, up to the upload
+    limits. The file is re-encoded as PNG with its transparency intact.
+    """
+    from .common import MAX_UPLOAD_BYTES, _enrich
+
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400,
+                            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+    if collection_id is not None and not any(c.id == collection_id
+                                             for c, _n in db.list_collections()):
+        raise HTTPException(status_code=404, detail=f"collection {collection_id} not found")
+    clean_tags = [t.strip()[:64] for t in tags.split(",") if t.strip()][:20]
+    original = Path(file.filename or "").name[:200]
+
+    def _store() -> int:
+        from ..utils.io import save_image
+
+        try:
+            image = _import_image(data, role)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        if role == "mask" and image.getbbox() is None:
+            raise HTTPException(status_code=400,
+                                detail="the mask is empty: white marks what should change")
+        saved = save_image(image, "mask" if role == "mask" else "import")
+        meta: dict = ({"mask": {"source": "upload"}} if role == "mask"
+                      else {"import": {"filename": original, "mode": image.mode}})
+        asset = db.add_asset(AssetKind.image.value, saved.path, thumb=saved.thumb,
+                             width=saved.width, height=saved.height,
+                             generator="mask" if role == "mask" else "import", meta=meta,
+                             content_hash=saved.content_hash, size_bytes=saved.size_bytes,
+                             mime_type="image/png")
+        assert asset.id is not None
+        if clean_tags:
+            db.update_asset(asset.id, tags=clean_tags)
+        if collection_id is not None:
+            db.add_to_collection(collection_id, [asset.id])
+        return int(asset.id)
+
+    asset_id = await asyncio.to_thread(_store)
+    if role != "mask":
+        _enrich(asset_id)  # captions make an import searchable like anything generated
+    stored = db.get_asset(asset_id)
+    assert stored is not None
+    return AssetRead.of(stored)
+
+
 def _first_frame_png(p: Path) -> bytes:
     from ..utils.io import first_frame
 
@@ -247,11 +357,12 @@ async def export_zip(req: IdsReq) -> FileResponse:
     while individual video sidecars keep each clip self-describing on its own.
     Spooled to disk, not BytesIO — a selection of videos is easily multi-GB.
     """
-    import asyncio
     import os
     import tempfile
 
     from starlette.background import BackgroundTask
+
+    from .. import exports
 
     settings.ensure_dirs()
     include_generation = settings.effective_bool("embed_metadata")
@@ -262,51 +373,8 @@ async def export_zip(req: IdsReq) -> FileResponse:
         rows = db.get_assets(req.ids)  # one SELECT, not one session per id
         selected = {asset.id: asset for asset in rows}
         ordered = [selected[asset_id] for asset_id in req.ids if asset_id in selected]
-        used_names: set[str] = set()
-        manifest_assets: list[dict] = []
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-            for asset in ordered:
-                source = Path(asset.path)
-                if not source.exists():
-                    continue
-                archive_name = asset.filename
-                if archive_name in used_names:
-                    archive_name = f"asset-{asset.id}-{archive_name}"
-                used_names.add(archive_name)
-                zf.write(source, arcname=archive_name)
-                sidecar = source.with_suffix(source.suffix + ".json")
-                if include_generation and asset.kind == "video" and sidecar.exists():
-                    zf.write(sidecar, arcname=archive_name + ".json")
-                content = db.content_of(int(asset.id)) if asset.id is not None else None
-                manifest_assets.append({
-                    "asset_id": asset.id,
-                    "archive_path": archive_name,
-                    "kind": asset.kind,
-                    "width": asset.width,
-                    "height": asset.height,
-                    "generator": asset.generator,
-                    "job_id": asset.job_id,
-                    "created_at": asset.created_at.isoformat(),
-                    "content": ({"hash": content.hash, "size_bytes": content.size_bytes,
-                                 "mime_type": content.mime_type} if content else None),
-                    "generation": asset.meta if include_generation else None,
-                    "library": {
-                        "favorite": bool(asset.favorite),
-                        "rating": int(asset.rating or 0),
-                        "grade": asset.grade,
-                        "tags": asset.tags,
-                        "caption": asset.caption or "",
-                        "used_count": int(asset.used_count or 0),
-                    },
-                })
-            manifest = {
-                "schema": "wizards-brush-export/v1",
-                "app": {"name": "The Wizard's Brush", "version": get_version()},
-                "exported_at": datetime.now(UTC).isoformat(),
-                "assets": manifest_assets,
-            }
-            zf.writestr("wizards-brush-manifest.json", json.dumps(
-                manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        exports.write_zip(Path(tmp), [exports.Entry(asset) for asset in ordered],
+                          include_generation=include_generation)
 
     try:
         await asyncio.to_thread(_build)

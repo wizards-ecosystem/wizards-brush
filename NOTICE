@@ -66,6 +66,17 @@ open-generative-ai: https://github.com/Anil-matcha/Open-Generative-AI
     dependent option/range narrowing. The Wizard's Brush uses its own registry shape,
     renderer, validation, and tests; no catalogue data or source was copied.
 
+BiRefNet: https://github.com/ZhengPeng7/BiRefNet
+    Copyright (c) 2024 ZhengPeng. Licensed under the MIT License.
+
+    backend/app/generators/matting.py downloads the BiRefNet-lite weights - the
+    ONNX export published as onnx-community/BiRefNet_lite-ONNX (MIT, base model
+    ZhengPeng7/BiRefNet_lite, MIT) - at a pinned commit and SHA-256 the first
+    time the optional background-removal finishing step runs. The weights are
+    not bundled in this repository. The preprocessing values (1024x1024
+    bilinear resize, ImageNet mean/std) are those published in that export's
+    preprocessor configuration; the inference and compositing code is our own.
+
 HiDream-O1-Image: https://github.com/HiDream-ai/HiDream-O1-Image
     Copyright (c) 2026 HiDream.ai. Licensed under the MIT License.
 

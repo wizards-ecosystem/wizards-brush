@@ -31,7 +31,12 @@ export function Gallery() {
   const [sort, setSort] = useState("newest");
   const [compare, setCompare] = useState<[Asset, Asset] | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [collectionId, setCollectionId] = useState<number | null>(null);
+  // `?collection=` opens straight onto one collection (a Variant Set links its
+  // results this way). Read once, as the initial filter.
+  const [collectionId, setCollectionId] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get("collection"));
+    return Number.isInteger(id) && id > 0 ? id : null;
+  });
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const query = useCallback(

@@ -52,7 +52,7 @@ describe("Layout navigation drawer", () => {
 
   it("still renders the workspace links", () => {
     renderAt();
-    for (const label of ["Tools", "Gallery", "Queue", "Trash", "Settings"]) {
+    for (const label of ["Tools", "Gallery", "Queue", "Variants", "Trash", "Settings"]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });

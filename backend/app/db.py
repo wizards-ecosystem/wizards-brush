@@ -25,6 +25,8 @@ from .models import (
     JobStatus,
     PromptHistory,
     UserPreset,
+    VariantItem,
+    VariantSet,
     stamp_params,
 )
 
@@ -426,6 +428,10 @@ def clear_all() -> dict:
         # library through the ORM one object at a time.
         s.execute(sa_delete(Asset))
         s.execute(sa_delete(Job))
+        # Variant Sets are execution records of the jobs just wiped; recipes are
+        # definitions the user wrote, and survive like presets do.
+        s.execute(sa_delete(VariantItem))
+        s.execute(sa_delete(VariantSet))
         s.commit()
     return {"files_deleted": files, "assets_deleted": n_assets, "jobs_deleted": n_jobs}
 
@@ -949,6 +955,8 @@ def prune_job_history(keep: int = JOB_HISTORY_KEEP) -> int:
             Asset.job_id.is_not(None),  # type: ignore[union-attr]
             Asset.deleted_at.is_(None),  # type: ignore[union-attr]
         )
+        # Or from a Variant Set: an item's latest attempt is its provenance.
+        in_sets = select(VariantItem.job_id).where(VariantItem.job_id.is_not(None))  # type: ignore[union-attr]
         # The most recent `keep`, by when they actually finished.
         recent = (
             select(Job.id)
@@ -960,6 +968,7 @@ def prune_job_history(keep: int = JOB_HISTORY_KEEP) -> int:
             select(Job.id).where(
                 Job.status.in_(terminal),  # type: ignore[attr-defined]
                 Job.id.not_in(referenced),  # type: ignore[union-attr]
+                Job.id.not_in(in_sets),  # type: ignore[union-attr]
                 Job.id.not_in(recent),  # type: ignore[union-attr]
             )
         ))

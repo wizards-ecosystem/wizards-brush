@@ -12,9 +12,20 @@ import type {
   HumanGradeInput,
   ImportedMetadata,
   Job,
+  JobCreate,
+  JobKindInfo,
+  JobSubmission,
+  JobWait,
   LoraCatalog,
   OkResponse,
   Presets,
+  VariantCapabilities,
+  VariantItem,
+  VariantPreview,
+  VariantRecipe,
+  VariantRecipeSpec,
+  VariantSetDetail,
+  VariantSetSummary,
   PromptHistoryItem,
   Stats,
   SystemStatus,
@@ -252,9 +263,81 @@ export const api = {
   },
 
   tool: (
-    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video",
+    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video" | "matte",
     body: Record<string, any>,
   ) => postJson(`/api/tools/${kind}`, body).then((r) => j<{ job_id: number }>(r)),
+
+  // ---- the unified job API (docs/api.md) ------------------------------------
+  jobKinds: () => get("/api/jobs/kinds").then((r) => j<JobKindInfo[]>(r)),
+  createJob: (body: JobCreate) => postJson("/api/jobs", body).then((r) => j<JobSubmission>(r)),
+  /** Long-poll: resolves when the job settles or after `timeout` seconds. */
+  waitJob: (id: number, timeout = 30) =>
+    get(`/api/jobs/${id}/wait?timeout=${timeout}`).then((r) => j<JobWait>(r)),
+  /** Bring a local image into the library; transparency is kept. */
+  importAsset: (file: File, options: { role?: "source" | "mask"; tags?: string[] } = {}) => {
+    const body = new FormData();
+    body.append("file", file);
+    if (options.role) body.append("role", options.role);
+    if (options.tags?.length) body.append("tags", options.tags.join(","));
+    return safeFetch("/api/assets/import", { method: "POST", body, headers: authHeaders() }).then((r) =>
+      j<Asset>(r),
+    );
+  },
+
+  // ---- Variant Sets ----------------------------------------------------------
+  variantCapabilities: () => get("/api/variant-sets/capabilities").then((r) => j<VariantCapabilities>(r)),
+  variantRecipes: () => get("/api/variant-recipes").then((r) => j<VariantRecipe[]>(r)),
+  saveVariantRecipe: (body: { name: string; description?: string; recipe: VariantRecipeSpec }, id?: number) =>
+    (id == null
+      ? postJson("/api/variant-recipes", body)
+      : safeFetch(`/api/variant-recipes/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(body),
+        })
+    ).then((r) => j<VariantRecipe>(r)),
+  cloneVariantRecipe: (id: number) =>
+    postJson(`/api/variant-recipes/${id}/clone`, {}).then((r) => j<VariantRecipe>(r)),
+  deleteVariantRecipe: (id: number) => del(`/api/variant-recipes/${id}`).then((r) => j<OkResponse>(r)),
+  variantRecipe: (id: number) => get(`/api/variant-recipes/${id}`).then((r) => j<VariantRecipe>(r)),
+  previewVariantSet: (recipe: VariantRecipeSpec, limit = 60) =>
+    postJson("/api/variant-sets/preview", { recipe, limit }).then((r) => j<VariantPreview>(r)),
+  createVariantSet: (body: {
+    name: string;
+    recipe: VariantRecipeSpec;
+    request_id: string;
+    collection?: { mode: "none" | "new" | "existing"; id?: number };
+  }) => postJson("/api/variant-sets", body).then((r) => j<VariantSetSummary>(r)),
+  variantSets: (limit = 100) =>
+    get(`/api/variant-sets?limit=${limit}`).then((r) => j<VariantSetSummary[]>(r)),
+  variantSet: (id: number) => get(`/api/variant-sets/${id}`).then((r) => j<VariantSetDetail>(r)),
+  retryVariantSet: (id: number, includeCanceled = false) =>
+    postJson(`/api/variant-sets/${id}/retry`, { include_canceled: includeCanceled }).then((r) =>
+      j<{ retried: number; submitted: number }>(r),
+    ),
+  rerunVariantItem: (setId: number, itemId: number, options: { reseed?: boolean; cascade?: boolean } = {}) =>
+    postJson(`/api/variant-sets/${setId}/items/${itemId}/rerun`, options).then((r) => j<VariantItem>(r)),
+  cancelVariantSet: (id: number) =>
+    postJson(`/api/variant-sets/${id}/cancel`, {}).then((r) => j<{ canceled: number }>(r)),
+  deleteVariantSet: (id: number) => del(`/api/variant-sets/${id}`).then((r) => j<OkResponse>(r)),
+  exportVariantSet: async (id: number, includeIntermediate = false) => {
+    const r = await postJson(`/api/variant-sets/${id}/export`, { include_intermediate: includeIntermediate });
+    if (!r.ok) throw new Error(await errorDetail(r));
+    const name = /filename="?([^";]+)"?/.exec(r.headers.get("content-disposition") || "")?.[1];
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name || `variant-set-${id}.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  uploadVariantMask: (mask: File) => {
+    const body = new FormData();
+    body.append("mask", mask);
+    return safeFetch("/api/variant-sets/masks", { method: "POST", body, headers: authHeaders() }).then((r) =>
+      j<{ asset_id: number }>(r),
+    );
+  },
 };
 
 /**

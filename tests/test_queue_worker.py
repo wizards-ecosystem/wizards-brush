@@ -228,3 +228,38 @@ def test_error_preserves_outputs_completed_earlier_in_the_batch(client, no_queue
     result = db.get_job(job.id).result
     assert result["asset_ids"] == db.asset_ids_for_job(job.id)
     assert result["partial"] is True
+
+
+def test_a_lane_restarts_when_its_event_loop_is_gone(client, no_queue):
+    """A second app lifespan in one process must get a working lane.
+
+    `start()` used to keep the first worker task forever. Once that task's loop
+    closed (the first lifespan ended), nothing queued afterwards ever ran.
+    """
+    from backend.app import queue as qmod
+
+    lane = qmod.JobQueue("restart-test")
+    ran: list[int] = []
+
+    def handler(job_id, params, cb):
+        ran.append(job_id)
+        return {}
+
+    async def first_life():
+        lane.start()
+        await asyncio.sleep(0)
+
+    asyncio.run(first_life())            # the loop closes with the worker inside it
+    job = db.create_job("upscale", {})
+
+    async def second_life():
+        lane.start()
+        await lane.submit(int(job.id), handler, "upscale")
+        for _ in range(100):
+            if ran:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(second_life())
+    assert ran == [job.id]
+    assert db.get_job(job.id).status == "done"

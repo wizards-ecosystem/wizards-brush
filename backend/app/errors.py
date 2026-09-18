@@ -138,7 +138,7 @@ def _rule(pattern: str | None, tip: str, *, oom: bool = False, clears_gpu: bool 
 _LOCAL_GPU_KINDS = (
     "",  # direct callers/tests with no queue kind retain conservative cleanup
     "image_local", "img2img", "inpaint", "outpaint", "control_local",
-    "upscale", "face_restore", "detail", "interpolate",
+    "upscale", "face_restore", "detail", "interpolate", "matte",
 )
 _LOCAL_MODEL_KINDS = (
     "",  # direct model-loader callers retain useful guidance

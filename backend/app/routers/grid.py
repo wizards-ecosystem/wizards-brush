@@ -17,7 +17,7 @@ from .. import db
 from ..models import AssetRead, JobKind
 from ..utils.seeds import resolve_seed
 from .common import get_handler, submit_fanout
-from .images import _common_params
+from .images import common_params
 
 router = APIRouter(tags=["grid"])
 
@@ -108,7 +108,7 @@ def _expand_numeric_values(axis: Axis) -> list[Any]:
 
 
 def _apply_axis(payload: dict[str, Any], axis: Axis, value: Any) -> None:
-    """Apply one axis value to the RAW payload (before _common_params derives
+    """Apply one axis value to the RAW payload (before common_params derives
     steps/dims/etc. from it) — sweeping e.g. `quality` or `aspect` on the derived
     params would be a silent no-op because handlers never re-derive them."""
     if axis.param == "prompt_sr":
@@ -245,7 +245,7 @@ async def generate_grid(req: GridReq) -> dict:
             if y_axis and yv is not None:
                 _apply_axis(raw, y_axis, yv)
             # Derive per cell so quality/aspect/speed_mode axes take real effect.
-            p = _common_params(raw, req.kind)
+            p = common_params(raw, req.kind)
             p["batch"] = 1  # one image per cell
             p["combinatorial"] = False
             p["grid"] = {

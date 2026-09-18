@@ -16,21 +16,78 @@ are parallel, while a long Remote GPU job (holding no local GPU) never blocks th
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import time
 import traceback
 from collections.abc import Callable
 from typing import Any
 
-from . import db, errors, notify, wsframe
+from . import db, errors, log, notify, wsframe
 from .models import Job, JobStatus
 from .params import TrackedParams
+
+logger = log.get("queue")
 
 # handler(job_id, params, progress_cb) -> result dict.
 # progress_cb(frac, message="", *, preview=None) — preview is raw JPEG bytes,
 # sent as a binary WebSocket frame (never persisted to the DB, never base64).
 ProgressCb = Callable[..., None]
 Handler = Callable[[int, dict[str, Any], ProgressCb], dict[str, Any]]
+
+# listener(job) — called once a job has reached done/error/canceled. May return
+# an awaitable, which is scheduled on the running loop.
+TerminalListener = Callable[[Job], Any]
+_TERMINAL = frozenset({JobStatus.done.value, JobStatus.error.value, JobStatus.canceled.value})
+_TERMINAL_LISTENERS: dict[str, TerminalListener] = {}
+# Strong references to listener tasks: the loop keeps only weak ones, and a
+# task collected mid-flight simply never finishes.
+_LISTENER_TASKS: set[asyncio.Future[Any]] = set()
+
+
+def on_job_terminal(name: str, listener: TerminalListener) -> None:
+    """Be told when any job finishes, fails or is canceled.
+
+    Something that owns work built from ordinary jobs — a Variant Set advancing
+    to its next stage — needs to hear when one ends, without the lanes knowing
+    it exists. Keyed by `name`, so registering twice (a second app lifespan in
+    one process) replaces rather than doubles.
+
+    The listener must be cheap and must not raise; slow work belongs in the
+    awaitable it may return, which runs as its own task. It is an optimisation,
+    not the source of truth: a listener missed across a crash has to be
+    recoverable from the job rows, because a restart never replays it.
+    """
+    _TERMINAL_LISTENERS[name] = listener
+
+
+def _notify_terminal(job_id: int) -> None:
+    if not _TERMINAL_LISTENERS:
+        return
+    job = db.get_job(job_id)
+    if job is None or job.status not in _TERMINAL:
+        return
+    for name, listener in list(_TERMINAL_LISTENERS.items()):
+        try:
+            outcome = listener(job)
+        except Exception:  # one listener must never break the lane
+            logger.warning("job-terminal listener %s failed for job %s", name, job_id,
+                           exc_info=True)
+            continue
+        if not inspect.isawaitable(outcome):
+            continue
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Only reachable from synchronous test code; production calls come
+            # from the lane or a route, both on the loop.
+            if inspect.iscoroutine(outcome):
+                outcome.close()
+            logger.debug("no running loop for job-terminal listener %s", name)
+            continue
+        task: asyncio.Future[Any] = asyncio.ensure_future(outcome, loop=loop)
+        _LISTENER_TASKS.add(task)
+        task.add_done_callback(_LISTENER_TASKS.discard)
 
 
 class ProgressHub:
@@ -269,8 +326,18 @@ class JobQueue:
     def start(self) -> None:
         loop = asyncio.get_running_loop()
         hub.bind_loop(loop)
-        if self._task is None:
+        # A second app lifespan in one process (tests, an embedding host) finds
+        # the previous worker bound to a loop that has since closed: it will
+        # never run again, so starting must replace it rather than trust it.
+        stale = self._task is not None and (self._task.done()
+                                            or self._task.get_loop().is_closed())
+        if self._task is None or stale:
+            # asyncio primitives bind to the loop that first awaits them.
+            self._wake = asyncio.Event()
+            self._current = None
             self._task = loop.create_task(self._run())
+            if self._pending:
+                self._wake.set()
 
     async def submit(self, job_id: int, handler: Handler, kind: str = "") -> None:
         # A queued job may already be back on this lane because the server is
@@ -339,6 +406,7 @@ class JobQueue:
                     db.mark_error(job_id, f"worker error: {e}")
                     hub.emit({"type": "job", "id": job_id, "kind": kind,
                               "status": JobStatus.error.value, "error": str(e)})
+                _notify_terminal(job_id)
 
     async def _execute(self, job_id: int, handler: Handler, kind: str) -> None:
         self._current = job_id
@@ -387,6 +455,9 @@ class JobQueue:
                                                job_id, preview))
 
         job = db.get_job(job_id)
+        # Terminal events name the job's group so a client can tell one failure
+        # from one child of a fan-out and summarise the latter per group.
+        group = {"group_id": job.group_id} if job and job.group_id else {}
         # Wrapped so the handler's reads are recorded. A control that is declared,
         # rendered and never read is invisible otherwise — see app/params.py.
         params: dict[str, Any] = TrackedParams(job.params if job else {})
@@ -448,18 +519,18 @@ class JobQueue:
                 raise RuntimeError("transient retry loop exhausted without a result")
             db.mark_done(job_id, result)
             hub.emit({"type": "job", "id": job_id, "kind": kind, "status": JobStatus.done.value,
-                      "progress": 1.0, "result": result})
+                      "progress": 1.0, "result": result, **group})
         except CancelledJob:
             result = terminal_result()
             db.mark_canceled(job_id, "canceled", result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
-                      "status": JobStatus.canceled.value, "result": result})
+                      "status": JobStatus.canceled.value, "result": result, **group})
         except SkipItem:
             # Single-item job (batch handlers catch SkipItem themselves).
             result = terminal_result()
             db.mark_canceled(job_id, "skipped", result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
-                      "status": JobStatus.canceled.value, "result": result})
+                      "status": JobStatus.canceled.value, "result": result, **group})
         except Exception as e:  # noqa: BLE001 — surface any handler failure to the UI
             # Two things beyond recording the traceback: say something the user
             # can act on, and put the GPU back in a state where the *next* job
@@ -475,7 +546,7 @@ class JobQueue:
             db.mark_error(job_id, err, tip=tip, result=result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
                       "status": JobStatus.error.value, "error": str(e), "tip": tip,
-                      "result": result})
+                      "result": result, **group})
         finally:
             _CANCELLED.discard(job_id)
             _SKIPPED.discard(job_id)
@@ -494,7 +565,7 @@ LANES: dict[str, JobQueue] = {"local": JobQueue("local"), "remote": JobQueue("re
 
 # Local-GPU/CPU work serializes in the local lane; everything else uses Remote GPU.
 _LOCAL_KINDS = {"image_local", "img2img", "inpaint", "outpaint", "upscale",
-                "face_restore", "interpolate", "detail", "control_local"}
+                "face_restore", "interpolate", "detail", "control_local", "matte"}
 
 
 def lane_for(kind: str) -> str:
@@ -574,6 +645,8 @@ def cancel(job_id: int) -> bool:
         # Nudge the lane so it drops the now-canceled entry from _pending and
         # _CANCELLED promptly instead of leaking until the next submit.
         wake(job.kind)
+        # A queued job never reaches the lane's own terminal notification.
+        _notify_terminal(job_id)
         return True
     return False  # nothing to cancel — don't leak a flag for a job that won't run
 

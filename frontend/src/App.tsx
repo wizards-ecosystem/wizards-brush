@@ -11,6 +11,9 @@ import { Queue } from "./pages/Queue";
 import { Settings } from "./pages/Settings";
 import { Diagnosis } from "./pages/Diagnosis";
 import { Tools } from "./pages/Tools";
+import { VariantSetCreate } from "./pages/VariantSetCreate";
+import { VariantSetDetail } from "./pages/VariantSetDetail";
+import { VariantSets } from "./pages/VariantSets";
 import { useStore } from "./store/useStore";
 
 export default function App() {
@@ -29,6 +32,9 @@ export default function App() {
         <Route path="/trash" element={<Trash />} />
         <Route path="/queue" element={<Queue />} />
         <Route path="/grid/:groupId" element={<GridView />} />
+        <Route path="/variants" element={<VariantSets />} />
+        <Route path="/variants/new" element={<VariantSetCreate />} />
+        <Route path="/variants/:id" element={<VariantSetDetail />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/diagnosis" element={<Diagnosis />} />
         {/* Without this an unknown path rendered the chrome around a blank

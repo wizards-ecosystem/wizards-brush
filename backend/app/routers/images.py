@@ -5,9 +5,12 @@ send only the `payload` JSON field. Each endpoint enqueues a worker job.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from PIL import Image
 
+from .. import finishing
 from ..config import settings
 from ..generators.base import batch_for, dims_for, dims_for_ratio
 from ..generators.schedulers import OPTIONS as SAMPLER_OPTIONS
@@ -40,6 +43,12 @@ from .common import (
 
 router = APIRouter(tags=["images"])
 
+# Kinds that take exactly one source image in `image_path`.
+_SINGLE_INPUT_KINDS = frozenset({
+    JobKind.img2img.value, JobKind.inpaint.value, JobKind.outpaint.value,
+    JobKind.control_local.value,
+})
+
 # kind -> (device for sizing, step group, default guidance, default steps).
 _PROFILE = {
     "image_local": ("local", "local", 1.0, 9),
@@ -51,7 +60,7 @@ _PROFILE = {
 }
 
 
-def _require_local_gpu() -> None:
+def require_local_gpu() -> None:
     """Reject only a completed negative probe; unknown startup state may queue."""
     from ..backends.local import unavailable_reason
 
@@ -67,7 +76,7 @@ def _resolved_variant(p: dict, device: str) -> str:
                         lane="local" if device == "local" else "colab").name
 
 
-def _require_model_access(params: dict) -> None:
+def require_model_access(params: dict) -> None:
     """Refuse a cold gated fetch before uploads are copied or a job is queued."""
     from ..generators import variants
 
@@ -75,7 +84,13 @@ def _require_model_access(params: dict) -> None:
         raise HTTPException(status_code=409, detail=reason)
 
 
-def _common_params(p: dict, kind: str) -> dict:
+def common_params(p: dict, kind: str) -> dict:
+    """The sanitized params every image route persists for a raw payload.
+
+    Public because it is the one validation boundary for image jobs: the
+    generate routes, X/Y grid cells and Variant Set children all derive their
+    params here, so a value that is clamped for one is clamped for all.
+    """
     device, group, def_guidance, def_steps = _PROFILE[kind]
     # Each local model has its own step tier and CFG regime — a distilled 8-step
     # model and a real-CFG one cannot share either. The catalogue in
@@ -187,6 +202,15 @@ def _common_params(p: dict, kind: str) -> dict:
         # rerun pick a different model than the run it is reproducing.
         "model_variant": _resolved_variant(p, device),
     }
+    # Named finishing processors after the preset's steps (app/finishing.py).
+    # Validated here like everything else that is replayed on rerun, and only
+    # recorded when present so an ordinary job's params are unchanged.
+    try:
+        finish_steps = finishing.sanitize_steps(p.get("finish_steps"))
+    except finishing.FinishingError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if finish_steps:
+        result["finish_steps"] = finish_steps
     if kind == JobKind.inpaint.value:
         area = str(p.get("inpaint_area", "masked area"))
         result.update({
@@ -196,6 +220,63 @@ def _common_params(p: dict, kind: str) -> dict:
             "mask_blur": as_int(p.get("mask_blur"), 4, 0, 64),
         })
     return result
+
+
+_common_params = common_params  # the historical name, still imported by callers
+
+
+def attach_inputs(kind: str, params: dict, image_paths: Sequence[str] = (),
+                  mask_path: str | None = None) -> dict:
+    """Attach input files to `params` exactly as the upload routes do.
+
+    Paths are already saved (an upload) or already owned (a gallery asset).
+    Match-input sizing is resolved here, before the job is queued, so the
+    persisted width/height are the ones the job will actually use.
+    """
+    paths = list(image_paths)
+    if kind == JobKind.image_edit.value:
+        params["image_paths"] = paths
+        return params
+    if kind in _SINGLE_INPUT_KINDS:
+        params["image_path"] = paths[0]
+    if kind == JobKind.inpaint.value:
+        params["mask_path"] = mask_path
+    if kind in (JobKind.img2img.value, JobKind.inpaint.value):
+        _size_uploaded_input(params, params["image_path"])
+    return params
+
+
+def control_extras(params: dict, raw: dict) -> dict:
+    """ControlNet's own controls, read from the raw payload."""
+    params["control_mode"] = raw.get("control_mode", "canny")
+    params["control_weight"] = as_float(raw.get("control_weight"), 0.7, 0.0, 1.0)
+    return params
+
+
+def outpaint_extras(params: dict, raw: dict) -> dict:
+    """Outpaint's direction and growth, read from the raw payload."""
+    params["direction"] = (raw.get("direction") if raw.get("direction") in DIRECTIONS else "all")
+    params["expand_pct"] = max(MIN_PCT, min(as_int(raw.get("expand_pct"), DEFAULT_PCT, MIN_PCT, MAX_PCT),
+                                            MAX_PCT))
+    return params
+
+
+def build_params(kind: str, raw: dict, image_paths: Sequence[str] = (),
+                 mask_path: str | None = None) -> dict:
+    """The complete params the generate route for `kind` would persist.
+
+    For callers that already hold their inputs as files — Variant Set children
+    reuse a gallery asset rather than an upload — so they queue a job that is
+    indistinguishable from one a person submitted through the form.
+    """
+    # ControlNet sizes and steps like local txt2img; see gen_control.
+    profile = JobKind.image_local.value if kind == JobKind.control_local.value else kind
+    params = common_params(raw, profile)
+    if kind == JobKind.control_local.value:
+        control_extras(params, raw)
+    elif kind == JobKind.outpaint.value:
+        outpaint_extras(params, raw)
+    return attach_inputs(kind, params, image_paths, mask_path)
 
 
 def _match_input_dimensions(params: dict, image: Image.Image, model: str) -> tuple[int, int]:
@@ -297,7 +378,8 @@ def _local_handler(mode: str):
             if edit_plan is not None:
                 img = edit_plan.composite(img, blur=int(params.get("mask_blur", 4)))
             img, post = apply_image_post(
-                img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+                img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+                warnings=warnings)
             effective_steps = local_image.effective_step_count(
                 mode, int(safe_steps), float(params.get("strength", 0.6)), model)
             edit_meta = ({
@@ -325,7 +407,7 @@ def _local_handler(mode: str):
     return handler
 
 
-async def _maybe_fanout(kind: str, params: dict, handler) -> dict | None:
+async def maybe_fanout(kind: str, params: dict, handler) -> dict | None:
     """Combinatorial toggle: queue one job per {a|b|c} combination (batch 1 each)."""
     if not params.get("combinatorial"):
         return None
@@ -338,32 +420,31 @@ async def _maybe_fanout(kind: str, params: dict, handler) -> dict | None:
 
 @router.post("/generate/image/local")
 async def gen_local(payload: str = Form(...)) -> dict:
-    _require_local_gpu()
-    params = _common_params(parse_payload(payload), JobKind.image_local.value)
-    _require_model_access(params)
-    fanned = await _maybe_fanout(JobKind.image_local.value, params, _local_handler("txt2img"))
+    require_local_gpu()
+    params = common_params(parse_payload(payload), JobKind.image_local.value)
+    require_model_access(params)
+    fanned = await maybe_fanout(JobKind.image_local.value, params, _local_handler("txt2img"))
     return fanned or await submit(JobKind.image_local.value, params, _local_handler("txt2img"))
 
 
 @router.post("/generate/image/img2img")
 async def gen_img2img(payload: str = Form(...), image: UploadFile | None = None) -> dict:
-    _require_local_gpu()
-    params = _common_params(parse_payload(payload), JobKind.img2img.value)
-    _require_model_access(params)
-    params["image_path"] = require_upload(await save_upload(image))
-    _size_uploaded_input(params, params["image_path"])
+    require_local_gpu()
+    params = common_params(parse_payload(payload), JobKind.img2img.value)
+    require_model_access(params)
+    attach_inputs(JobKind.img2img.value, params, [require_upload(await save_upload(image))])
     return await submit(JobKind.img2img.value, params, _local_handler("img2img"))
 
 
 @router.post("/generate/image/inpaint")
 async def gen_inpaint(payload: str = Form(...), image: UploadFile | None = None,
                       mask: UploadFile | None = None) -> dict:
-    _require_local_gpu()
-    params = _common_params(parse_payload(payload), JobKind.inpaint.value)
-    _require_model_access(params)
-    params["image_path"] = require_upload(await save_upload(image))
-    params["mask_path"] = require_upload(await save_upload(mask), "mask image")
-    _size_uploaded_input(params, params["image_path"])
+    require_local_gpu()
+    params = common_params(parse_payload(payload), JobKind.inpaint.value)
+    require_model_access(params)
+    image_path = require_upload(await save_upload(image))
+    mask_path = require_upload(await save_upload(mask), "mask image")
+    attach_inputs(JobKind.inpaint.value, params, [image_path], mask_path)
     return await submit(JobKind.inpaint.value, params, _local_handler("inpaint"))
 
 
@@ -441,7 +522,8 @@ def _outpaint_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         img = composite(img, src, p)
         gen_w, gen_h = img.size
         img, post = apply_image_post(
-            img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+            img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+            warnings=warnings)
         effective_steps = local_image.effective_step_count(
             "inpaint", steps, strength, model)
         meta = image_meta(params, img, prompt=prompt, seed=seed, aspect="Custom",
@@ -461,14 +543,12 @@ def _outpaint_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
 
 @router.post("/generate/image/outpaint")
 async def gen_outpaint(payload: str = Form(...), image: UploadFile | None = None) -> dict:
-    _require_local_gpu()
+    require_local_gpu()
     raw = parse_payload(payload)
-    params = _common_params(raw, JobKind.outpaint.value)
-    _require_model_access(params)
-    params["image_path"] = require_upload(await save_upload(image))
-    params["direction"] = (raw.get("direction") if raw.get("direction") in DIRECTIONS else "all")
-    params["expand_pct"] = max(MIN_PCT, min(as_int(raw.get("expand_pct"), DEFAULT_PCT, MIN_PCT, MAX_PCT),
-                                            MAX_PCT))
+    params = common_params(raw, JobKind.outpaint.value)
+    require_model_access(params)
+    attach_inputs(JobKind.outpaint.value, params, [require_upload(await save_upload(image))])
+    outpaint_extras(params, raw)
     return await submit(JobKind.outpaint.value, params, _outpaint_handler)
 
 
@@ -528,8 +608,10 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         gen_w, gen_h = raw.size
         post_start = 0.85 + 0.15 * (i / max(1, len(images_b64)))
         post_end = 0.85 + 0.15 * ((i + 1) / max(1, len(images_b64)))
-        img, post = apply_image_post(raw, params, cb, start=post_start, end=post_end)
-        meta = image_meta(params, img, width=gen_w, height=gen_h, post=post,
+        warnings: list[str] = []
+        img, post = apply_image_post(raw, params, cb, start=post_start, end=post_end,
+                                     warnings=warnings)
+        meta = image_meta(params, img, width=gen_w, height=gen_h, post=post, warnings=warnings,
                           prompt=prompts[i] if i < len(prompts) else prompts[0],
                           seed=seeds[i] if i < len(seeds) else seeds[0],
                           negative_prompt=negatives[i] if i < len(negatives) else negatives[0],
@@ -544,8 +626,8 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
 @router.post("/generate/image/remote")
 @router.post("/generate/image/colab", deprecated=True)
 async def gen_remote(payload: str = Form(...)) -> dict:
-    params = _common_params(parse_payload(payload), JobKind.image_colab.value)
-    fanned = await _maybe_fanout(JobKind.image_colab.value, params, _remote_image_handler)
+    params = common_params(parse_payload(payload), JobKind.image_colab.value)
+    fanned = await maybe_fanout(JobKind.image_colab.value, params, _remote_image_handler)
     return fanned or await submit(JobKind.image_colab.value, params, _remote_image_handler)
 
 
@@ -573,10 +655,11 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         job_id=job_id)
     raw = decode_remote_image(resp["image_b64"])
     gen_w, gen_h = raw.size
-    img, post = apply_image_post(raw, params, cb, start=0.9, end=1.0)
+    warnings: list[str] = []
+    img, post = apply_image_post(raw, params, cb, start=0.9, end=1.0, warnings=warnings)
     meta = image_meta(params, img, prompt=prompt, seed=seed, inputs=len(paths),
                       negative_prompt=negative,
-                      width=gen_w, height=gen_h, post=post,
+                      width=gen_w, height=gen_h, post=post, warnings=warnings,
                       model=settings.qwen_edit_model, remote=True)
     aid = persist_image(img, job_id=job_id, generator="colab_edit", meta=meta, tag="edit",
                          params=params)
@@ -587,9 +670,9 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
 async def gen_edit(payload: str = Form(...), image: UploadFile | None = None,
                    image_2: UploadFile | None = None,
                    image_3: UploadFile | None = None) -> dict:
-    params = _common_params(parse_payload(payload), JobKind.image_edit.value)
+    params = common_params(parse_payload(payload), JobKind.image_edit.value)
     paths = [await save_upload(f) for f in (image, image_2, image_3) if f is not None]
-    params["image_paths"] = [p for p in paths if p]
+    attach_inputs(JobKind.image_edit.value, params, [p for p in paths if p])
     if not params["image_paths"]:
         raise HTTPException(status_code=400, detail="input image required")
     return await submit(JobKind.image_edit.value, params, _remote_edit_handler)
@@ -627,11 +710,13 @@ def _control_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         except SkipItem:
             continue
         gen_w, gen_h = img.size
+        warnings: list[str] = []
         img, post = apply_image_post(
-            img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+            img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+            warnings=warnings)
         meta = image_meta(params, img, prompt=prompt, seed=seed,
                           negative_prompt=negative,
-                          width=gen_w, height=gen_h, post=post,
+                          width=gen_w, height=gen_h, post=post, warnings=warnings,
                           control_mode=params.get("control_mode"),
                           control_weight=params.get("control_weight"),
                           model=settings.local_image_model, **metrics)
@@ -642,12 +727,11 @@ def _control_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
 
 @router.post("/generate/image/control")
 async def gen_control(payload: str = Form(...), image: UploadFile | None = None) -> dict:
-    _require_local_gpu()
+    require_local_gpu()
     p = parse_payload(payload)
-    params = _common_params(p, JobKind.image_local.value)  # sizing/steps like local txt2img
-    params["control_mode"] = p.get("control_mode", "canny")
-    params["control_weight"] = as_float(p.get("control_weight"), 0.7, 0.0, 1.0)
-    params["image_path"] = require_upload(await save_upload(image))
+    params = common_params(p, JobKind.image_local.value)  # sizing/steps like local txt2img
+    control_extras(params, p)
+    attach_inputs(JobKind.control_local.value, params, [require_upload(await save_upload(image))])
     return await submit(JobKind.control_local.value, params, _control_handler)
 
 

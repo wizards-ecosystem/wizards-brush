@@ -47,6 +47,24 @@ The full OFL-1.1 text and both copyright notices are included in the generated
 frontend as `/third-party-notices.txt`. Upstream package copies live in
 `@fontsource-variable/instrument-sans` and `@fontsource-variable/newsreader`.
 
+## Background-removal model (downloaded on first use)
+
+The optional `background_removal` finishing step downloads the BiRefNet-lite
+ONNX weights (`onnx-community/BiRefNet_lite-ONNX`, pinned commit
+`de15b22ba131738a16dff04aab8bdf8dc32e3ac1`, SHA-256
+`5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333`) into
+`models/weights/` the first time it runs. The file is not part of the source
+tree or the standalone archive.
+
+Copyright (c) 2024 ZhengPeng. The upstream project
+(<https://github.com/ZhengPeng7/BiRefNet>), its `ZhengPeng7/BiRefNet_lite`
+weights and the ONNX export are each published under the MIT License, verified
+at all three layers rather than from a wrapper package. The weights' training
+datasets carry their own terms, which a weight licence does not settle; review
+them before commercial deployment. BRIA RMBG weights are deliberately not used
+because their licence is non-commercial. See
+[docs/model-licenses.md](docs/model-licenses.md).
+
 ## Other dependencies
 
 Python packages are downloaded into each user's project-local environment and

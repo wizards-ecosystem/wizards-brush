@@ -6,8 +6,11 @@ export interface ShowIf {
 export interface Control {
   name: string;
   label: string;
-  type: "textarea" | "slider" | "number" | "select" | "toggle" | "segmented" | "aspect" | "lora";
+  type:
+    "textarea" | "slider" | "number" | "select" | "toggle" | "segmented" | "aspect" | "lora" | "finishing";
   default: any;
+  /** type "finishing": the processors this install offers, with their options. */
+  processors?: VariantProcessor[];
   min?: number;
   max?: number;
   step?: number;
@@ -515,4 +518,227 @@ export interface CollectionInfo {
 /** Response of GET /api/jobs/next — see `api.nextPicks`. */
 export interface NextPicks {
   lanes: Record<string, { job_id: number; reason: string | null }>;
+}
+
+// ---- Variant Sets -------------------------------------------------------------
+// A recipe is a reusable definition; a set is one execution of it. These mirror
+// backend/app/variant_sets/recipe.py — the backend validates everything, so the
+// shapes here are for building requests and reading results, not for policy.
+
+export interface VariantAxisSpec {
+  name: string;
+  values: string[];
+}
+
+export interface VariantNamingSpec {
+  template: string;
+  prefix: string;
+}
+
+// ---- the unified job API (POST /api/jobs; docs/api.md) -------------------------
+export interface JobCreate {
+  kind: string;
+  params?: Record<string, unknown>;
+  inputs?: { images?: number[]; mask?: number | null; last_frame?: number | null };
+  request_id?: string;
+}
+
+export interface JobSubmission {
+  job_id: number;
+  job_ids: number[];
+  group_id: string | null;
+  duplicate: boolean;
+}
+
+export interface JobWait {
+  job: Job;
+  settled: boolean;
+  assets: Asset[];
+}
+
+export interface JobKindInfo {
+  kind: string;
+  title: string;
+  description: string;
+  category: "generator" | "tool";
+  output: string;
+  lane: "local" | "remote";
+  available: boolean;
+  unavailable_reason: string | null;
+  inputs: {
+    images: { min: number; max: number; asset_kind: string };
+    mask: "none" | "required";
+    last_frame: boolean;
+  };
+  params: Record<string, any>;
+}
+
+export interface VariantFinishingStep {
+  processor: string;
+  [option: string]: unknown;
+}
+
+export interface VariantValidationSpec {
+  format?: "PNG" | "JPEG" | "WEBP" | null;
+  width?: number | null;
+  height?: number | null;
+  alpha?: "any" | "required" | "forbidden";
+  corners_transparent?: boolean;
+  min_transparent_fraction?: number | null;
+  max_transparent_fraction?: number | null;
+  safe_margin?: number | null;
+  transparent_threshold?: number;
+}
+
+export interface VariantStageSpec {
+  name?: string;
+  operation: string;
+  axes: VariantAxisSpec[];
+  prompt: string;
+  negative_prompt?: string;
+  params: Record<string, any>;
+  value_params?: Record<string, Record<string, Record<string, any>>>;
+  mask?: string | null;
+  references?: number[];
+  finishing?: VariantFinishingStep[];
+  validation?: VariantValidationSpec;
+  naming?: VariantNamingSpec;
+}
+
+export interface VariantRecipeSpec {
+  version?: 1;
+  sources: number[];
+  masks?: Record<string, { asset_id: number }>;
+  content?: Record<string, Record<string, string>>;
+  seed?: { mode: "fixed" | "per_variant"; value: number };
+  stages: VariantStageSpec[];
+}
+
+export interface VariantRecipe {
+  id: number;
+  name: string;
+  description: string;
+  recipe: VariantRecipeSpec;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VariantOperation {
+  kind: string;
+  title: string;
+  min_sources: number;
+  max_sources: number;
+  mask: "none" | "required";
+  takes_source: boolean;
+  note: string;
+  lane: "local" | "remote";
+}
+
+export interface VariantProcessor {
+  name: string;
+  label: string;
+  description: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  options: Control[];
+}
+
+export interface VariantCapabilities {
+  operations: VariantOperation[];
+  set_controlled: string[];
+  finishing: VariantProcessor[];
+  validators: string[];
+  cap: number;
+  limits: { stages: number; axes_per_stage: number; values_per_axis: number; value_chars: number };
+}
+
+export interface VariantPreviewItem {
+  stage: number;
+  key: string;
+  values: Record<string, string>;
+  prompt: string;
+  negative_prompt: string;
+  seed: number | null;
+  output_name: string;
+}
+
+export interface VariantPreview {
+  total: number;
+  cap: number;
+  stages: { index: number; name: string; operation: string; count: number; total: number; naming: string }[];
+  items: VariantPreviewItem[];
+  collisions: { stage: number; name: string; keys: string[] }[];
+  warnings: string[];
+}
+
+export type VariantItemState =
+  "pending" | "queued" | "succeeded" | "invalid" | "failed" | "canceled" | "blocked";
+
+export interface VariantCounts {
+  total: number;
+  pending: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  invalid: number;
+  failed: number;
+  canceled: number;
+  blocked: number;
+  stages?: ({ stage: number; total: number } & Partial<Record<VariantItemState | "running", number>>)[];
+}
+
+export interface VariantValidationResult {
+  validator: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+  details: Record<string, any>;
+}
+
+export interface VariantItem {
+  id: number;
+  stage: number;
+  ordinal: number;
+  key: string;
+  values: Record<string, string>;
+  state: VariantItemState;
+  state_reason: string;
+  job_id: number | null;
+  job_status: Job["status"] | null;
+  progress: number | null;
+  attempts: number;
+  parent_item_id: number | null;
+  source_asset_ids: number[];
+  asset_ids: number[];
+  asset: Asset | null;
+  validation_state: "pending" | "passed" | "warned" | "failed" | "skipped";
+  validation: VariantValidationResult[];
+  output_name: string;
+  prompt: string;
+  seed: number | null;
+  history: Record<string, any>[];
+}
+
+export interface VariantSetSummary {
+  id: number;
+  name: string;
+  status: "active" | "complete" | "incomplete" | "canceled";
+  operation: string;
+  recipe_id: number | null;
+  group_id: string;
+  expected: number;
+  counts: Partial<VariantCounts>;
+  collection_id: number | null;
+  source_asset_ids: number[];
+  stages: { index: number; name: string; operation: string; axes: VariantAxisSpec[] }[];
+  replay: Record<string, any>;
+  canceled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created?: boolean;
+}
+
+export interface VariantSetDetail extends VariantSetSummary {
+  /** The frozen recipe snapshot the set executes. */
+  recipe?: VariantRecipeSpec;
+  items: VariantItem[];
 }

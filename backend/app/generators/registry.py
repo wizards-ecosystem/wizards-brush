@@ -274,6 +274,11 @@ _POST = [
     {"name": "post_scale", "label": "Upscale factor", "type": "select", "default": "4",
      "options": ["2", "4"], "section": "Advanced", "hint_key": "post_scale",
      "show_if": {"field": "post_upscale", "equals": True}},
+    # Named processors (app/finishing.py) after the preset's steps: background
+    # removal, exact resize/pad, upscale, face restore — the same chain a
+    # Variant Set stage runs, available to any single generation.
+    {"name": "finish_steps", "label": "Finishing steps", "type": "finishing", "default": [],
+     "section": "Advanced", "hint_key": "finish_steps"},
 ]
 _POST_VIDEO = [
     {"name": "post_interpolate", "label": "Smooth motion (interpolate ×2)", "type": "toggle",
@@ -612,15 +617,24 @@ def registry() -> list[dict]:
     adding one is a single-line change to SEARCH_ALIASES and cannot drift out of
     step with the entries themselves.
     """
-    return [_with_aliases(entry) for entry in _entries()]
+    from ..finishing import describe
+
+    processors = describe()
+    return [_with_aliases(entry, processors) for entry in _entries()]
 
 
-def _with_aliases(entry: dict) -> dict:
+def _with_aliases(entry: dict, processors: list[dict] | None = None) -> dict:
     controls = [
         ({**control, "sweepable": True}
          if control.get("name") in GRID_SWEEPABLE else control)
         for control in entry.get("controls", [])
     ]
+    # A finishing list renders from the processors this install can run, so the
+    # form offers exactly what app/finishing.py will accept.
+    if processors is not None:
+        controls = [({**control, "processors": processors}
+                     if control.get("type") == "finishing" else control)
+                    for control in controls]
     entry = {**entry, "controls": controls}
     if entry.get("device") == "local":
         from ..backends.local import unavailable_reason

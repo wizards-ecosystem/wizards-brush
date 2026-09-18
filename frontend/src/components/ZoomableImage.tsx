@@ -95,7 +95,7 @@ export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
         src={src}
         alt={alt}
         draggable={false}
-        className="max-h-[88vh] max-w-full object-contain select-none"
+        className="transparency-grid max-h-[88vh] max-w-full object-contain select-none"
         style={{
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           cursor: zoom > MIN_ZOOM ? (dragging ? "grabbing" : "grab") : "zoom-in",

@@ -5,7 +5,8 @@ Use the shortest guide that answers the question in front of you.
 | Guide | Use it for |
 | --- | --- |
 | [Getting started](getting-started.md) | Requirements, installation, LAN access, updates, backup, and removal |
-| [User guide](user-guide.md) | First render, editing workflows, queue, gallery, exports, and privacy |
+| [User guide](user-guide.md) | First render, editing workflows, variant sets, queue, gallery, exports, and privacy |
+| [HTTP API](api.md) | Scripting generation, tools and variant sets: import, queue, wait, download, export |
 | [Architecture](architecture.md) | Components, data flow, trust boundaries, and extension points |
 | [Distribution](distribution.md) | Standalone bundle contract, reproducible build, checksums, and publishing flow |
 | [Network security](network-security.md) | Localhost, authenticated LAN access, TLS, CORS, and scoped WSL firewall rules |

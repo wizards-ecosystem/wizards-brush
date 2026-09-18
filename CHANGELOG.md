@@ -8,6 +8,66 @@ contributors know which user-facing changes need release notes.
 
 No changes yet.
 
+## [0.1.2] - 2026-09-18
+
+### Added
+
+- Variant Sets: take approved source material, vary it along named axes, and
+  run every combination as its own tracked job through the existing operations
+  (image edit, img2img, inpaint, outpaint, ControlNet, text-to-image). Recipes
+  are reusable definitions; each set keeps an immutable snapshot, per-variant
+  state, validation and lineage, survives restarts, retries only failed and
+  invalid variants, reruns one variant on purpose, and exports its successful
+  outputs under deterministic names with a manifest. Optional ordered stages
+  derive new variants from each successful output of the stage before.
+- A configurable per-set cap, `VARIANT_MAX_COMBINATIONS` (default 1000), checked
+  before anything is queued.
+- Named finishing steps behind the existing finishing pipeline: exact resize,
+  and optional background removal producing genuine PNG alpha (BiRefNet-lite,
+  MIT, downloaded on first use at a pinned commit and checksum).
+- Deterministic output validation: readable file, format, exact size, alpha
+  required or forbidden, transparent corners and coverage, and safe margins.
+- A first-class HTTP API, documented in `docs/api.md`: `POST /api/jobs` queues
+  any generator or tool from JSON settings and gallery asset ids, validated
+  strictly against the same controls the interface renders; `GET /api/jobs/kinds`
+  publishes each kind's inputs and a JSON Schema; `GET /api/jobs/{id}/wait` and
+  `GET /api/variant-sets/{id}/wait` long-poll for results;
+  `POST /api/assets/import` brings images in with their transparency; and
+  `GET /api/assets/{id}/file` serves files to token-authenticated scripts.
+  `scripts/api_example.py` is a working client. OpenAPI now describes the
+  responses of these routes and of Variant Sets.
+- A background matte tool (BiRefNet-lite): cut the subject out to a
+  transparent PNG, or save the subject or its surroundings as a reusable mask.
+  The Variant Set editor uses it to make an inpaint mask in one click.
+- Finishing steps (background removal, exact resize, upscale, face restore, in
+  any order) are available to every image generator under Full controls.
+- Any generation or variant set can be copied as a runnable API request.
+- The Variant Set editor imports a source from disk and picks reference images
+  for derived stages; the set page shows each derived variant's input, pages
+  long stages, reruns a variant together with its dependents, and can
+  duplicate, save as a recipe, or delete a set.
+
+### Changed
+
+- The database gains the Variant Set tables (migration `0008`). A backup of
+  `output/gen.db` is written before it runs; 0.1.1 will not open the migrated
+  database, so keep that backup to roll back.
+- Gallery ZIP export and Variant Set export share one archive writer; the
+  gallery export's contents are unchanged.
+- Thumbnails of transparent images are laid on neutral grey instead of showing
+  the pixels hidden under the transparency.
+- Queue-page Retry of a failed Variant Set child retries its variant, so the
+  set keeps tracking the new attempt.
+- Reloading the app no longer re-announces the last twenty jobs' failures, and
+  a Variant Set is announced once when it settles instead of once per failed
+  child.
+- Viewers show transparency on a checkerboard.
+
+### Fixed
+
+- A job lane restarted in the same process (a second app lifespan) stayed bound
+  to its first, closed event loop, so nothing queued afterwards ran.
+
 ## [0.1.1] - 2026-09-06
 
 ### Changed
@@ -71,5 +131,6 @@ No changes yet.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.2]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.2
 [0.1.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.1
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.0

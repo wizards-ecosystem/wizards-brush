@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Form, UploadFile
 
@@ -125,6 +126,23 @@ def _video_handler(kind: str):
         return {"asset_ids": [asset_id]}
 
     return handler
+
+
+def build_params(kind: str, raw: dict, image_paths: Sequence[str] = (),
+                 last_image_path: str | None = None) -> dict:
+    """The complete params the generate route for video `kind` would persist.
+
+    For callers that hold their inputs as files already (a gallery asset rather
+    than an upload), so the job is indistinguishable from a form submission.
+    """
+    if kind == JobKind.long_video.value:
+        return _long_params(raw)
+    params = _video_params(raw, kind)
+    if kind == JobKind.i2v.value:
+        params["image_path"] = image_paths[0]
+        if last_image_path:  # FLF2V (first+last frame) — optional
+            params["last_image_path"] = last_image_path
+    return params
 
 
 @router.post("/generate/video/t2v")
