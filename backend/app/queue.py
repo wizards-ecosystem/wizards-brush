@@ -326,8 +326,18 @@ class JobQueue:
     def start(self) -> None:
         loop = asyncio.get_running_loop()
         hub.bind_loop(loop)
-        if self._task is None:
+        # A second app lifespan in one process (tests, an embedding host) finds
+        # the previous worker bound to a loop that has since closed: it will
+        # never run again, so starting must replace it rather than trust it.
+        stale = self._task is not None and (self._task.done()
+                                            or self._task.get_loop().is_closed())
+        if self._task is None or stale:
+            # asyncio primitives bind to the loop that first awaits them.
+            self._wake = asyncio.Event()
+            self._current = None
             self._task = loop.create_task(self._run())
+            if self._pending:
+                self._wake.set()
 
     async def submit(self, job_id: int, handler: Handler, kind: str = "") -> None:
         # A queued job may already be back on this lane because the server is

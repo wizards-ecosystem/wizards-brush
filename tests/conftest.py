@@ -109,14 +109,34 @@ def no_queue(monkeypatch):
     return
 
 
+def _settle_leftover_jobs() -> None:
+    """Cancel rows other modules left `queued`.
+
+    Most tests stub the queue out (`no_queue`), so their jobs stay queued in
+    the shared database. The app resumes queued rows at startup and its lanes
+    really run them, so without this each module would start by executing the
+    previous modules' jobs with real handlers.
+    """
+    from backend.app import db
+    from backend.app.models import JobStatus
+
+    db.init_db()
+    for job in db.list_jobs(status=JobStatus.queued.value, limit=100_000):
+        if job.id is not None:
+            db.update_job(job.id, status=JobStatus.canceled.value,
+                          message="canceled: left queued by an earlier test module")
+
+
 @pytest.fixture(scope="module")
 def client():
-    """TestClient with lifespan (init_db + lanes). Module-scoped so per-module
-    reconcile_orphans doesn't cancel jobs created by earlier test files."""
+    """TestClient with lifespan (init_db + lanes), starting on an empty queue.
+    Module-scoped so per-module reconcile_orphans doesn't cancel jobs created
+    by earlier tests in the same file."""
     from fastapi.testclient import TestClient
 
     from backend.app.main import app
 
+    _settle_leftover_jobs()
     with TestClient(app, base_url="http://localhost") as c:
         yield c
 
