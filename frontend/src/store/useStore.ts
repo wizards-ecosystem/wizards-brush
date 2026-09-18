@@ -30,6 +30,10 @@ interface State {
   /** Monotonic signal for pages with their own paginated asset query. The
    * recent-assets snapshot is data, not a reliable invalidation channel. */
   assetRevision: number;
+  /** Bumped by every `variant_set` event on the job socket. Variant Set pages
+   *  refetch when it moves, so a set's state changes that are not job events —
+   *  a variant validated, blocked or unblocked — still reach the screen. */
+  variantRevision: number;
   toasts: Toast[];
   ws: WebSocket | null;
   booted: boolean;
@@ -55,6 +59,7 @@ export const useStore = create<State>((set, get) => ({
   loads: {},
   assets: [],
   assetRevision: 0,
+  variantRevision: 0,
   toasts: [],
   ws: null,
   booted: false,
@@ -114,6 +119,10 @@ export const useStore = create<State>((set, get) => ({
                 get().refreshAssets();
               }, 250);
             }
+            return;
+          }
+          if (e.type === "variant_set") {
+            set((state) => ({ variantRevision: state.variantRevision + 1 }));
             return;
           }
           if (e.type !== "job" && e.type !== "model_load") return;

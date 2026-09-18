@@ -12,6 +12,7 @@ import { ZoomableImage } from "./ZoomableImage";
 // Rendered on their own above, so they must not also appear in the generic
 // key/value dump below.
 const META_HIDE = new Set([
+  "variant",
   "auto_tags",
   "warnings",
   "ignored_params",
@@ -401,6 +402,26 @@ export function AssetModal({
               </Button>
             </div>
           </div>
+
+          {meta.variant?.set_id != null && (
+            <div className="border-l-2 border-accent2 py-1 pl-3 text-xs text-muted">
+              <div className="technical text-[10px] uppercase tracking-wide">Variant set</div>
+              <div className="mt-0.5 text-ink/85">
+                {Object.entries((meta.variant.values as Record<string, string>) || {})
+                  .map(([axis, value]) => `${axis}: ${value}`)
+                  .join(" · ") || meta.variant.key}
+              </div>
+              <button
+                className="mt-1 text-accent underline underline-offset-2"
+                onClick={() => {
+                  onClose();
+                  navigate(`/variants/${meta.variant.set_id}`);
+                }}
+              >
+                Open set #{meta.variant.set_id}
+              </button>
+            </div>
+          )}
 
           {asset.caption && (
             <div className="border-l-2 border-accent pl-3 text-sm italic leading-relaxed text-muted">

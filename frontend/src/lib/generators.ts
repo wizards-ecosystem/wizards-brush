@@ -35,6 +35,9 @@ export const HIDE_KEYS = new Set([
   "source_asset_id",
   "src_width",
   "src_height",
+  // Variant Set lineage and its finishing chain: set by the set, never a form value.
+  "variant",
+  "finish_steps",
 ]);
 
 export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "A100" {

@@ -80,6 +80,18 @@ describe("useStore", () => {
     expect(revoked).toContain(first);
   });
 
+  it("variant_set events ride the job socket and bump the set revision", async () => {
+    // Set state that is not a job event (a variant validated, blocked or
+    // unblocked) must still reach the set pages, without a second socket and
+    // without disturbing the jobs map.
+    await useStore.getState().boot();
+    const before = useStore.getState().variantRevision;
+    const jobs = useStore.getState().jobs;
+    emit({ type: "variant_set", id: 3, status: "active", counts: { total: 4 } });
+    expect(useStore.getState().variantRevision).toBe(before + 1);
+    expect(useStore.getState().jobs).toBe(jobs);
+  });
+
   it("refreshJobs prunes previews for jobs no longer running", async () => {
     await useStore.getState().boot();
     useStore.setState({ previews: { 9: "blob:stale-preview" } });

@@ -402,6 +402,15 @@ export function Queue() {
               </button>
             )}
 
+            {sel.params?.variant?.set_id != null && (
+              <button
+                className="btn w-full text-xs"
+                onClick={() => navigate(`/variants/${sel.params.variant.set_id}`)}
+              >
+                Open variant set · {sel.params.variant.key || "variant"}
+              </button>
+            )}
+
             {sel.error && (
               <div className="border-l-2 border-danger bg-danger/8 p-3 text-xs text-danger">
                 {/* Lead with what to do about it. A Python traceback is the
