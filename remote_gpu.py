@@ -259,7 +259,9 @@ def _bootstrap() -> None:
     if (sys.version_info[:2] != (3, 12) or sys.platform != "linux"
             or platform.machine().lower() not in {"x86_64", "amd64"}):
         raise RuntimeError(
-            "the hashed Remote GPU dependency lock supports Linux x86-64 with Python 3.12"
+            "the hashed Remote GPU dependency lock supports Linux x86-64 with Python 3.12; "
+            f"this runtime is {sys.platform} {platform.machine()} with Python "
+            f"{sys.version_info.major}.{sys.version_info.minor}"
         )
 
     requirement_id = hashlib.sha256(REMOTE_GPU_REQUIREMENTS_LOCK.encode()).hexdigest()

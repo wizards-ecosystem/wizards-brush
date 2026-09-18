@@ -26,6 +26,8 @@ Provision a remote environment with:
 - Python 3.12 on Linux x86-64, Git, and enough local ephemeral disk for the
   models you enable. The worker refuses other Python/platform combinations
   because its reviewed binary hashes would not describe their artifacts.
+  Managed runtimes can move to a newer default Python, so pin one that ships
+  3.12 and confirm it with `python --version` before starting the worker.
 - A public HTTPS route to the service. The built-in Cloudflare quick tunnel is a
   convenience path for a machine you control; an operator-managed reverse proxy
   or tunnel is also suitable if it forwards HTTPS to the worker.
