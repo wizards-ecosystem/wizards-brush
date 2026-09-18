@@ -327,7 +327,7 @@ async def submit_items(row: VariantSet, items: Iterable[VariantItem]) -> int:
                          for i, _p, _s in batch],
             record_history=False,
         )
-        for (item, params, source_ids), (job, _created) in zip(batch, results, strict=False):
+        for (item, params, source_ids), (job, created) in zip(batch, results, strict=False):
             assert item.id is not None and job.id is not None
             if job.group_id != row.group_id:   # impossible with group-scoped ids; never adopt
                 logger.error("variant item %s resolved to job %s of another run", item.id, job.id)
@@ -342,7 +342,16 @@ async def submit_items(row: VariantSet, items: Iterable[VariantItem]) -> int:
             )
             if won:
                 submitted += 1
-            else:  # canceled while its job was being created
+                continue
+            # Lost the transition. A concurrent submission (the listener and a
+            # read-time reconcile can both find a child runnable) may have linked
+            # this very job, recovered through its request id: that is success,
+            # not something to undo. Only a job this call created and no item
+            # owns - its item was canceled meanwhile - is canceled.
+            current = store.get_item(item.id)
+            if current is not None and current.job_id == job.id:
+                continue
+            if created:
                 cancel_job(int(job.id))
     return submitted
 

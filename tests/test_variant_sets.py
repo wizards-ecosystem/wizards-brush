@@ -627,3 +627,44 @@ def test_a_deleted_set_never_lends_its_ids_or_jobs_to_the_next(client, enqueued,
     assert {j.group_id for j in new_jobs} == {second["group_id"]}
     assert all(j.params["variant"]["group_id"] == second["group_id"] for j in new_jobs)
     assert all(second["group_id"] in j.request_id for j in new_jobs)
+
+
+def test_two_submitters_racing_for_one_child_never_cancel_its_job(client, enqueued, source,
+                                                                  remote):
+    """The listener and a read-time reconcile can both find a child runnable.
+    Both resolve to one job through its request id; the one that loses the item
+    transition must not cancel the job the winner just linked."""
+    set_id = client.post("/api/variant-sets", json={"recipe": _staged(source.id)}).json()["id"]
+    wood = _items(set_id)[0]
+    job = db.get_job(wood.job_id)
+    asyncio.run(qmod.JobQueue("test")._execute(int(wood.job_id), common.get_handler(job.kind),
+                                               job.kind))
+    outcome = service.process_job_terminal(int(wood.job_id))
+    children = store.get_items(outcome.runnable)
+    row = store.get_set(set_id)
+
+    async def race():
+        await asyncio.gather(service.submit_items(row, children),
+                             service.submit_items(row, children))
+
+    asyncio.run(race())
+    for child in children:
+        linked = store.get_item(child.id)
+        assert linked.state == "queued" and linked.attempts == 1
+        assert db.get_job(linked.job_id).status == "queued", "the shared job survived"
+    assert len([j for j in db.list_jobs_by_group(row.group_id) if j.params.get("variant", {})
+                .get("stage") == 1]) == 2
+
+
+def test_queue_page_retry_moves_the_failed_attempt_out_of_the_live_queue(client, enqueued,
+                                                                        source, remote):
+    recipe = {"sources": [source.id], "stages": [{"operation": "image_edit",
+                                                  "prompt": f"{FAIL_REMOTE} {{{{a}}}}",
+                                                  "axes": [{"name": "a", "values": ["x"]}]}]}
+    set_id = client.post("/api/variant-sets", json={"recipe": recipe}).json()["id"]
+    item = _items(set_id)[0]
+    run_child(int(item.job_id))
+    r = client.post(f"/api/jobs/{item.job_id}/rerun?reseed=false").json()
+    old = db.get_job(item.job_id)
+    assert old.status == "canceled" and old.message == f"superseded by retry #{r['job_id']}"
+    assert store.get_item(item.id).history[-1]["state"] == "failed"

@@ -201,6 +201,13 @@ async def rerun(job_id: int, reseed: bool = False) -> dict:
             except variant_sets.VariantSetError as error:
                 raise HTTPException(status_code=error.status, detail=error.detail) from None
             if redirected is not None:
+                # Like an ordinary Retry, the failed attempt leaves the live queue;
+                # the item keeps it in its history.
+                if job.status == JobStatus.error.value:
+                    db.update_job(job_id, status=JobStatus.canceled.value,
+                                  message=f"superseded by retry #{redirected['job_id']}")
+                    hub.emit({"type": "job", "id": job_id, "kind": job.kind,
+                              "status": JobStatus.canceled.value})
                 return redirected
     params = dict(job.params)
     if reseed and "seed" in params:
