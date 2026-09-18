@@ -6,6 +6,10 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+No changes yet.
+
+## [0.1.2] - 2026-09-18
+
 ### Added
 
 - Variant Sets: take approved source material, vary it along named axes, and
@@ -45,6 +49,9 @@ contributors know which user-facing changes need release notes.
 
 ### Changed
 
+- The database gains the Variant Set tables (migration `0008`). A backup of
+  `output/gen.db` is written before it runs; 0.1.1 will not open the migrated
+  database, so keep that backup to roll back.
 - Gallery ZIP export and Variant Set export share one archive writer; the
   gallery export's contents are unchanged.
 - Thumbnails of transparent images are laid on neutral grey instead of showing
@@ -124,5 +131,6 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.2]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.2
 [0.1.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.1
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.0
