@@ -81,6 +81,24 @@
   controls on those features through `_remote_has()`, so the UI never offers what the live
   session cannot actually do
 - `backend/app/enrichment.py` - async post-save worker (Florence-2 captions/auto-tags on CPU); never blocks generation
+- `backend/app/variant_sets/` - Variant Sets: named axes x one template over shared sources.
+  **No new job kind and no new job status**: children are ordinary jobs of existing kinds,
+  built by `routers.images.build_params` and created by `routers.common.submit_group` (the
+  one fan-out primitive, also behind grids and combinatorial prompts) under the set's
+  `vset-<uuid>` `group_id`. Pending/blocked/validation state lives on `variantitem`; a job
+  exists only once an item can run. Child request ids are scoped by that random group id,
+  never by row ids alone (a deleted set's ids were once recycled and its jobs adopted), and
+  the three tables are AUTOINCREMENT. Completion is a compare-and-set on the finishing job;
+  `queue.on_job_terminal` is an optimisation and `reconcile_set` (startup + every read) is
+  the truth. The recipe snapshot on a set is immutable; retry reuses an item's stored
+  effective params. Nothing in the package may know what an axis *means*
+- `backend/app/finishing.py` + `backend/app/validators/` - named finishing processors behind
+  the optional `finish_steps` param (runs after the unchanged `finish` preset; a failed step
+  keeps the prior image and goes to `warnings`, never to `post`), and Pillow-only output
+  checks. Background removal is BiRefNet-lite ONNX (MIT, pinned + SHA-256, in NOTICE);
+  BRIA RMBG weights are non-commercial and must not be used
+- `backend/app/exports.py` - the single ZIP writer for gallery and Variant Set exports; the
+  `embed_metadata` privacy setting governs manifests, and server paths never enter one
 - `frontend/src/lib/generators.ts` - GEN_TO_SPEC / laneOf / HIDE_KEYS shared maps; `lib/jobEvents.ts` - pure WS reducer (previews kept OUT of the jobs map)
 
 ## Licence boundary

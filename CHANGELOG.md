@@ -6,7 +6,32 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- Variant Sets: take approved source material, vary it along named axes, and
+  run every combination as its own tracked job through the existing operations
+  (image edit, img2img, inpaint, outpaint, ControlNet, text-to-image). Recipes
+  are reusable definitions; each set keeps an immutable snapshot, per-variant
+  state, validation and lineage, survives restarts, retries only failed and
+  invalid variants, reruns one variant on purpose, and exports its successful
+  outputs under deterministic names with a manifest. Optional ordered stages
+  derive new variants from each successful output of the stage before.
+- A configurable per-set cap, `VARIANT_MAX_COMBINATIONS` (default 1000), checked
+  before anything is queued.
+- Named finishing steps behind the existing finishing pipeline: exact resize,
+  and optional background removal producing genuine PNG alpha (BiRefNet-lite,
+  MIT, downloaded on first use at a pinned commit and checksum).
+- Deterministic output validation: readable file, format, exact size, alpha
+  required or forbidden, transparent corners and coverage, and safe margins.
+
+### Changed
+
+- Gallery ZIP export and Variant Set export share one archive writer; the
+  gallery export's contents are unchanged.
+- Thumbnails of transparent images are laid on neutral grey instead of showing
+  the pixels hidden under the transparency.
+- Queue-page Retry of a failed Variant Set child retries its variant, so the
+  set keeps tracking the new attempt.
 
 ## [0.1.1] - 2026-09-06
 

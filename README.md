@@ -56,13 +56,15 @@ only when you want it.
 | **Create and transform** | Text-to-image, img2img, inpaint, outpaint, ControlNet, instruction editing, image-to-video, text-to-video, and finishing |
 | **Use the right controls** | Each generator publishes its real capabilities, defaults, and limits; the interface adapts to the selected model |
 | **Keep work moving** | Durable queues, live previews, restart recovery, cancellation, and independent local and remote lanes |
+| **Produce whole sets** | Variant Sets: named axes over shared source material, every combination tracked, validated, retried and exported as one durable set |
 | **Build a real library** | Search, captions, tags, collections, favorites, ratings, comparison, soft delete, and portable export |
 | **Reproduce with confidence** | Seeds, effective parameters, adapters, model identity, lineage, and finishing operations stay with each asset |
 | **Own the workspace** | Localhost defaults, project-contained storage, optional API authentication, and metadata controls |
 
 Finishing uses tiled Real-ESRGAN upscaling and GFPGAN face restoration, with
-optional auto-detailing and RIFE frame interpolation. These are explicit,
-recorded steps rather than invisible changes to the generated file.
+optional auto-detailing, RIFE frame interpolation, exact resizing and background
+removal to a real PNG alpha channel. These are explicit, recorded steps rather
+than invisible changes to the generated file.
 
 ## Quick start
 
