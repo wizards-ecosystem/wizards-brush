@@ -110,6 +110,13 @@
   `/jobs/{job_id}`). `GENERATOR_INPUTS` must agree with `variant_sets/operations.py` and every
   kind must appear in `docs/api.md` - both are tests. `scripts/api_example.py` is run by the
   suite through the real queue, so a breaking API change fails it
+- `backend/app/discovery.py` - public, **data-free** self-description outside `/api`:
+  `/llms.txt` (a guide addressed to the live base URL, then `docs/api.md` with its relative
+  links made absolute) and `/openapi.json` (FastAPI's document plus the `X-API-Token`
+  `securitySchemes` and a per-request absolute `servers` URL, which OpenAPI-importing tools
+  and agents require), with `/docs` and `/redoc` over it. FastAPI's own routes are disabled
+  (`openapi_url=None`); the router is included **before** the SPA catch-all. Never serve
+  library data or anything from `output/` here - it answers without the token
 - `backend/app/controls.py` - registry controls as a validation contract and JSON Schema,
   shared by the job API and Variant Set recipes. A new control `type` must be handled here
   and rendered by `DynamicControls` (`tests/test_registry.py` `VALID_TYPES`)

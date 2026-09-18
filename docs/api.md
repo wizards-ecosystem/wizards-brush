@@ -18,6 +18,7 @@ The test suite runs it against the real app, so it stays correct.
 
 ## Contents
 
+- [For AI agents and API tools](#for-ai-agents-and-api-tools)
 - [Authentication](#authentication)
 - [Conventions](#conventions)
 - [Quick start](#quick-start)
@@ -29,6 +30,31 @@ The test suite runs it against the real app, so it stays correct.
 - [Recipes](#recipes)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
+
+## For AI agents and API tools
+
+A program that knows only the base URL can discover everything else from the
+server itself. None of these entry points needs a token, and none contains
+library data:
+
+- `GET /llms.txt` is this guide as plain text for language models. It starts
+  with the live base URL, the authentication rule and the core loop.
+- `GET /openapi.json` is the OpenAPI document. It covers every route and
+  schema, declares the `X-API-Token` header as its security scheme, and names
+  the server's own address under `servers`, as the requesting client reached
+  it. Tools that import OpenAPI, such as API clients, agent frameworks and
+  custom GPT actions, can use it without editing.
+- `GET /docs` and `GET /redoc` are interactive explorers over that document.
+  Use **Authorize** with the token to try requests from `/docs`.
+
+`GET /api/jobs/kinds` then gives the live list of kinds, with a JSON Schema
+for each kind's settings. Like the rest of `/api`, it needs the token.
+
+To hand the service to an AI agent, give it two facts: the base URL and the
+token. Tell it to start at `<base>/llms.txt` and to send the token as
+`X-API-Token` on every `/api` request. The agent needs a tool that can set
+request headers, such as curl, Python or an HTTP action. A browse-only tool
+cannot authenticate.
 
 ## Authentication
 

@@ -6,7 +6,13 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- The API describes itself to programs and AI agents: `GET /llms.txt` is a
+  plain-text guide addressed to the running server, and `GET /openapi.json`
+  declares the `X-API-Token` security scheme and the server's own address, so
+  API tools and agent frameworks can import it without editing. `/docs`
+  gains an **Authorize** button for the token.
 
 ## [0.1.2] - 2026-09-18
 
