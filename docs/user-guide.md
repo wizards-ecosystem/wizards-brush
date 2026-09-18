@@ -48,6 +48,10 @@ Queued jobs survive a normal restart and are resumed. Jobs that were actively
 running are canceled during reconciliation because their original handler no
 longer exists.
 
+A failed job is announced once, when it fails; reloading the page does not
+announce it again. The jobs of a variant set are summarised by their set
+instead: one notice when the set settles, with its counts.
+
 ## Variant sets
 
 A variant set takes approved source material, varies it along named axes, and
@@ -64,6 +68,10 @@ parameter study of one prompt; "variant" here is unrelated to the model picker.
   Use**. Editing a recipe never changes a set already made from it.
 - A **set** is one execution: a frozen snapshot of the recipe plus one item per
   combination, each with its own state, job, output and validation.
+- On a set's page, **Duplicate as new set** opens its recipe in the editor to
+  run again, changed or not; **Save as recipe** keeps it for later; **Delete
+  set** removes the set record once it is no longer running. Its images and
+  jobs stay in the library either way.
 
 ### Axes and the count
 
@@ -95,8 +103,9 @@ engine's own `{a|b}` choices and `__wildcard__` files keep their usual meaning.
 ### A one-stage reference-driven edit
 
 1. **Variants -> New variant set**, then choose **Image Edit**.
-2. **Add from gallery** to pick the reference image (up to three). Every
-   variant uses the same references; only the instruction and settings vary.
+2. **From gallery** picks a reference image (up to three); **Upload** brings
+   one in from this computer, keeping its transparency. Every variant uses the
+   same references; only the instruction and settings vary.
 3. Add axes and values, and write the instruction template.
 4. Adjust the operation's own settings: the same registry controls its
    generator page offers, including its Finishing preset.
@@ -105,17 +114,20 @@ engine's own `{a|b}` choices and `__wildcard__` files keep their usual meaning.
 6. Check the preview (every rendered instruction and output name), then
    **Create set**.
 
-Img2img and outpaint take one source image; inpaint takes one source plus a mask
-painted over it (masks are kept as reusable gallery assets); text-to-image takes
-none; ControlNet appears when it is enabled.
+Img2img and outpaint take one source image; text-to-image takes none; ControlNet
+appears when it is enabled. Inpaint takes one source plus a mask: **Select the
+subject** or **Select the background** makes one in a click (the background
+matte below, run on this machine), or paint it over the source. Masks are kept
+as reusable gallery assets.
 
 ### Staged derivation
 
 **Add a derived stage** runs another operation on every output of the stage
 before it, with its own axes, template and settings, and access to the earlier
 stages' axes. A variant's key accumulates across stages
-(`material=wood,angle=front`). A derived variant waits until its source
-succeeds. If the source fails, is invalid or is canceled, the variant is
+(`material=wood,angle=front`). A derived Image Edit stage can also send up to
+two fixed **reference images** after its source, the same for every variant of
+that stage. A derived variant waits until its source succeeds. If the source fails, is invalid or is canceled, the variant is
 **blocked** and does not run; retrying the source unblocks it. Stages are an
 ordered list, not a graph.
 
@@ -128,8 +140,11 @@ base seed of -1 is resolved once, when the set is created, and recorded.
 
 ### Finishing
 
-The operation's own Finishing preset runs as usual. A set can add explicit
-steps that run inside each variant's job, after the preset:
+The operation's own Finishing preset runs as usual. A set can add an ordered
+list of steps that run inside each variant's job, after the preset, in the
+order shown; move a step up or down to change it. The same list is available to
+any single image generation under **Full controls -> Advanced controls ->
+Finishing steps**.
 
 - **Remove background** writes a real PNG alpha channel at the original size
   using BiRefNet-lite (MIT; a 224 MB weight downloaded on first use). Pixels
@@ -138,6 +153,11 @@ steps that run inside each variant's job, after the preset:
   transparent, which a maximum-transparency check catches.
 - **Resize to an exact size**: contain (with transparent or colour padding),
   cover, or stretch.
+- **Upscale** (Real-ESRGAN, 2x or 4x) and **Restore faces** (GFPGAN), which
+  carry transparency across.
+
+A step that the installation cannot run is named with the reason instead of
+being offered.
 
 A step that cannot run keeps the image from before it and records a warning on
 the asset, and the set marks that variant **invalid**: what was asked for did
@@ -166,9 +186,13 @@ and validation.
   canceled** picks the rest up again.
 - **Rerun** and **New seed** on a row run one variant again on purpose, even a
   successful one. Earlier attempts stay in its history. In a staged set a rerun
-  leaves dependents as they are unless the API's `cascade` option is used.
+  leaves what later stages made from it as it is; **+ later stages** reruns the
+  variant and then everything derived from it.
 - **Retry** on the Queue page for a failed child retries its variant, so the set
   keeps tracking it.
+
+A derived stage shows what each variant was made from, and a long stage shows
+100 rows at a time.
 
 ### Names and export
 
@@ -228,9 +252,24 @@ environment, then review its license and provenance before using the result.
 The **Finish** preset expands into recorded detail, face-restoration, and
 upscale steps. These operations are explicit and appear in the saved metadata.
 Upscaling is tiled and local CPU work is capped so finishing does not monopolize
-the workstation. Variant sets can add further named steps, such as background
-removal to a real PNG alpha channel and resizing to an exact canvas; they are
-recorded in the same processing history.
+the workstation. Any image generation and every variant set stage can add
+further named steps, such as background removal to a real PNG alpha channel and
+resizing to an exact canvas; they are recorded in the same processing history.
+
+**Tools -> Background** runs the background matte (BiRefNet-lite, MIT) on an
+image you already have: **Cut out the subject** saves a transparent PNG, and
+**Mask the subject** or **Mask the background** saves a mask (white = change)
+for inpainting or a variant set. Viewers show transparency on a checkerboard.
+
+## Scripting and the API
+
+Everything here is also available over HTTP, and the interface is one client of
+that API. The [API guide](api.md) covers bringing images in, queuing any
+generator or tool, waiting for results and running variant sets from a script.
+
+To see the request for what is on screen, use **Copy as an API request** (the
+copy icon at the top of any generator's panel) or **Copy API request** in the
+variant set editor. Each copies a runnable `curl` command.
 
 ## Remote GPU
 

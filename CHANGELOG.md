@@ -23,6 +23,25 @@ contributors know which user-facing changes need release notes.
   MIT, downloaded on first use at a pinned commit and checksum).
 - Deterministic output validation: readable file, format, exact size, alpha
   required or forbidden, transparent corners and coverage, and safe margins.
+- A first-class HTTP API, documented in `docs/api.md`: `POST /api/jobs` queues
+  any generator or tool from JSON settings and gallery asset ids, validated
+  strictly against the same controls the interface renders; `GET /api/jobs/kinds`
+  publishes each kind's inputs and a JSON Schema; `GET /api/jobs/{id}/wait` and
+  `GET /api/variant-sets/{id}/wait` long-poll for results;
+  `POST /api/assets/import` brings images in with their transparency; and
+  `GET /api/assets/{id}/file` serves files to token-authenticated scripts.
+  `scripts/api_example.py` is a working client. OpenAPI now describes the
+  responses of these routes and of Variant Sets.
+- A background matte tool (BiRefNet-lite): cut the subject out to a
+  transparent PNG, or save the subject or its surroundings as a reusable mask.
+  The Variant Set editor uses it to make an inpaint mask in one click.
+- Finishing steps (background removal, exact resize, upscale, face restore, in
+  any order) are available to every image generator under Full controls.
+- Any generation or variant set can be copied as a runnable API request.
+- The Variant Set editor imports a source from disk and picks reference images
+  for derived stages; the set page shows each derived variant's input, pages
+  long stages, reruns a variant together with its dependents, and can
+  duplicate, save as a recipe, or delete a set.
 
 ### Changed
 
@@ -32,6 +51,15 @@ contributors know which user-facing changes need release notes.
   the pixels hidden under the transparency.
 - Queue-page Retry of a failed Variant Set child retries its variant, so the
   set keeps tracking the new attempt.
+- Reloading the app no longer re-announces the last twenty jobs' failures, and
+  a Variant Set is announced once when it settles instead of once per failed
+  child.
+- Viewers show transparency on a checkerboard.
+
+### Fixed
+
+- A job lane restarted in the same process (a second app lifespan) stayed bound
+  to its first, closed event loop, so nothing queued afterwards ran.
 
 ## [0.1.1] - 2026-09-06
 
