@@ -155,6 +155,11 @@ class Settings(BaseSettings):
     # Gallery enrichment (async worker; see enrichment.py).
     enrich_captions: bool = Field(default=True, alias="ENRICH_CAPTIONS")
 
+    # Variant Sets: the most generations one set may expand to, across every
+    # stage. Checked before anything is created and never applied by silently
+    # dropping combinations. Clamped to 1..10000 where it is read.
+    variant_max_combinations: int = Field(default=1000, alias="VARIANT_MAX_COMBINATIONS")
+
     # Experimental local ControlNet.
     enable_controlnet: bool = Field(default=False, alias="ENABLE_CONTROLNET")
     controlnet_model: str = Field(
