@@ -109,7 +109,11 @@
   controls. Its router is included **before** `jobs.router` (`/jobs/kinds` vs
   `/jobs/{job_id}`). `GENERATOR_INPUTS` must agree with `variant_sets/operations.py` and every
   kind must appear in `docs/api.md` - both are tests. `scripts/api_example.py` is run by the
-  suite through the real queue, so a breaking API change fails it
+  suite through the real queue, so a breaking API change fails it. Remote kinds are gated
+  on the live worker via `remote_gpu_client.remote_gpu_status()` (re-checks `/health` when
+  its answer is older than 15 s): unavailable in `/kinds`, 503 on submit, a preview
+  warning and a refused Variant Set create. The suite treats the worker as connected
+  (conftest `_remote_gpu_answers`); request `remote_gpu_offline` to test the opposite
 - `backend/app/controls.py` - registry controls as a validation contract and JSON Schema,
   shared by the job API and Variant Set recipes. A new control `type` must be handled here
   and rendered by `DynamicControls` (`tests/test_registry.py` `VALID_TYPES`)
@@ -149,6 +153,12 @@ on a file inside it. The retained decisions and evidence live in
 - **Lazy heavy imports**: torch/diffusers/transformers/imageio/numpy/cv2/timm only inside functions. The test suite asserts none of them get imported (`tests/conftest.py` `_HEAVY` guard) - this is what lets CI run without the CUDA/imaging stack. mypy's `warn_unused_ignores` is scoped OFF for `generators/*` + `utils/io` only (their ignores target optional deps and can't satisfy both the torch-free and full envs).
 - JSON-in-TEXT columns (`params_json`/`meta_json`/`tags_json`) with `@property` accessors; schemaless per-generator params.
 - Routers sanitize inputs (`MAX_PROMPT` in `routers/common.py`, seeds clamped to 2³²−1, batch ≤ 8, dims snapped /16 + capped per device).
+- **API views never show where the app is installed.** Job params hold absolute input paths
+  and errors hold tracebacks: return jobs through `JobRead` / history through
+  `PromptHistoryRead`, or pass params through `redaction.redact`, which shows paths relative
+  to the app folder (`~` for the rest of the home). Stored rows keep the real paths.
+- Document a route's refusals with `error_responses(...)` from `routers/common.py`; every
+  `/api` router already gets 401 from `main.py`.
 - Logging via `backend/app/log.py` (`log.get("tag")` - tag becomes the `[name]` prefix); level comes from `Settings.log_level` (env var beats `.env`); no `print` in `backend/`; scripts and remote_gpu.py keep print.
 - Asset `generator` strings are persisted identifiers - renaming one needs a back-compat
   entry in `frontend/src/lib/generators.ts` GEN_TO_SPEC.

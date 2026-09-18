@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps
+from pydantic import BaseModel, Field
 
 from .. import db, log
 from ..config import settings
@@ -22,6 +23,26 @@ from ..queue import submit as enqueue
 from ..utils.io import save_image, stamp_name
 
 logger = log.get("post")
+
+class ErrorDetail(BaseModel):
+    """The body of every refused request."""
+    detail: str = Field(description="What went wrong, written for the caller to act on.")
+
+
+_ERROR_TEXT = {
+    400: "The request is invalid; `detail` names the setting or input to change.",
+    401: "Missing or wrong `X-API-Token` (only when the server sets API_TOKEN).",
+    404: "No such id, or the asset is in the trash.",
+    409: "The current state does not allow it; `detail` says why.",
+    503: "Not possible on this machine right now, for example the Remote GPU is offline.",
+}
+
+
+def error_responses(*codes: int) -> dict[int | str, dict[str, Any]]:
+    """OpenAPI entries for the refusals a route can answer with, so the document
+    describes failures as well as successes."""
+    return {code: {"model": ErrorDetail, "description": _ERROR_TEXT[code]} for code in codes}
+
 
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024  # generous for a local single-user app
 MAX_UPLOAD_PIXELS = 64_000_000

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from .. import db, scoring
 from ..config import settings
 from ..models import AssetKind, AssetRead
+from .common import error_responses
 
 router = APIRouter(tags=["assets"])
 
@@ -128,7 +129,7 @@ async def purge(req: IdsReq) -> dict:
     return {"ok": True, "purged": db.purge_deleted(req.ids or None)}
 
 
-@router.get("/assets/{asset_id}")
+@router.get("/assets/{asset_id}", responses=error_responses(404))
 async def get_asset(asset_id: int) -> AssetRead:
     a = db.get_asset(asset_id)
     if not a:
@@ -138,7 +139,8 @@ async def get_asset(asset_id: int) -> AssetRead:
 
 @router.get("/assets/{asset_id}/file", response_class=FileResponse,
             responses={200: {"content": {"image/png": {}, "video/mp4": {}},
-                             "description": "The asset's original file."}})
+                             "description": "The asset's original file."},
+                       **error_responses(404)})
 async def get_asset_file(
     asset_id: int,
     download: bool = Query(False, description="Send as an attachment with its file name."),
@@ -188,7 +190,7 @@ def _import_image(data: bytes, role: str) -> Image.Image:
     return image.convert("RGBA" if alpha else "RGB")
 
 
-@router.post("/assets/import")
+@router.post("/assets/import", responses=error_responses(400, 404))
 async def import_asset(
     file: UploadFile,
     role: Literal["source", "mask"] = Form(

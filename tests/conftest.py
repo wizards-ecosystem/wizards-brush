@@ -47,9 +47,12 @@ os.environ["REMOTE_GPU_BASE_URL"] = ""  # env beats .env — keep tests off any 
 # a heavy import on a background thread, so it lands in sys.modules at a
 # nondeterministic point and trips the guard below from an unrelated test.
 os.environ["ENRICH_CAPTIONS"] = "false"
-os.environ.pop("API_TOKEN", None)
+# Set empty rather than removed: a variable that is absent lets pydantic fall
+# back to the developer's own .env, so a token set there turned every API test
+# into a 401. An empty value beats .env, like REMOTE_GPU_BASE_URL above.
+os.environ["API_TOKEN"] = ""
 # Never authenticate against a developer's real tunnel from the test suite.
-os.environ.pop("REMOTE_GPU_SHARED_SECRET", None)
+os.environ["REMOTE_GPU_SHARED_SECRET"] = ""
 
 import pytest
 
@@ -107,6 +110,34 @@ def no_queue(monkeypatch):
 
     monkeypatch.setattr(common, "enqueue", _async_noop)
     return
+
+
+@pytest.fixture(autouse=True)
+def _remote_gpu_answers(request, monkeypatch):
+    """The suite has no Remote GPU worker. The job API and Variant Set creation
+    refuse remote work while it is offline, so it counts as connected unless a
+    test asks for the `remote_gpu_offline` fixture. Only the cached status the
+    gates read is replaced; remote_gpu_health() itself stays real."""
+    if "remote_gpu_offline" in request.fixturenames:
+        return
+    from backend.app import remote_gpu_client
+
+    async def online(max_age: float = 15.0) -> dict:
+        return {"connected": True, "url": "http://remote-gpu.test", "reason": ""}
+
+    monkeypatch.setattr(remote_gpu_client, "remote_gpu_status", online)
+
+
+@pytest.fixture()
+def remote_gpu_offline(monkeypatch):
+    """The Remote GPU's worker does not answer."""
+    from backend.app import remote_gpu_client
+
+    async def offline(max_age: float = 15.0) -> dict:
+        return {"connected": False, "url": "http://remote-gpu.test",
+                "reason": "[Errno -2] Name or service not known"}
+
+    monkeypatch.setattr(remote_gpu_client, "remote_gpu_status", offline)
 
 
 def _settle_leftover_jobs() -> None:

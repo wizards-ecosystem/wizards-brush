@@ -8,6 +8,31 @@ contributors know which user-facing changes need release notes.
 
 No changes yet.
 
+## [0.1.3] - 2026-09-18
+
+### Changed
+
+- Remote GPU kinds follow the worker's live state. `GET /api/jobs/kinds` marks
+  them unavailable, with the reason, while the Remote GPU is not connected.
+  `POST /api/jobs` answers them with 503 instead of queuing a job that could
+  only fail, after checking the request so a malformed one still gets its 400.
+  Variant Set previews warn, and creating a set that needs the offline worker is
+  refused, as the editor already does.
+- The OpenAPI document lists the error answers each route can give (400, 401,
+  404, 409, 503) with their `{"detail": ...}` body.
+- API responses no longer reveal where the app is installed. File paths in job
+  records, job errors, prompt history and Variant Set item params are shown
+  relative to the app folder, and as `~` for the rest of the home directory.
+  Stored records are unchanged.
+
+### Fixed
+
+- The API guide's Variant Set naming example: `naming.prefix` is prepended
+  exactly as written, so the example now ends it with `/`. The editor explains
+  this under the Prefix field.
+- The test suite no longer inherits `API_TOKEN` from a developer's `.env`, which
+  turned every API test into a 401 on a machine with a token set.
+
 ## [0.1.2] - 2026-09-18
 
 ### Added
@@ -131,6 +156,7 @@ No changes yet.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.3]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.3
 [0.1.2]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.2
 [0.1.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.1
 [0.1.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.0

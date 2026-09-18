@@ -583,8 +583,12 @@ export function VariantStageEditor({
             id={`prefix-${stage.uid}`}
             className="input technical text-xs"
             value={stage.naming.prefix}
+            aria-describedby={`prefix-hint-${stage.uid}`}
             onChange={(e) => onChange({ ...stage, naming: { ...stage.naming, prefix: e.target.value } })}
           />
+          <div id={`prefix-hint-${stage.uid}`} className="mt-1 text-[11px] text-muted">
+            Put in front of every name exactly as written: end it with / for a folder.
+          </div>
         </div>
       </Section>
       {pickingReference && (

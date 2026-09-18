@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
+from .redaction import redact, redact_text
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -487,9 +489,12 @@ class JobRead(BaseModel):
 
     @classmethod
     def of(cls, j: Job) -> JobRead:
+        # Params hold absolute input paths and errors hold tracebacks: shown
+        # relative to the app folder, never where it is installed (redaction.py).
         return cls(
-            id=j.id, kind=j.kind, status=j.status, progress=j.progress, message=j.message,
-            params=j.params, result=j.result, error=j.error, tip=j.tip or "",
+            id=j.id, kind=j.kind, status=j.status, progress=j.progress,
+            message=redact_text(j.message or ""), params=redact(j.params),
+            result=redact(j.result), error=redact_text(j.error or ""), tip=j.tip or "",
             priority=j.priority or 0, group_id=j.group_id, model_key=j.model_key,
             created_at=j.created_at, started_at=j.started_at, finished_at=j.finished_at,
         )
@@ -549,7 +554,7 @@ class PromptHistoryRead(BaseModel):
     @classmethod
     def of(cls, h: PromptHistory) -> PromptHistoryRead:
         return cls(id=h.id, kind=h.kind, prompt=h.prompt, negative=h.negative,
-                   params=h.params, favorite=bool(h.favorite), created_at=h.created_at)
+                   params=redact(h.params), favorite=bool(h.favorite), created_at=h.created_at)
 
 
 class CollectionRead(BaseModel):
