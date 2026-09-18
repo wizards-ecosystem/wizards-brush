@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from PIL import Image
 
+from .. import finishing
 from ..config import settings
 from ..generators.base import batch_for, dims_for, dims_for_ratio
 from ..generators.schedulers import OPTIONS as SAMPLER_OPTIONS
@@ -187,6 +188,15 @@ def _common_params(p: dict, kind: str) -> dict:
         # rerun pick a different model than the run it is reproducing.
         "model_variant": _resolved_variant(p, device),
     }
+    # Named finishing processors after the preset's steps (app/finishing.py).
+    # Validated here like everything else that is replayed on rerun, and only
+    # recorded when present so an ordinary job's params are unchanged.
+    try:
+        finish_steps = finishing.sanitize_steps(p.get("finish_steps"))
+    except finishing.FinishingError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if finish_steps:
+        result["finish_steps"] = finish_steps
     if kind == JobKind.inpaint.value:
         area = str(p.get("inpaint_area", "masked area"))
         result.update({
@@ -297,7 +307,8 @@ def _local_handler(mode: str):
             if edit_plan is not None:
                 img = edit_plan.composite(img, blur=int(params.get("mask_blur", 4)))
             img, post = apply_image_post(
-                img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+                img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+                warnings=warnings)
             effective_steps = local_image.effective_step_count(
                 mode, int(safe_steps), float(params.get("strength", 0.6)), model)
             edit_meta = ({
@@ -441,7 +452,8 @@ def _outpaint_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         img = composite(img, src, p)
         gen_w, gen_h = img.size
         img, post = apply_image_post(
-            img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+            img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+            warnings=warnings)
         effective_steps = local_image.effective_step_count(
             "inpaint", steps, strength, model)
         meta = image_meta(params, img, prompt=prompt, seed=seed, aspect="Custom",
@@ -528,8 +540,10 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         gen_w, gen_h = raw.size
         post_start = 0.85 + 0.15 * (i / max(1, len(images_b64)))
         post_end = 0.85 + 0.15 * ((i + 1) / max(1, len(images_b64)))
-        img, post = apply_image_post(raw, params, cb, start=post_start, end=post_end)
-        meta = image_meta(params, img, width=gen_w, height=gen_h, post=post,
+        warnings: list[str] = []
+        img, post = apply_image_post(raw, params, cb, start=post_start, end=post_end,
+                                     warnings=warnings)
+        meta = image_meta(params, img, width=gen_w, height=gen_h, post=post, warnings=warnings,
                           prompt=prompts[i] if i < len(prompts) else prompts[0],
                           seed=seeds[i] if i < len(seeds) else seeds[0],
                           negative_prompt=negatives[i] if i < len(negatives) else negatives[0],
@@ -573,10 +587,11 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         job_id=job_id)
     raw = decode_remote_image(resp["image_b64"])
     gen_w, gen_h = raw.size
-    img, post = apply_image_post(raw, params, cb, start=0.9, end=1.0)
+    warnings: list[str] = []
+    img, post = apply_image_post(raw, params, cb, start=0.9, end=1.0, warnings=warnings)
     meta = image_meta(params, img, prompt=prompt, seed=seed, inputs=len(paths),
                       negative_prompt=negative,
-                      width=gen_w, height=gen_h, post=post,
+                      width=gen_w, height=gen_h, post=post, warnings=warnings,
                       model=settings.qwen_edit_model, remote=True)
     aid = persist_image(img, job_id=job_id, generator="colab_edit", meta=meta, tag="edit",
                          params=params)
@@ -627,11 +642,13 @@ def _control_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         except SkipItem:
             continue
         gen_w, gen_h = img.size
+        warnings: list[str] = []
         img, post = apply_image_post(
-            img, params, cb, start=denoise_end, end=item_end, metrics=metrics)
+            img, params, cb, start=denoise_end, end=item_end, metrics=metrics,
+            warnings=warnings)
         meta = image_meta(params, img, prompt=prompt, seed=seed,
                           negative_prompt=negative,
-                          width=gen_w, height=gen_h, post=post,
+                          width=gen_w, height=gen_h, post=post, warnings=warnings,
                           control_mode=params.get("control_mode"),
                           control_weight=params.get("control_weight"),
                           model=settings.local_image_model, **metrics)

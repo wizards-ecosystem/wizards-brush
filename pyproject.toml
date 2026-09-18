@@ -87,6 +87,7 @@ faces = ["facexlib>=0.3"]
 # not help controlnet_aux, so the cap stays until that package moves.
 detailer = ["mediapipe>=0.10.14,<0.10.30"]
 # RIFE frame interpolation via ONNX (CPU works; CUDA provider used when present).
+# The same runtime serves the optional background-removal finishing step.
 rife = ["onnxruntime>=1.18"]
 # ControlNet depth/pose preprocessors (canny needs only cv2, which detailer brings).
 control = ["controlnet_aux>=0.0.7"]

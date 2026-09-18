@@ -99,8 +99,20 @@ def _png_info(meta: dict | None, kind: str) -> tuple[object | None, str]:
         return None, type(error).__name__
 
 
+# Thumbnails are JPEG, which has no alpha. A plain RGB conversion would show
+# whatever pixels sit under the transparency — for a cut-out, the original
+# background — so a transparent image is laid on a flat neutral grey instead:
+# the subject reads as cut out, and nothing pretends to be a checkerboard.
+_THUMB_MATTE = (128, 128, 128, 255)
+
+
 def make_thumb(img: Image.Image, source_name: str, size: int = 384) -> str:
-    t = img.copy().convert("RGB")
+    t = img.copy()
+    if t.mode in ("RGBA", "LA", "PA", "RGBa", "La") or "transparency" in t.info:
+        rgba = t.convert("RGBA")
+        t = Image.new("RGBA", rgba.size, _THUMB_MATTE)
+        t.alpha_composite(rgba)
+    t = t.convert("RGB")
     t.thumbnail((size, size), Image.Resampling.LANCZOS)
     thumb_name = f"{Path(source_name).stem}.jpg"
     t.save(settings.thumbs_dir / thumb_name, format="JPEG", quality=85)

@@ -192,6 +192,11 @@ def derivative_meta(
         if operation == "upscale" and record.get("scale"):
             scale = max(1, int(record["scale"]))
             next_size = (current[0] * scale, current[1] * scale)
+        # A finishing processor measures its own output (a resize changes the
+        # size with no scale to infer it from), and that measurement wins.
+        own = record.get("output_size")
+        if isinstance(own, dict) and own.get("width") and own.get("height"):
+            next_size = (int(own["width"]), int(own["height"]))
         if index == len(requested) - 1:
             # The encoder's actual result is authoritative over an advertised
             # scale (and over rounding performed by a particular tool).
@@ -527,7 +532,7 @@ def resolve_finish(p: dict) -> tuple[str, bool, bool, bool]:
 # ---- post-processing applied inline after a generation --------------------
 def apply_image_post(
     img: Image.Image, params: dict, cb: ProgressCb, *, start: float = 0.85, end: float = 1.0,
-    metrics: dict[str, float] | None = None,
+    metrics: dict[str, float] | None = None, warnings: list[str] | None = None,
 ) -> tuple[Image.Image, list[Any]]:
     """Run optional detailer / upscale / face-restore on a freshly generated image.
 
@@ -539,9 +544,15 @@ def apply_image_post(
     Every step catches broadly (not just ToolUnavailable): the expensive part —
     the generation — already succeeded, so a post step crashing (CUDA OOM, a
     mediapipe runtime error) must degrade to the un-postprocessed image, never
-    discard it. Cancel/skip still propagates via the progress callback."""
+    discard it. Cancel/skip still propagates via the progress callback.
+
+    `finish_steps` (see app/finishing.py) run after the preset's steps, in the
+    order given. A step that fails is reported in `warnings`, when the caller
+    passes a list, and never appears in `applied`."""
     applied: list[Any] = []
-    if not (params.get("post_detail") or params.get("post_face") or params.get("post_upscale")):
+    steps = params.get("finish_steps") or []
+    if not (params.get("post_detail") or params.get("post_face") or params.get("post_upscale")
+            or steps):
         return img, applied  # common path: no post steps — skip importing the tool stack
 
     from ..generators import postprocess as pp
@@ -552,6 +563,7 @@ def apply_image_post(
             ("detail", params.get("post_detail")),
             ("face", params.get("post_face")),
             ("upscale", params.get("post_upscale")),
+            ("steps", bool(steps)),
         ) if on
     ]
 
@@ -630,6 +642,13 @@ def apply_image_post(
             emit(hi, f"upscale skipped: {e}")
         else:
             emit(hi, "upscale complete")
+    if steps:
+        from .. import finishing
+
+        lo, hi = stage("steps")
+        img, records = finishing.run_steps(
+            img, list(steps), lambda f, m: emit(lo + (hi - lo) * f, m), warnings)
+        applied.extend(records)
     # `applied` only lists steps that SUCCEEDED — a step that degraded to a
     # warning must not claim credit in the metadata.
     return img, applied
@@ -639,7 +658,8 @@ def image_progress_window(params: dict, index: int, batch: int) -> tuple[float, 
     """(item start, denoise end, item end) with real room for finishing."""
     count = max(1, int(batch))
     item_start, item_end = index / count, (index + 1) / count
-    has_post = bool(params.get("post_detail") or params.get("post_face") or params.get("post_upscale"))
+    has_post = bool(params.get("post_detail") or params.get("post_face") or params.get("post_upscale")
+                    or params.get("finish_steps"))
     denoise_end = item_start + (item_end - item_start) * (0.85 if has_post else 1.0)
     return item_start, denoise_end, item_end
 

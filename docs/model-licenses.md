@@ -38,10 +38,16 @@ service restrictions.
 | [Qwen-Image-2512-Lightning](https://huggingface.co/lightx2v/Qwen-Image-2512-Lightning) | Remote speed mode | Apache-2.0 |
 | [Qwen-Image-Edit-2511-Lightning](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) | Remote edit speed mode | Apache-2.0 |
 | [Florence-2-base-ft](https://huggingface.co/florence-community/Florence-2-base-ft) | Caption enrichment | MIT |
+| [BiRefNet-lite ONNX](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX) (base: [ZhengPeng7/BiRefNet_lite](https://huggingface.co/ZhengPeng7/BiRefNet_lite)) | Optional `background_removal` finishing step; 224 MB, fetched on first use at a pinned commit and SHA-256 | MIT at every layer: the [upstream code](https://github.com/ZhengPeng7/BiRefNet), the author's weights, and the ONNX export. Training datasets carry their own terms |
 | [Z-Image ControlNet Union](https://huggingface.co/alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union-2.1) | Disabled | Apache-2.0 |
 | [lllyasviel/Annotators](https://huggingface.co/lllyasviel/Annotators) | Disabled with ControlNet | Upstream page declares `other` and has no model-card license text; verify the individual annotator artifacts |
 | [CLIP ViT-B/32](https://huggingface.co/openai/clip-vit-base-patch32) | Semantic embeddings disabled | Upstream model page has no license tag; verify before enabling or redistributing |
 | Curated Z-Image starter LoRAs | Installed by `make models` | Apache-2.0 as declared by each linked model page and recorded in its local JSON sidecar |
+
+Background removal deliberately does not use BRIA RMBG-1.4 or RMBG-2.0: their
+weights are licensed for non-commercial use only, which an Apache-2.0 project
+cannot depend on. BiRefNet-lite runs as an ONNX graph, which executes no
+publisher code when loaded.
 
 User-supplied checkpoints and LoRAs are never covered by this inventory. The app
 catalogues and loads LoRAs only as `.safetensors`. PyTorch `.pt` and `.bin` files

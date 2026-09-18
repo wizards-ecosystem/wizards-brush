@@ -80,6 +80,11 @@ def _cpu_thread_cap():
             torch.set_num_threads(previous)
 
 
+def cpu_tool_threads() -> int:
+    """The CPU thread budget a finishing tool may use (see _CPU_TOOL_THREADS)."""
+    return _CPU_TOOL_THREADS
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -109,6 +114,16 @@ def _download(url: str, name: str, expected_sha256: str) -> Path:
         finally:
             partial.unlink(missing_ok=True)
     return dest
+
+
+def download_weight(url: str, name: str, expected_sha256: str) -> Path:
+    """Fetch a pinned weight into WEIGHTS_DIR once, verifying its SHA-256.
+
+    The public entry for finishing tools that live outside this module, so they
+    share the one download path: project-local, atomic, and refused outright
+    when the bytes are not the reviewed ones.
+    """
+    return _download(url, name, expected_sha256)
 
 
 # ---- upscaling (spandrel + Real-ESRGAN) -----------------------------------
