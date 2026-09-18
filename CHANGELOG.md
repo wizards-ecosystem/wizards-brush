@@ -6,7 +6,12 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Changed
+
+- The Remote GPU worker's refusal to start on a runtime its hashed dependency
+  lock does not cover now names the platform, architecture and Python version
+  it found. The Remote GPU guide adds that managed runtimes can move to a newer
+  default Python, so pin one that ships 3.12.
 
 ## [0.1.3] - 2026-09-18
 
