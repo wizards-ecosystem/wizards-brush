@@ -1,6 +1,6 @@
 [project]
 name = "wizards-brush"
-version = "0.1.2"
+version = "0.1.3"
 description = "Local-first image and video studio with an optional user-operated remote GPU lane."
 readme = "README.md"
 license = "Apache-2.0"
