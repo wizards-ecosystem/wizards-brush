@@ -32,6 +32,7 @@ from .routers import (
     loras,
     system,
     tools,
+    variant_sets,
     videos,
     wildcards,
 )
@@ -134,6 +135,16 @@ async def lifespan(app: FastAPI):
     resumed = await resume_queued()
     if resumed:
         logger.info("resumed %d queued job(s)", resumed)
+    # Then Variant Sets: settle children that finished or were canceled while no
+    # listener was running, and queue items that became runnable meanwhile.
+    try:
+        from .variant_sets.service import reconcile_all
+
+        settled = await reconcile_all()
+        if settled:
+            logger.info("reconciled %d active variant set(s)", settled)
+    except Exception as e:  # noqa: BLE001 — a set that cannot recover must not stop startup
+        logger.warning("variant set reconciliation skipped: %s", e)
     threading.Thread(target=_warm_and_sweep, daemon=True).start()
     try:
         yield
@@ -205,7 +216,7 @@ app.add_middleware(BrowserSecurityMiddleware, settings=settings)
 # API routers (grid after images — it reuses images' registered handlers)
 for r in (system.router, settings_router.router, images.router, videos.router,
           tools.router, jobs.router, assets.router, library.router, wildcards.router,
-          loras.router, collections.router, grid.router):
+          loras.router, collections.router, grid.router, variant_sets.router):
     app.include_router(r, prefix="/api")
 
 # Cache policy for generated media.

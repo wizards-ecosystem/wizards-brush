@@ -243,6 +243,12 @@ def image_meta(params: dict[str, Any], img: Image.Image, *, prompt: str, seed: i
         "finish": params.get("finish", ""),
         **extra,
     }
+    # Variant Set lineage — the set, item, combination and source assets that
+    # produced this file. Only Variant Set children carry it, so an ordinary
+    # asset's metadata is unchanged.
+    variant = params.get("variant")
+    if isinstance(variant, dict) and variant:
+        meta["variant"] = variant
     if not meta.get("warnings"):
         meta.pop("warnings", None)
     # Inline finishing is still a derivative. Split its file dimensions from

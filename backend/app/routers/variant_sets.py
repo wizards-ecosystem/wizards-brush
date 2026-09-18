@@ -1,0 +1,361 @@
+"""Variant Sets and recipes over HTTP.
+
+Recipes are saved definitions (configuration only); sets are executions. Every
+body is a closed schema (unknown keys are refused, sizes are bounded) and every
+recipe is compiled against the live registry before anything is stored, so a
+malformed or out-of-policy request is a 400/409 here rather than a failing job
+later — and nothing a set persists could not have been sent by an ordinary
+generate request.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Literal
+
+from fastapi import APIRouter, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .. import db, finishing, validators
+from ..config import settings
+from ..models import AssetKind
+from ..queue import lane_for, on_job_terminal
+from ..variant_sets import expansion, operations, service, store
+from ..variant_sets.recipe import RecipeError, RecipeSpec, compile_recipe
+from .common import MAX_UPLOAD_BYTES, load_uploaded_image, normalize_request_id
+
+router = APIRouter(tags=["variant-sets"])
+
+# Children finishing is how a set advances to its next stage.
+on_job_terminal(service.LISTENER, service.on_job_terminal)
+
+
+def _http(error: service.VariantSetError) -> HTTPException:
+    return HTTPException(status_code=error.status, detail=error.detail)
+
+
+class RecipeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=service.MAX_NAME_CHARS)
+    description: str = Field(default="", max_length=2000)
+    recipe: RecipeSpec
+
+
+class CollectionChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["none", "new", "existing"] = "none"
+    id: int | None = None
+
+
+class CreateSetBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="", max_length=service.MAX_NAME_CHARS)
+    recipe: RecipeSpec | None = None
+    recipe_id: int | None = None
+    # Replaces the recipe's sources, so one saved recipe can run on new material.
+    sources: list[int] | None = Field(default=None, max_length=3)
+    request_id: str | None = None
+    collection: CollectionChoice = Field(default_factory=CollectionChoice)
+
+
+class PreviewBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recipe: RecipeSpec | None = None
+    recipe_id: int | None = None
+    sources: list[int] | None = Field(default=None, max_length=3)
+    limit: int = Field(default=100, ge=0, le=expansion.HARD_MAX_COMBINATIONS)
+
+
+class RetryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include_canceled: bool = False
+
+
+class RerunBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reseed: bool = False
+    cascade: bool = False
+
+
+def _recipe_from(body_recipe: RecipeSpec | None, recipe_id: int | None,
+                 sources: list[int] | None) -> tuple[RecipeSpec, int | None]:
+    if (body_recipe is None) == (recipe_id is None):
+        raise HTTPException(status_code=400, detail="give exactly one of `recipe` or `recipe_id`")
+    if body_recipe is None:
+        row = store.get_recipe(int(recipe_id or 0))
+        if row is None:
+            raise HTTPException(status_code=404, detail="recipe not found")
+        try:
+            spec = RecipeSpec.model_validate(row.config)
+        except ValidationError as error:
+            raise HTTPException(status_code=409,
+                                detail=f"the saved recipe no longer validates: {error}") from None
+    else:
+        spec = body_recipe
+    if sources is not None:
+        spec = spec.model_copy(update={"sources": list(sources)})
+    return spec, recipe_id
+
+
+def _local_requirements(spec: RecipeSpec) -> None:
+    """The same refusals the generate routes make, made before anything is queued."""
+    from .images import require_local_gpu, require_model_access
+
+    local = [stage for stage in spec.stages if lane_for(stage.operation) == "local"]
+    if not local:
+        return
+    require_local_gpu()
+    variants = {stage.params.get("model_variant") for stage in local}
+    variants |= {overrides.get("model_variant") for stage in local
+                 for per_value in stage.value_params.values() for overrides in per_value.values()}
+    for variant in variants:
+        require_model_access({"model_variant": variant})
+
+
+# ---- capabilities --------------------------------------------------------------------------
+@router.get("/variant-sets/capabilities")
+async def capabilities() -> dict[str, Any]:
+    """What a recipe may use here and now: operations the live registry offers
+    (with their input requirements), finishing processors, validation checks,
+    and the combination cap."""
+    specs = operations.registry_specs()
+    return {
+        "operations": [{
+            "kind": op.kind, "title": specs[op.kind].get("title", op.kind),
+            "min_sources": op.min_sources, "max_sources": op.max_sources, "mask": op.mask,
+            "takes_source": op.takes_source, "note": op.note,
+            "lane": lane_for(op.kind),
+        } for op in operations.available(specs)],
+        "set_controlled": sorted(operations.SET_CONTROLLED),
+        "finishing": await asyncio.to_thread(finishing.describe),
+        "validators": validators.registered(),
+        "cap": expansion.configured_cap(),
+        "limits": {"stages": expansion.MAX_STAGES, "axes_per_stage": expansion.MAX_AXES_PER_STAGE,
+                   "values_per_axis": expansion.MAX_VALUES_PER_AXIS,
+                   "value_chars": expansion.MAX_VALUE_CHARS},
+    }
+
+
+# ---- recipes ----------------------------------------------------------------------------------
+def _recipe_view(row: Any) -> dict[str, Any]:
+    return {"id": row.id, "name": row.name, "description": row.description,
+            "recipe": row.config, "created_at": row.created_at, "updated_at": row.updated_at}
+
+
+def _validate_definition(spec: RecipeSpec) -> dict[str, Any]:
+    """A recipe is checked on save like a set, except that its sources may be
+    left for the set to supply."""
+    try:
+        probe = spec if spec.sources else _with_placeholder_sources(spec)
+        compiled = compile_recipe(probe, specs=operations.registry_specs())
+    except RecipeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    snapshot = compiled.snapshot()
+    snapshot["sources"] = list(spec.sources)
+    return snapshot
+
+
+def _with_placeholder_sources(spec: RecipeSpec) -> RecipeSpec:
+    op = operations.OPERATIONS.get(spec.stages[0].operation)
+    need = op.min_sources if op is not None else 0
+    return spec.model_copy(update={"sources": [0] * need})
+
+
+@router.get("/variant-recipes")
+async def list_recipes() -> list[dict[str, Any]]:
+    return [_recipe_view(r) for r in store.list_recipes()]
+
+
+@router.post("/variant-recipes")
+async def create_recipe(body: RecipeBody) -> dict[str, Any]:
+    row = store.save_recipe(body.name.strip(), body.description, _validate_definition(body.recipe))
+    return _recipe_view(row)
+
+
+@router.get("/variant-recipes/{recipe_id}")
+async def get_recipe(recipe_id: int) -> dict[str, Any]:
+    row = store.get_recipe(recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="recipe not found")
+    return _recipe_view(row)
+
+
+@router.put("/variant-recipes/{recipe_id}")
+async def update_recipe(recipe_id: int, body: RecipeBody) -> dict[str, Any]:
+    """Edit a definition. Sets made from it keep their own snapshot, so their
+    meaning never changes."""
+    row = store.save_recipe(body.name.strip(), body.description,
+                            _validate_definition(body.recipe), recipe_id=recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="recipe not found")
+    return _recipe_view(row)
+
+
+@router.post("/variant-recipes/{recipe_id}/clone")
+async def clone_recipe(recipe_id: int) -> dict[str, Any]:
+    row = store.get_recipe(recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="recipe not found")
+    name = f"{row.name} (copy)"[:service.MAX_NAME_CHARS]
+    return _recipe_view(store.save_recipe(name, row.description, row.config))
+
+
+@router.delete("/variant-recipes/{recipe_id}")
+async def delete_recipe(recipe_id: int) -> dict[str, Any]:
+    if not store.delete_recipe(recipe_id):
+        raise HTTPException(status_code=404, detail="recipe not found")
+    return {"ok": True}
+
+
+# ---- sets ---------------------------------------------------------------------------------------
+@router.post("/variant-sets/preview")
+async def preview_set(body: PreviewBody) -> dict[str, Any]:
+    """Every combination, its effective prompt and its output name — without
+    creating anything. Naming collisions are reported, not raised, so the form
+    can show them."""
+    spec, _ = _recipe_from(body.recipe, body.recipe_id, body.sources)
+    try:
+        return await asyncio.to_thread(service.preview, spec, limit=body.limit)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+
+
+@router.post("/variant-sets")
+async def create_set(body: CreateSetBody) -> dict[str, Any]:
+    spec, recipe_id = _recipe_from(body.recipe, body.recipe_id, body.sources)
+    request_id = normalize_request_id(body.request_id)
+    if body.collection.mode == "existing" and body.collection.id is None:
+        raise HTTPException(status_code=400, detail="choose the collection to add results to")
+    _local_requirements(spec)
+    try:
+        made = await service.create_set(
+            spec, name=body.name, recipe_id=recipe_id, request_id=request_id,
+            collection_id=body.collection.id if body.collection.mode == "existing" else None,
+            new_collection=body.collection.mode == "new",
+        )
+    except service.VariantSetError as error:
+        raise _http(error) from None
+    assert made.set.id is not None
+    return {**service.set_view(made.set), "created": made.created}
+
+
+@router.get("/variant-sets")
+async def list_sets(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    return [service.set_view(r) for r in store.list_sets(limit=max(1, min(limit, 500)),
+                                                         offset=max(0, offset))]
+
+
+@router.get("/variant-sets/{set_id}")
+async def get_set(set_id: int, items: bool = True) -> dict[str, Any]:
+    """The set, with every item's live state. Reading also reconciles: anything a
+    missed notification left behind is settled before it is shown."""
+    if store.get_set(set_id) is None:
+        raise HTTPException(status_code=404, detail="variant set not found")
+    await service.reconcile_set(set_id)
+    row = store.get_set(set_id)
+    assert row is not None
+    out = service.set_view(row)
+    if items:
+        out["items"] = service.item_views(store.items_for_set(set_id))
+    return out
+
+
+@router.get("/variant-sets/{set_id}/items")
+async def list_items(set_id: int, stage: int | None = None,
+                     state: str | None = None) -> list[dict[str, Any]]:
+    if store.get_set(set_id) is None:
+        raise HTTPException(status_code=404, detail="variant set not found")
+    rows = store.items_for_set(set_id, stage=stage)
+    if state:
+        rows = [r for r in rows if r.state == state]
+    return service.item_views(rows)
+
+
+@router.get("/variant-sets/{set_id}/items/{item_id}")
+async def get_item(set_id: int, item_id: int) -> dict[str, Any]:
+    item = store.get_item(item_id)
+    if item is None or item.set_id != set_id:
+        raise HTTPException(status_code=404, detail="variant not found in this set")
+    view = service.item_views([item])[0]
+    view["params"] = item.params
+    return view
+
+
+@router.post("/variant-sets/{set_id}/retry")
+async def retry(set_id: int, body: RetryBody | None = None) -> dict[str, Any]:
+    try:
+        return await service.retry(set_id, include_canceled=bool(body and body.include_canceled))
+    except service.VariantSetError as error:
+        raise _http(error) from None
+
+
+@router.post("/variant-sets/{set_id}/items/{item_id}/rerun")
+async def rerun_item(set_id: int, item_id: int, body: RerunBody | None = None) -> dict[str, Any]:
+    options = body or RerunBody()
+    try:
+        item = await service.rerun_item(set_id, item_id, reseed=options.reseed,
+                                        cascade=options.cascade)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+    return service.item_views([item])[0]
+
+
+@router.post("/variant-sets/{set_id}/cancel")
+async def cancel(set_id: int) -> dict[str, Any]:
+    try:
+        return await service.cancel(set_id)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+
+
+@router.delete("/variant-sets/{set_id}")
+async def delete_set(set_id: int) -> dict[str, Any]:
+    """Remove the set record. Its jobs and images stay in the library."""
+    try:
+        service.delete(set_id)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+    return {"ok": True}
+
+
+# ---- masks ----------------------------------------------------------------------------------------
+@router.post("/variant-sets/masks")
+async def upload_mask(mask: UploadFile) -> dict[str, Any]:
+    """Store a mask as a library asset so recipes can name it durably.
+
+    Masks are ordinary image assets with the generator `mask` (white = change,
+    black = keep), which is what lets a future segmentation tool produce
+    reusable masks without a new table: it only has to save one.
+    """
+    from ..utils.io import save_image
+
+    data = await mask.read(MAX_UPLOAD_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="empty mask")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="mask too large")
+
+    def _store() -> int:
+        try:
+            image = load_uploaded_image(data).convert("L")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        if image.getbbox() is None:
+            raise HTTPException(status_code=400, detail="the mask is empty: paint what should change")
+        settings.ensure_dirs()
+        saved = save_image(image, "mask")   # no generation metadata: a mask is not generated
+        asset = db.add_asset(AssetKind.image.value, saved.path, thumb=saved.thumb,
+                             width=saved.width, height=saved.height, generator="mask",
+                             meta={"mask": {"source": "upload"}},
+                             content_hash=saved.content_hash, size_bytes=saved.size_bytes,
+                             mime_type="image/png")
+        assert asset.id is not None
+        return int(asset.id)
+
+    asset_id = await asyncio.to_thread(_store)
+    return {"asset_id": asset_id}

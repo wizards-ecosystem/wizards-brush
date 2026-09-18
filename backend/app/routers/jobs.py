@@ -190,6 +190,18 @@ async def rerun(job_id: int, reseed: bool = False) -> dict:
     handler = get_handler(job.kind)
     if not handler:
         raise HTTPException(status_code=400, detail=f"kind '{job.kind}' cannot be re-run")
+    if not reseed:
+        # A Retry of a Variant Set child retries its variant, so the set tracks
+        # the new attempt. Generate more (reseed) stays an ordinary creative branch.
+        from ..variant_sets import service as variant_sets
+
+        if variant_sets.is_variant_group(job.group_id):
+            try:
+                redirected = await variant_sets.retry_for_job(job_id)
+            except variant_sets.VariantSetError as error:
+                raise HTTPException(status_code=error.status, detail=error.detail) from None
+            if redirected is not None:
+                return redirected
     params = dict(job.params)
     if reseed and "seed" in params:
         params["seed"] = resolve_seed(None)
