@@ -6,6 +6,10 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+No changes yet.
+
+## [0.1.4] - 2026-09-18
+
 ### Changed
 
 - The Remote GPU worker's refusal to start on a runtime its hashed dependency
@@ -161,6 +165,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.4]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.4
 [0.1.3]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.3
 [0.1.2]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.2
 [0.1.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.1
