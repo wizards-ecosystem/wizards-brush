@@ -64,8 +64,14 @@ See [network security](network-security.md) for LAN, TLS and CORS details.
   | 404 | Unknown id, including trashed assets |
   | 409 | Conflicting state, such as deleting an active set |
   | 422 | A malformed body, such as an unknown top-level field |
-  | 503 | The device or model is not available here |
+  | 503 | The device or model is not available here, or the Remote GPU is offline |
   | 401 | A missing or wrong token |
+
+  The OpenAPI document lists the answers each route can give, with this body.
+- **Paths.** Where a response mentions a file on the server, as job params and
+  error tracebacks do, the path is shown relative to the app's folder, and any
+  other path in your home directory as `~/...`. Where the app is installed is
+  never revealed. The stored records keep the real paths.
 - **Strict settings.** `POST /api/jobs` and Variant Set recipes refuse an
   unknown setting name or a value outside its control's range, and name it.
   The UI's multipart routes clamp instead, because a form cannot send such a
@@ -128,7 +134,7 @@ Each entry has the following fields:
 | `category` | `generator` (makes something new) or `tool` (post-processes an asset). |
 | `lane` | `local` (this machine's GPU/CPU) or `remote` (the Remote GPU worker). |
 | `output` | `image` or `video`. |
-| `available`, `unavailable_reason` | False with a reason when the device probe failed or a tool's dependency is missing. |
+| `available`, `unavailable_reason` | False with a reason when the device probe failed, a tool's dependency is missing, or, for `remote` kinds, the Remote GPU is not connected right now. |
 | `inputs` | `images: {min, max, asset_kind}`, `mask` (`none` or `required`), `last_frame`. |
 | `params` | A JSON Schema for `params`, derived from the same registry the UI renders. Every property has its `default`; `additionalProperties` is false. |
 
@@ -200,6 +206,10 @@ Response:
 A job created here is indistinguishable from one created in the UI. It appears
 in the Queue, can be reordered, canceled, retried and rerun, and it survives a
 restart while still queued.
+
+A `remote` kind is refused with 503 while the Remote GPU is not connected,
+rather than queued only to fail. The request is still validated first, so a
+malformed one gets its 400.
 
 Two refused requests and their answers:
 
@@ -306,7 +316,7 @@ and keeps the result as one durable, exportable object.
     ],
     "validation": {"format": "PNG", "width": 1024, "height": 1024,
                    "alpha": "required", "corners_transparent": true},
-    "naming": {"template": "{{colour}}/{{angle}}", "prefix": "catalogue"}
+    "naming": {"template": "{{colour}}/{{angle}}", "prefix": "catalogue/"}
   }]
 }
 ```
@@ -347,7 +357,9 @@ The recipe fields, in order:
   them.
 - **`naming`**: deterministic archive paths. Placeholders are the axes plus
   `{{_index}}`, `{{_key}}` and `{{_stage}}`. Names are sanitised and checked
-  for collisions before anything is queued.
+  for collisions before anything is queued. `prefix` is put in front of every
+  name exactly as written, so end it with `/` for a folder (`catalogue/`) or
+  with `-` for a name prefix.
 
 ### Lifecycle
 
@@ -356,8 +368,9 @@ POST /api/variant-sets/preview   {"recipe": {...}, "limit": 100}
 ```
 
 `preview` returns every combination with its effective prompt, seed and output
-name, plus collisions and warnings (for example, an axis that changes nothing).
-It creates nothing.
+name, plus collisions and warnings. For example, it warns about an axis that
+changes nothing, or a stage that needs the Remote GPU while it is offline. It
+creates nothing.
 
 ```
 POST /api/variant-sets
@@ -368,7 +381,9 @@ POST /api/variant-sets
 This creates the set and queues its first stage. You can pass `recipe_id` (a
 saved recipe) instead of `recipe`, and `sources` replaces the recipe's
 sources, so one saved recipe can run on new material. `collection` takes a
-`mode` of `none`, `new` or `existing` (with an `id`).
+`mode` of `none`, `new` or `existing` (with an `id`). As in the editor, a set
+with any stage on the Remote GPU is refused with 503 while it is offline. A
+resubmitted `request_id` always returns its existing set.
 
 ```
 GET /api/variant-sets/{id}/wait?timeout=30&items=true

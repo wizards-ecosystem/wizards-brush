@@ -32,7 +32,13 @@ from .. import controls, db
 from ..models import AssetKind, AssetRead, JobKind, JobRead, JobStatus
 from ..queue import lane_for
 from . import images, tools, videos
-from .common import _submission_response, get_handler, normalize_request_id, submit
+from .common import (
+    _submission_response,
+    error_responses,
+    get_handler,
+    normalize_request_id,
+    submit,
+)
 
 router = APIRouter(tags=["jobs"])
 
@@ -168,15 +174,42 @@ class JobWait(BaseModel):
 
 
 # ---- catalogue ------------------------------------------------------------------------------
-def _catalogue() -> dict[str, JobKindInfo]:
+async def remote_state() -> dict[str, Any]:
+    """The Remote GPU's connection state, at most a few seconds old."""
+    from .. import remote_gpu_client
+
+    return await remote_gpu_client.remote_gpu_status()
+
+
+def remote_blocker(state: dict[str, Any] | None) -> str | None:
+    """Why remote-lane work cannot run right now, or None when it can.
+
+    Configured is not the same as reachable: a remote kind is only available
+    while the worker actually answers, or a job would be queued only to fail.
+    """
+    if state is None or state.get("connected"):
+        return None
+    reason = str(state.get("reason") or "no answer")
+    if reason == "no url set":
+        return ("The Remote GPU is not set up: add its URL and secret in "
+                "Settings -> Connections.")
+    return (f"The Remote GPU is not connected ({reason}). Start its worker, then check "
+            "Settings -> Connections.")
+
+
+def _catalogue(remote: dict[str, Any] | None = None) -> dict[str, JobKindInfo]:
+    """Every kind with its availability. `remote` is the Remote GPU's state;
+    without it, remote kinds are judged on configuration alone."""
     from ..variant_sets.operations import registry_specs
 
+    offline = remote_blocker(remote)
     out: dict[str, JobKindInfo] = {}
     for kind, spec in registry_specs().items():
         if kind not in GENERATOR_INPUTS:
             continue
         inputs = inputs_for(kind, spec)
-        reason = spec.get("unavailable_reason")
+        reason = spec.get("unavailable_reason") or (
+            offline if lane_for(kind) == "remote" else None)
         out[kind] = JobKindInfo(
             kind=kind, title=str(spec.get("title") or kind),
             description=str(spec.get("subtitle") or ""), category="generator",
@@ -187,7 +220,7 @@ def _catalogue() -> dict[str, JobKindInfo]:
             params=controls.params_schema(_controls_of(spec)),
         )
     for kind, tool in tools.TOOLS.items():
-        reason = tool.unavailable()
+        reason = tool.unavailable() or (offline if lane_for(kind) == "remote" else None)
         out[kind] = JobKindInfo(
             kind=kind, title=tool.title, description=tool.description, category="tool",
             output=tool.output, lane="local" if lane_for(kind) == "local" else "remote",
@@ -214,10 +247,11 @@ async def job_kinds() -> list[JobKindInfo]:
     """Every kind `POST /api/jobs` accepts here, with its inputs and settings schema.
 
     Live, like the UI's own registry: a generator whose device or model is not
-    configured is absent, and one whose device failed its probe is listed with
+    configured is absent, and one that cannot run right now - its local device
+    failed its probe, or the Remote GPU is not connected - is listed with
     `available: false` and the reason.
     """
-    return list(_catalogue().values())
+    return list(_catalogue(await remote_state()).values())
 
 
 # ---- submission -----------------------------------------------------------------------------
@@ -274,7 +308,7 @@ def _submission(result: dict[str, Any], *, duplicate: bool) -> JobSubmission:
                          group_id=result.get("group_id"), duplicate=duplicate)
 
 
-@router.post("/jobs")
+@router.post("/jobs", responses=error_responses(400, 404, 409, 503))
 async def create_job(body: JobCreate) -> JobSubmission:
     """Queue one generation or tool job from asset ids and JSON settings.
 
@@ -301,8 +335,7 @@ async def create_job(body: JobCreate) -> JobSubmission:
         tool = tools.TOOLS[body.kind]
         clean = _validated(body.kind, body.params, {str(c["name"]): c for c in tool.controls})
         _resolve(body.kind, inputs_for(body.kind), body.inputs)
-        if not info.available:
-            raise HTTPException(status_code=503, detail=info.unavailable_reason)
+        await _require_runnable(info)
         result = await tools.submit_tool(body.kind, body.inputs.images[0], clean,
                                          request_id=request_id)
         return _submission(result, duplicate=False)
@@ -312,8 +345,7 @@ async def create_job(body: JobCreate) -> JobSubmission:
     spec = registry_specs()[body.kind]
     clean = _validated(body.kind, body.params, _controls_of(spec))
     paths, mask_path, last_path = _resolve(body.kind, inputs_for(body.kind, spec), body.inputs)
-    if not info.available:
-        raise HTTPException(status_code=503, detail=info.unavailable_reason)
+    await _require_runnable(info)
     if body.kind in _LOCAL_GPU:
         images.require_local_gpu()
     raw = {**clean, "request_id": request_id}
@@ -328,6 +360,14 @@ async def create_job(body: JobCreate) -> JobSubmission:
         raise HTTPException(status_code=500, detail=f"no handler for {body.kind}")
     fanned = await images.maybe_fanout(body.kind, params, handler) if body.kind in _FANOUT else None
     return _submission(fanned or await submit(body.kind, params, handler), duplicate=False)
+
+
+async def _require_runnable(info: JobKindInfo) -> None:
+    """503 when the kind cannot run here now; remote kinds need a live worker."""
+    if not info.available:
+        raise HTTPException(status_code=503, detail=info.unavailable_reason)
+    if info.lane == "remote" and (blocker := remote_blocker(await remote_state())):
+        raise HTTPException(status_code=503, detail=blocker)
 
 
 def _validated(kind: str, params: dict[str, Any],
@@ -346,7 +386,7 @@ def _view(job) -> JobWait:
                    assets=[AssetRead.of(found[i]) for i in ids if i in found])
 
 
-@router.get("/jobs/{job_id}/wait")
+@router.get("/jobs/{job_id}/wait", responses=error_responses(404))
 async def wait_job(
     job_id: int,
     timeout: float = Query(30.0, ge=0.0, le=MAX_WAIT_SECONDS,

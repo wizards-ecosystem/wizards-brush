@@ -199,7 +199,9 @@ A derived stage shows what each variant was made from, and a long stage shows
 Output names come from a template over the axes: `{{material}}/{{color}}_{{finish}}`
 gives `wood/red_matte.png`. `{{axis}}` is the value's identifier (lower case,
 hyphenated), `{{axis.value}}` the value as written, `/` makes a folder, and the
-extension comes from the file. A blank template uses every axis and cannot
+extension comes from the file. A **prefix** is put in front of every name exactly
+as written: end it with `/` to make a folder (`catalogue/` gives
+`catalogue/wood/red_matte.png`) or with `-` for a name prefix. A blank template uses every axis and cannot
 collide. A template that would give two variants one name is refused before
 anything runs, and names cannot leave the export folder.
 

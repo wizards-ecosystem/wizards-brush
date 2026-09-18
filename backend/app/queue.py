@@ -26,6 +26,7 @@ from typing import Any
 from . import db, errors, log, notify, wsframe
 from .models import Job, JobStatus
 from .params import TrackedParams
+from .redaction import redact_text
 
 logger = log.get("queue")
 
@@ -405,7 +406,7 @@ class JobQueue:
                 except Exception as e:  # never let one job kill the worker loop  # noqa: BLE001
                     db.mark_error(job_id, f"worker error: {e}")
                     hub.emit({"type": "job", "id": job_id, "kind": kind,
-                              "status": JobStatus.error.value, "error": str(e)})
+                              "status": JobStatus.error.value, "error": redact_text(str(e))})
                 _notify_terminal(job_id)
 
     async def _execute(self, job_id: int, handler: Handler, kind: str) -> None:
@@ -545,7 +546,7 @@ class JobQueue:
             result = terminal_result()
             db.mark_error(job_id, err, tip=tip, result=result)
             hub.emit({"type": "job", "id": job_id, "kind": kind,
-                      "status": JobStatus.error.value, "error": str(e), "tip": tip,
+                      "status": JobStatus.error.value, "error": redact_text(str(e)), "tip": tip,
                       "result": result, **group})
         finally:
             _CANCELLED.discard(job_id)

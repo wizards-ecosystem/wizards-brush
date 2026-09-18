@@ -40,6 +40,7 @@ from .routers import (
 from .routers import (
     settings as settings_router,
 )
+from .routers.common import error_responses
 from .security import BrowserSecurityMiddleware, allowed_origins, browser_session_token
 from .version import get_version
 
@@ -248,7 +249,7 @@ for r in (system.router, settings_router.router, images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router):
-    app.include_router(r, prefix="/api")
+    app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Cache policy for generated media.
 #

@@ -112,6 +112,34 @@ def no_queue(monkeypatch):
     return
 
 
+@pytest.fixture(autouse=True)
+def _remote_gpu_answers(request, monkeypatch):
+    """The suite has no Remote GPU worker. The job API and Variant Set creation
+    refuse remote work while it is offline, so it counts as connected unless a
+    test asks for the `remote_gpu_offline` fixture. Only the cached status the
+    gates read is replaced; remote_gpu_health() itself stays real."""
+    if "remote_gpu_offline" in request.fixturenames:
+        return
+    from backend.app import remote_gpu_client
+
+    async def online(max_age: float = 15.0) -> dict:
+        return {"connected": True, "url": "http://remote-gpu.test", "reason": ""}
+
+    monkeypatch.setattr(remote_gpu_client, "remote_gpu_status", online)
+
+
+@pytest.fixture()
+def remote_gpu_offline(monkeypatch):
+    """The Remote GPU's worker does not answer."""
+    from backend.app import remote_gpu_client
+
+    async def offline(max_age: float = 15.0) -> dict:
+        return {"connected": False, "url": "http://remote-gpu.test",
+                "reason": "[Errno -2] Name or service not known"}
+
+    monkeypatch.setattr(remote_gpu_client, "remote_gpu_status", offline)
+
+
 def _settle_leftover_jobs() -> None:
     """Cancel rows other modules left `queued`.
 

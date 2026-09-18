@@ -30,6 +30,7 @@ from .common import (
     as_float,
     as_int,
     derivative_meta,
+    error_responses,
     persist_image,
     persist_video_file,
     register_handler,
@@ -406,12 +407,12 @@ async def submit_tool(kind: str, asset_id: int, raw: dict[str, Any],
 
 
 # ---- routes -----------------------------------------------------------------
-@router.post("/tools/upscale")
+@router.post("/tools/upscale", responses=error_responses(400, 404, 503))
 async def tool_upscale(req: ToolReq) -> dict:
     return await submit_tool(JobKind.upscale.value, req.asset_id, {"scale": req.scale})
 
 
-@router.post("/tools/face-restore")
+@router.post("/tools/face-restore", responses=error_responses(400, 404, 503))
 async def tool_face(req: ToolReq) -> dict:
     return await submit_tool(JobKind.face_restore.value, req.asset_id, {})
 
@@ -427,7 +428,7 @@ class ExtendReq(BaseModel):
     speed_mode: bool = False
 
 
-@router.post("/tools/extend-video")
+@router.post("/tools/extend-video", responses=error_responses(400, 404, 503))
 async def tool_extend_video(req: ExtendReq) -> dict:
     """Continue a video: last frame → i2v on the A100, then concat with the source."""
     return await submit_tool(JobKind.extend_video.value, req.asset_id,
@@ -439,7 +440,7 @@ class MatteReq(BaseModel):
     mode: str = "cutout"
 
 
-@router.post("/tools/matte")
+@router.post("/tools/matte", responses=error_responses(400, 404, 503))
 async def tool_matte(req: MatteReq) -> dict:
     """Cut an image's subject out, or save its subject/background as a mask asset."""
     if req.mode not in MATTE_MODES:
@@ -463,14 +464,14 @@ async def enrich_all() -> dict:
     return {"ok": True, "queued": n}
 
 
-@router.post("/tools/detail")
+@router.post("/tools/detail", responses=error_responses(400, 404, 503))
 async def tool_detail(req: DetailReq) -> dict:
     return await submit_tool(JobKind.detail.value, req.asset_id,
                              {"prompt": req.prompt, "denoise": req.denoise,
                               "targets": req.targets})
 
 
-@router.post("/tools/interpolate")
+@router.post("/tools/interpolate", responses=error_responses(400, 404, 503))
 async def tool_interpolate(req: ToolReq) -> dict:
     return await submit_tool(JobKind.interpolate.value, req.asset_id,
                              {"factor": req.factor, "method": req.method})

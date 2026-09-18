@@ -306,7 +306,35 @@ def remote_gpu_seen() -> bool:
     return bool(_LAST_HEALTH.get("connected"))
 
 
+# The last complete answer (with its reason, which _LAST_HEALTH drops on
+# failure) and when it was obtained, for remote_gpu_status().
+_LAST_ANSWER: dict = {"connected": False, "url": "", "reason": "not checked yet"}
+_LAST_CHECKED = [float("-inf")]
+
+
+async def remote_gpu_status(max_age: float = 15.0) -> dict:
+    """The Remote GPU's connection state, re-checked when older than `max_age` s.
+
+    For callers that act on the answer - the job API refusing work that cannot
+    run, Variant Set creation - where a stale "connected" or "disconnected" is
+    wrong but a network round trip per request is waste. Nothing refreshes the
+    state in the background unless a browser is polling /api/system.
+    """
+    if time.monotonic() - _LAST_CHECKED[0] > max_age:
+        return await remote_gpu_health()
+    return dict(_LAST_ANSWER)
+
+
 async def remote_gpu_health() -> dict:
+    """Ask the Remote GPU's /health now, and remember the answer."""
+    answer = await _check_health()
+    _LAST_ANSWER.clear()
+    _LAST_ANSWER.update(answer)
+    _LAST_CHECKED[0] = time.monotonic()
+    return answer
+
+
+async def _check_health() -> dict:
     url, secret = _base_and_secret()
     if not url:
         _LAST_HEALTH.update(connected=False, features=[])

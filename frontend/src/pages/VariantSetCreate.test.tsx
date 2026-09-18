@@ -191,6 +191,15 @@ describe("Variant Set editor", () => {
     expect(screen.getByLabelText("Instruction template")).toBeInTheDocument();
   });
 
+  it("says how the output-name prefix is applied", async () => {
+    renderCreate();
+    await screen.findAllByTestId("axis-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Output names" }));
+    expect(screen.getByLabelText("Prefix")).toHaveAccessibleDescription(
+      "Put in front of every name exactly as written: end it with / for a folder.",
+    );
+  });
+
   it("inserts axis placeholders and submits the recipe with every control's value", async () => {
     renderCreate();
     await userEvent.click(await screen.findByRole("button", { name: /add from gallery/i }));

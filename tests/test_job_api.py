@@ -396,3 +396,62 @@ def test_the_api_guide_covers_every_kind():
     guide = (Path(__file__).resolve().parent.parent / "docs" / "api.md").read_text()
     for kind in [*job_api.GENERATOR_INPUTS, *tools.TOOLS]:
         assert f"`{kind}`" in guide, f"docs/api.md does not mention {kind}"
+
+
+# ---- the Remote GPU's live state ------------------------------------------------------------
+def test_remote_kinds_are_unavailable_while_the_remote_gpu_is_offline(
+        client, enqueued, remote_gpu_offline, source):
+    kinds = {k["kind"]: k for k in client.get("/api/jobs/kinds").json()}
+    edit = kinds["image_edit"]
+    assert edit["lane"] == "remote" and edit["available"] is False
+    assert "not connected" in edit["unavailable_reason"]
+    assert "Name or service not known" in edit["unavailable_reason"]
+    assert kinds["upscale"]["available"] is True, "local kinds are unaffected"
+
+    r = _job(client, kind="image_edit", params={"prompt": "p"}, inputs={"images": [source.id]})
+    assert r.status_code == 503 and "not connected" in r.json()["detail"]
+    bad = _job(client, kind="image_edit", params={"promt": "p"}, inputs={"images": [source.id]})
+    assert bad.status_code == 400, "the request is judged before the server's state"
+    assert enqueued == []
+
+
+def test_remote_status_is_rechecked_only_when_stale(monkeypatch):
+    from backend.app import remote_gpu_client
+
+    monkeypatch.undo()   # the suite's stand-in: this test is about the real one
+    calls: list[int] = []
+
+    async def check() -> dict:
+        calls.append(1)
+        return {"connected": False, "url": "http://remote-gpu.test", "reason": "refused"}
+
+    monkeypatch.setattr(remote_gpu_client, "_check_health", check)
+    monkeypatch.setattr(remote_gpu_client, "_LAST_CHECKED", [float("-inf")])
+    first = asyncio.run(remote_gpu_client.remote_gpu_status())
+    again = asyncio.run(remote_gpu_client.remote_gpu_status())
+    assert first == again == {"connected": False, "url": "http://remote-gpu.test",
+                              "reason": "refused"}
+    assert len(calls) == 1, "a fresh answer is reused"
+    remote_gpu_client._LAST_CHECKED[0] -= 60
+    asyncio.run(remote_gpu_client.remote_gpu_status())
+    assert len(calls) == 2, "a stale one is checked again"
+
+
+def test_unconfigured_remote_gpu_says_how_to_set_it_up():
+    from backend.app.routers.job_api import remote_blocker
+
+    assert remote_blocker({"connected": True}) is None
+    assert "Settings -> Connections" in remote_blocker(
+        {"connected": False, "reason": "no url set"})
+
+
+# ---- the published contract, failures included ---------------------------------------------
+def test_openapi_documents_the_errors_each_route_can_answer(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    create = paths["/api/jobs"]["post"]["responses"]
+    assert {"400", "401", "404", "409", "422", "503"} <= set(create)
+    assert "ErrorDetail" in json.dumps(create["503"])
+    assert set(paths["/api/jobs/kinds"]["get"]["responses"]) >= {"200", "401"}
+    assert "404" in paths["/api/assets/{asset_id}/file"]["get"]["responses"]
+    assert "503" in paths["/api/variant-sets"]["post"]["responses"]
+    assert "409" in paths["/api/variant-sets/{set_id}"]["delete"]["responses"]

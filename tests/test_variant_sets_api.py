@@ -292,3 +292,42 @@ def test_finish_steps_belong_to_the_stage_not_its_params(client, enqueued, sourc
     r = _create(client, _edit(source.id, params={"finish_steps": []}))
     assert r.status_code == 400
     assert "use the stage's `finishing` list" in r.json()["detail"]
+
+
+# ---- the Remote GPU's live state ------------------------------------------------------------
+def test_preview_warns_and_create_refuses_while_the_remote_gpu_is_offline(
+        client, enqueued, remote_gpu_offline, source):
+    preview = client.post("/api/variant-sets/preview", json={"recipe": _edit(source.id)})
+    assert preview.status_code == 200
+    warning = " ".join(preview.json()["warnings"])
+    assert "not connected" in warning and "stage 1" in warning
+    before = len(db.list_jobs(limit=5000))
+    refused = _create(client, _edit(source.id), request_id="offline-refusal-000001")
+    assert refused.status_code == 503 and "not connected" in refused.json()["detail"]
+    assert len(db.list_jobs(limit=5000)) == before and enqueued == []
+
+
+def test_a_resubmitted_set_is_returned_even_while_the_remote_gpu_is_offline(
+        client, enqueued, source, monkeypatch):
+    from backend.app import remote_gpu_client
+
+    made = _create(client, _edit(source.id), request_id="offline-resubmit-00001").json()
+
+    async def offline(max_age: float = 15.0) -> dict:
+        return {"connected": False, "url": "http://remote-gpu.test", "reason": "down"}
+
+    monkeypatch.setattr(remote_gpu_client, "remote_gpu_status", offline)
+    again = _create(client, _edit(source.id), request_id="offline-resubmit-00001")
+    assert again.status_code == 200 and again.json()["id"] == made["id"]
+    assert again.json()["created"] is False
+
+
+def test_item_params_do_not_reveal_where_the_app_lives(client, enqueued, source):
+    from backend.app.config import ROOT
+
+    set_id = _create(client, _edit(source.id)).json()["id"]
+    item = client.get(f"/api/variant-sets/{set_id}").json()["items"][0]
+    detail = client.get(f"/api/variant-sets/{set_id}/items/{item['id']}").json()
+    paths = detail["params"]["image_paths"]
+    assert paths and not any(p.startswith("/") for p in paths)
+    assert str(ROOT) not in json.dumps(detail)

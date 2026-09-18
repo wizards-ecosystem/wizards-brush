@@ -10,6 +10,7 @@ from .. import db, queue
 from ..models import JobRead, JobStatus
 from ..queue import cancel as cancel_job
 from ..queue import hub
+from .common import error_responses
 
 router = APIRouter(tags=["jobs"])
 
@@ -93,7 +94,7 @@ async def next_picks() -> dict:
     return {"lanes": lane_picks()}
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", responses=error_responses(404))
 async def get_job(job_id: int) -> JobRead:
     j = db.get_job(job_id)
     if not j:
@@ -101,7 +102,7 @@ async def get_job(job_id: int) -> JobRead:
     return JobRead.of(j)
 
 
-@router.post("/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel", responses=error_responses(404))
 async def cancel(job_id: int) -> dict:
     if not db.get_job(job_id):
         raise HTTPException(status_code=404, detail="job not found")
