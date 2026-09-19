@@ -319,10 +319,20 @@ class JobQueue:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._current: int | None = None
+        self._inflight: set[int] = set()
+        self._device_job: int | None = None
+        self._overlap: set[asyncio.Task[Any]] = set()
 
     @property
     def current(self) -> int | None:
         return self._current
+
+    def release_device(self, job_id: int) -> None:
+        """Remote generation finished; local finishing may continue while the next job submits."""
+        if self.name != "remote" or self._device_job != job_id:
+            return
+        self._device_job = None
+        self._wake.set()
 
     def start(self) -> None:
         loop = asyncio.get_running_loop()
@@ -336,6 +346,8 @@ class JobQueue:
             # asyncio primitives bind to the loop that first awaits them.
             self._wake = asyncio.Event()
             self._current = None
+            self._device_job = None
+            self._inflight.clear()
             self._task = loop.create_task(self._run())
             if self._pending:
                 self._wake.set()
@@ -379,7 +391,11 @@ class JobQueue:
         queued row in the database against this lane's pending map — and report a
         reordering for a disagreement that affinity had nothing to do with.
         """
-        if self._current is not None or not self._pending:
+        if self.name == "remote":
+            busy = self._device_job is not None
+        else:
+            busy = self._current is not None
+        if busy or not self._pending:
             return None
         try:
             ordered = db.queued_in_order(list(self._pending.keys()))
@@ -397,20 +413,43 @@ class JobQueue:
             await self._wake.wait()
             self._wake.clear()
             while True:
+                if self.name == "remote" and self._device_job is not None:
+                    break
                 job_id = self._pick()
                 if job_id is None:
                     break
                 handler, kind = self._pending.pop(job_id)
-                try:
-                    await self._execute(job_id, handler, kind)
-                except Exception as e:  # never let one job kill the worker loop  # noqa: BLE001
-                    db.mark_error(job_id, f"worker error: {e}")
-                    hub.emit({"type": "job", "id": job_id, "kind": kind,
-                              "status": JobStatus.error.value, "error": redact_text(str(e))})
-                _notify_terminal(job_id)
+                if self.name == "remote":
+                    self._device_job = job_id
+                    task = asyncio.create_task(self._execute_and_notify(job_id, handler, kind))
+                    self._overlap.add(task)
+                    task.add_done_callback(self._overlap.discard)
+                    await asyncio.sleep(0)
+                else:
+                    try:
+                        await self._execute(job_id, handler, kind)
+                    except Exception as e:  # never let one job kill the worker loop  # noqa: BLE001
+                        db.mark_error(job_id, f"worker error: {e}")
+                        hub.emit({"type": "job", "id": job_id, "kind": kind,
+                                  "status": JobStatus.error.value, "error": redact_text(str(e))})
+                    _notify_terminal(job_id)
+
+    async def _execute_and_notify(self, job_id: int, handler: Handler, kind: str) -> None:
+        try:
+            await self._execute(job_id, handler, kind)
+        except Exception as e:  # noqa: BLE001 — a remote overlap task must not kill the lane
+            db.mark_error(job_id, f"worker error: {e}")
+            hub.emit({"type": "job", "id": job_id, "kind": kind,
+                      "status": JobStatus.error.value, "error": redact_text(str(e))})
+        finally:
+            if self._device_job == job_id:
+                self._device_job = None
+            _notify_terminal(job_id)
+            self._wake.set()
 
     async def _execute(self, job_id: int, handler: Handler, kind: str) -> None:
         self._current = job_id
+        self._inflight.add(job_id)
         notify.watcher.job_started()
         db.mark_running(job_id)
         hub.emit({"type": "job", "id": job_id, "kind": kind, "status": JobStatus.running.value,
@@ -551,7 +590,12 @@ class JobQueue:
         finally:
             _CANCELLED.discard(job_id)
             _SKIPPED.discard(job_id)
-            self._current = None
+            self._inflight.discard(job_id)
+            if self._current == job_id:
+                self._current = None
+            if self._device_job == job_id:
+                self._device_job = None
+            self._wake.set()
             # Arms the idle debounce. If another job starts before it fires,
             # nothing is sent — which is what makes "the queue is finished"
             # mean something other than "there is a gap between two jobs".
@@ -566,11 +610,20 @@ LANES: dict[str, JobQueue] = {"local": JobQueue("local"), "remote": JobQueue("re
 
 # Local-GPU/CPU work serializes in the local lane; everything else uses Remote GPU.
 _LOCAL_KINDS = {"image_local", "img2img", "inpaint", "outpaint", "upscale",
-                "face_restore", "interpolate", "detail", "control_local", "matte"}
+                "face_restore", "interpolate", "detail", "control_local", "matte",
+                "region_mask"}
 
 
 def lane_for(kind: str) -> str:
     return "local" if kind in _LOCAL_KINDS else "remote"
+
+
+def release_device(job_id: int) -> None:
+    """A remote handler calls this after the A100 returns so finishing can overlap."""
+    for q in LANES.values():
+        if job_id in q._inflight or q._device_job == job_id:
+            q.release_device(job_id)
+            return
 
 
 def start_all() -> None:
@@ -634,7 +687,7 @@ def cancel(job_id: int) -> bool:
     at the next progress step; otherwise (queued or orphaned) resolve it in the DB now.
     Returns True if a job was actually stopped/transitioned, False if there was
     nothing to cancel (unknown id or already in a terminal state)."""
-    running_here = any(q.current == job_id for q in LANES.values())
+    running_here = any(job_id in q._inflight or q.current == job_id for q in LANES.values())
     if running_here:
         _CANCELLED.add(job_id)
         return True
@@ -655,7 +708,7 @@ def cancel(job_id: int) -> bool:
 def skip(job_id: int) -> bool:
     """Skip the currently running item of a batch job (or the whole job if single).
     Returns True only if a running job was flagged (skip has no meaning otherwise)."""
-    if any(q.current == job_id for q in LANES.values()):
+    if any(job_id in q._inflight or q.current == job_id for q in LANES.values()):
         _SKIPPED.add(job_id)
         return True
     return False

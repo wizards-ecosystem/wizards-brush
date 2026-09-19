@@ -41,6 +41,15 @@ def test_notice_credits_the_apache_code_we_reuse():
         assert required in notice, f"NOTICE does not credit {required}"
 
 
+def test_notice_covers_region_and_identity_weights():
+    """SCHP, BiSeNet, and SFace/YuNet are fetched at runtime like BiRefNet.
+    Attribution and the InsightFace refusal must stay visible with that boundary."""
+    notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    for required in ("SCHP", "pirocheto/schp-atr-18", "BiSeNet", "face-parsing.PyTorch",
+                     "SFace", "YuNet", "InsightFace", "research-only"):
+        assert required in notice, f"NOTICE does not describe {required}"
+
+
 def test_notice_covers_the_optional_hidream_runtime_fetch():
     """The remote runner fetches this optional upstream at runtime, not from a
     vendored checkout. The attribution must remain visible with that boundary."""

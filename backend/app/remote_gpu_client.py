@@ -228,7 +228,7 @@ def _validated_result(path: str, payload: dict[str, Any], raw: Any) -> dict[str,
                             for item in images)
         if encoded_total > _encoded_limit(MAX_REMOTE_IMAGE_BATCH_BYTES):
             raise RuntimeError("Remote GPU image batch exceeded the size limit")
-    elif path == "/edit":
+    elif path in {"/edit", "/inpaint"}:
         _check_encoded(raw.get("image_b64"), MAX_REMOTE_IMAGE_BYTES, "image")
     elif path in {"/t2v", "/i2v"}:
         _check_encoded(raw.get("video_b64"), MAX_REMOTE_VIDEO_BYTES, "video")
@@ -381,6 +381,23 @@ def local_build_id() -> str:
         return ""
 
 
+def _worker_alive(client: httpx.Client, url: str, secret: str) -> bool:
+    """True when /health answers and the worker thread is still there."""
+    try:
+        status, data = _sync_request(
+            client, "GET", f"{url}/health", limit=MAX_CONTROL_RESPONSE_BYTES,
+            headers={"X-Gen-Secret": secret}, timeout=CANCEL_TIMEOUT,
+        )
+        if status != 200:
+            return False
+        body = _json_object(data, "health")
+        if "worker_alive" in body:
+            return bool(body["worker_alive"])
+        return True
+    except Exception:  # noqa: BLE001 — a health probe failure means "not up"
+        return False
+
+
 def _redact(text: str, secret: str) -> str:
     """Never echo the shared secret back into an error surfaced to the UI/logs."""
     return text.replace(secret, "***") if secret else text
@@ -430,10 +447,15 @@ def run_remote(
                     if not isinstance(token, str) or not token or len(token) > _MAX_TOKEN_CHARS:
                         raise RuntimeError("Remote GPU returned an invalid job token")
                     return token
-                # 5xx / tunnel errors are worth retrying; 4xx (e.g. bad request) are not.
+                # 5xx / tunnel errors are worth retrying while the worker itself
+                # is still up; 4xx (e.g. bad request) are not. 502/530 from the
+                # tunnel in particular must not fail a job whose /health is fine.
                 if status < 500:
                     detail = data[:300].decode("utf-8", errors="replace")
                     raise RuntimeError(f"Remote GPU error {status}: {_redact(detail, secret)}")
+                if status in {502, 503, 504, 530} and not _worker_alive(c, url, secret):
+                    raise RuntimeError(
+                        f"Remote GPU error {status}: the worker is not answering /health")
                 last = RuntimeError(f"Remote GPU error {status}")
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last = RuntimeError(f"Remote GPU unreachable: {e}")
@@ -490,6 +512,9 @@ def run_remote(
                     # not the job failing — retry like a transport error. Only 4xx
                     # (bad/unknown token) fails fast.
                     if status_code >= 500:
+                        if status_code in {502, 503, 504, 530} and not _worker_alive(c, url, secret):
+                            raise RuntimeError(
+                                f"Remote GPU error {status_code}: the worker is not answering /health")
                         raise _PollHiccup(f"http {status_code}")
                     if status_code == 404:
                         raise RuntimeError(

@@ -13,11 +13,25 @@ const WHEEL_SENSITIVITY = 0.0015;
  *
  * Zoom is anchored at the cursor rather than the centre, so pointing at a
  * detail and scrolling brings that detail closer instead of drifting off-screen.
+ *
+ * `pickMode` turns a click at 1× into image-pixel coordinates for the region
+ * wand, instead of starting a pan.
  */
-export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
+export function ZoomableImage({
+  src,
+  alt,
+  pickMode = false,
+  onPick,
+}: {
+  src: string;
+  alt: string;
+  pickMode?: boolean;
+  onPick?: (x: number, y: number) => void;
+}) {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   // Mirrored in state because the cursor and transition depend on it, and
   // React 19 (correctly) rejects reading a ref during render.
@@ -59,12 +73,32 @@ export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
     });
   }, []);
 
+  const mapClick = (clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+    // The <img> box is the painted pixels (object-contain, max-height, zoom
+    // transform). Mapping through the outer letterbox treated the lightbox as
+    // the image and put wand clicks in the wrong place.
+    const r = img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    const x = Math.floor(((clientX - r.left) / r.width) * img.naturalWidth);
+    const y = Math.floor(((clientY - r.top) / r.height) * img.naturalHeight);
+    if (x < 0 || y < 0 || x >= img.naturalWidth || y >= img.naturalHeight) return null;
+    return { x, y };
+  };
+
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
+    if (pickMode) return;
     zoomAt(zoom * Math.exp(-e.deltaY * WHEEL_SENSITIVITY), e.clientX, e.clientY);
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (pickMode) {
+      const coords = mapClick(e.clientX, e.clientY);
+      if (coords) onPick?.(coords.x, coords.y);
+      return;
+    }
     if (zoom === MIN_ZOOM) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y };
@@ -80,6 +114,8 @@ export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
     setDragging(false);
   };
 
+  const cursor = pickMode ? "crosshair" : zoom > MIN_ZOOM ? (dragging ? "grabbing" : "grab") : "zoom-in";
+
   return (
     <div
       ref={boxRef}
@@ -89,16 +125,21 @@ export function ZoomableImage({ src, alt }: { src: string; alt: string }) {
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerLeave={endDrag}
-      onDoubleClick={(e) => (zoom === MIN_ZOOM ? zoomAt(2, e.clientX, e.clientY) : reset())}
+      onDoubleClick={(e) => {
+        if (pickMode) return;
+        if (zoom === MIN_ZOOM) zoomAt(2, e.clientX, e.clientY);
+        else reset();
+      }}
     >
       <img
+        ref={imgRef}
         src={src}
         alt={alt}
         draggable={false}
         className="transparency-grid max-h-[88vh] max-w-full object-contain select-none"
         style={{
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
-          cursor: zoom > MIN_ZOOM ? (dragging ? "grabbing" : "grab") : "zoom-in",
+          cursor,
           transition: dragging ? "none" : "transform 80ms linear",
           // Nearest-neighbour past ~3x: at that point the interesting question is
           // what the model actually produced, not a smoothed guess at it.

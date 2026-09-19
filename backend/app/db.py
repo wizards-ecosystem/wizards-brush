@@ -139,7 +139,10 @@ def reconcile_orphans() -> int:
     """Resolve jobs the previous process left mid-flight.
 
     Only *running* jobs. Their handler lived in a process that is gone, and a
-    generation cannot be picked up half-done, so they resolve to canceled.
+    generation cannot be picked up half-done.
+
+    If the handler already persisted assets, the job is marked done — the work
+    finished; only the status write was lost. Otherwise it is canceled.
 
     Queued jobs are deliberately left alone. They never started, so there is no
     partial work to reconcile — and cancelling them threw away a queue the user
@@ -150,17 +153,24 @@ def reconcile_orphans() -> int:
     n = 0
     with session() as s:
         for j in s.exec(select(Job).where(Job.status == JobStatus.running.value)):
-            j.status = JobStatus.canceled.value
-            j.message = "interrupted by restart"
-            j.finished_at = datetime.now(UTC)
             asset_ids = list(s.exec(
                 select(Asset.id).where(Asset.job_id == j.id).order_by(Asset.id)  # type: ignore[arg-type]
             ))
-            if asset_ids:
+            live = [int(value) for value in asset_ids if value is not None]
+            if live:
+                # The handler finished enough to persist outputs; the process died
+                # before it could mark the row done. Completing it is the truth.
                 previous = j.result
-                previous["asset_ids"] = [int(value) for value in asset_ids if value is not None]
-                previous["partial"] = True
+                previous["asset_ids"] = live
                 j.result_json = json.dumps(previous)
+                j.status = JobStatus.done.value
+                j.progress = 1.0
+                j.message = "completed before restart"
+                j.finished_at = datetime.now(UTC)
+            else:
+                j.status = JobStatus.canceled.value
+                j.message = "interrupted by restart"
+                j.finished_at = datetime.now(UTC)
             s.add(j)
             n += 1
         s.commit()

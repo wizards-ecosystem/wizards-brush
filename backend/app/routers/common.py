@@ -534,6 +534,7 @@ def get_handler(kind: str) -> Callable | None:
 # expensive step and quadruples the file, which is a choice, not a polish.
 _FINISH_STEPS: dict[str, tuple[bool, bool, bool]] = {
     "none": (False, False, False),
+    "photoreal": (False, False, False),  # photography look; never GFPGAN
     "faces": (True, True, False),
     "upscale": (False, False, True),
     "faces + upscale": (True, True, True),

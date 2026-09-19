@@ -547,14 +547,14 @@ def _set_speed(pipe, on: bool) -> None:
 
 
 # ---- lazy pipeline registry (one heavy pipe resident at a time) -----------
-_PIPES: dict = {"image": None, "edit": None, "video_mode": None, "video": None,
-                "video_engine": None, "image_speed": False,
+_PIPES: dict = {"image": None, "edit": None, "edit_inpaint": None, "video_mode": None,
+                "video": None, "video_engine": None, "image_speed": False,
                 "edit_speed": False, "video_speed": False}
 
 
 def _evict_all() -> None:
-    _PIPES.update(image=None, image_variant=None, edit=None, video=None,
-                  video_mode=None, video_engine=None)
+    _PIPES.update(image=None, image_variant=None, edit=None, edit_inpaint=None,
+                  video=None, video_mode=None, video_engine=None)
     free_memory()
 
 
@@ -746,7 +746,55 @@ def get_edit_pipe():
         _try_sage(pipe)
         _PIPES["edit"] = pipe
         print("[remote-gpu] edit pipeline ready.")
+    if _PIPES.get("edit_inpaint") is None:
+        _ensure_edit_inpaint(_PIPES["edit"])
     return _PIPES["edit"]
+
+
+def _edit_inpaint_cls():
+    import diffusers
+
+    return getattr(diffusers, "QwenImageEditInpaintPipeline", None)
+
+
+def _ensure_edit_inpaint(plus_pipe) -> None:
+    """Share the loaded 2511 modules with the masked inpaint pipeline.
+
+    Plus restyle and masked inpaint are the same checkpoint. Building a second
+    resident copy would evict the first. `from_pipe` (or a components copy) keeps
+    one transformer. False means this Diffusers build cannot inpaint; /inpaint
+    then 409s rather than silently calling Plus.
+    """
+    if _PIPES.get("edit_inpaint") is not None:
+        return
+    cls = _edit_inpaint_cls()
+    if cls is None:
+        _PIPES["edit_inpaint"] = False
+        print("[remote-gpu] QwenImageEditInpaintPipeline is not in this Diffusers build.")
+        return
+    try:
+        if hasattr(cls, "from_pipe"):
+            inpaint = cls.from_pipe(plus_pipe)
+        else:
+            inpaint = cls(**plus_pipe.components)
+        _PIPES["edit_inpaint"] = inpaint
+        print("[remote-gpu] edit inpaint pipeline ready (shared 2511 weights).")
+    except Exception as exc:  # noqa: BLE001 — feature flag must not kill /edit
+        _PIPES["edit_inpaint"] = False
+        print(f"[remote-gpu] edit inpaint unavailable: {exc}")
+
+
+def get_edit_inpaint_pipe():
+    get_edit_pipe()
+    pipe = _PIPES.get("edit_inpaint")
+    if pipe in (None, False):
+        raise HTTPException(
+            status_code=409,
+            detail=("this worker cannot inpaint: QwenImageEditInpaintPipeline is "
+                    "not available in this Diffusers build. Restart with a current "
+                    "remote_gpu.py, or use /edit for a full-frame restyle."),
+        )
+    return pipe
 
 
 def _load_wan(mode: str):
@@ -1233,6 +1281,20 @@ class EditReq(BaseModel):
     client_job_id: str = Field(default="", max_length=128)
 
 
+class InpaintReq(BaseModel):
+    prompt: Prompt
+    negative_prompt: Prompt = ""
+    steps: int = Field(default=30, ge=1, le=200)
+    guidance: float = Field(default=4.0, ge=0, le=50)
+    seed: int = Field(default=0, ge=0, le=2**32 - 1)
+    speed: bool = False
+    image_b64: EncodedImage
+    mask_b64: EncodedImage
+    strength: float = Field(default=0.75, ge=0.05, le=1.0)
+    padding_mask_crop: int | None = Field(default=None, ge=0, le=512)
+    client_job_id: str = Field(default="", max_length=128)
+
+
 class VideoReq(BaseModel):
     prompt: Prompt
     negative_prompt: Prompt = ""
@@ -1288,6 +1350,8 @@ def health(x_gen_secret: str | None = Header(default=None)):
         features.append("speed_image")
     if EDIT_LIGHTNING_LORA:
         features.append("speed_edit")
+    if _edit_inpaint_cls() is not None:
+        features.append("edit_inpaint")
     if VIDEO_LIGHTNING_LORA:
         features.append("speed_video")
     if HUNYUAN_VIDEO_MODEL:
@@ -1439,6 +1503,46 @@ def edit(req: EditReq, x_gen_secret: str | None = Header(default=None)):
         call = {"image": image_arg, "prompt": req.prompt, "num_inference_steps": req.steps,
                     "generator": gen,
                     "callback_on_step_end": _progress_cb(token, req.steps, imgs[0].width, imgs[0].height)}
+        _cfg_call(sig, call, req.guidance, req.negative_prompt)
+        out = pipe(**call)
+        buf = io.BytesIO()
+        out.images[0].save(buf, format="PNG")
+        del out
+        free_memory()
+        return {"image_b64": base64.b64encode(buf.getvalue()).decode()}
+
+    return _enqueue(run, req.client_job_id)
+
+
+@app.post("/inpaint")
+def inpaint(req: InpaintReq, x_gen_secret: str | None = Header(default=None)):
+    _auth(x_gen_secret)
+
+    def run(token):
+        import inspect
+
+        _raise_if_canceled(token)
+        plus = get_edit_pipe()
+        pipe = get_edit_inpaint_pipe()
+        if req.speed:
+            _require_speed("edit")
+        _set_speed(plus, req.speed)
+        _set_speed(pipe, req.speed)
+        sig = inspect.signature(pipe.__call__).parameters
+        image = ImageOps.exif_transpose(_decode_image(req.image_b64)).convert("RGB")
+        mask = ImageOps.exif_transpose(_decode_image(req.mask_b64)).convert("L")
+        if mask.size != image.size:
+            mask = mask.resize(image.size, Image.Resampling.NEAREST)
+        gen = torch.Generator(device="cpu").manual_seed(int(req.seed))
+        call = {
+            "image": image, "mask_image": mask, "prompt": req.prompt,
+            "num_inference_steps": req.steps, "generator": gen,
+            "callback_on_step_end": _progress_cb(token, req.steps, image.width, image.height),
+        }
+        if "strength" in sig:
+            call["strength"] = float(req.strength)
+        if req.padding_mask_crop is not None and "padding_mask_crop" in sig:
+            call["padding_mask_crop"] = int(req.padding_mask_crop)
         _cfg_call(sig, call, req.guidance, req.negative_prompt)
         out = pipe(**call)
         buf = io.BytesIO()

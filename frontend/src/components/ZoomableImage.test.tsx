@@ -1,7 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { fireEvent } from "@testing-library/react";
 import { ZoomableImage } from "./ZoomableImage";
+
+function stubPaintedSize(img: HTMLImageElement, width: number, height: number, left = 0, top = 0) {
+  Object.defineProperty(img, "naturalWidth", { configurable: true, value: width });
+  Object.defineProperty(img, "naturalHeight", { configurable: true, value: height });
+  img.getBoundingClientRect = () =>
+    ({
+      x: left,
+      y: top,
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON() {
+        return {};
+      },
+    }) as DOMRect;
+}
 
 const style = (el: HTMLElement) => el.getAttribute("style") || "";
 
@@ -54,5 +73,21 @@ describe("ZoomableImage", () => {
 
     rerender(<ZoomableImage src="/b.png" alt="b" />);
     expect(style(screen.getByAltText("b"))).toContain("scale(1)");
+  });
+
+  it("maps a pick-mode click onto image pixels, not the letterbox", () => {
+    const onPick = vi.fn();
+    const { container } = render(<ZoomableImage src="/a.png" alt="a" pickMode onPick={onPick} />);
+    stubPaintedSize(screen.getByAltText("a") as HTMLImageElement, 200, 100, 40, 10);
+    fireEvent.pointerDown(container.firstChild as HTMLElement, { clientX: 90, clientY: 35 });
+    expect(onPick).toHaveBeenCalledWith(50, 25);
+  });
+
+  it("does not zoom on wheel or double-click while picking a region", () => {
+    const { container } = render(<ZoomableImage src="/a.png" alt="a" pickMode />);
+    const box = container.firstChild as HTMLElement;
+    fireEvent.wheel(box, { deltaY: -500, clientX: 100, clientY: 100 });
+    fireEvent.doubleClick(box, { clientX: 10, clientY: 10 });
+    expect(style(screen.getByAltText("a"))).toContain("scale(1)");
   });
 });

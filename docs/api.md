@@ -150,16 +150,19 @@ the kinds and settings available on yours.
 | `image_local` | local | none | Text to image on the local GPU (model picked by `model_variant`) |
 | `img2img` | local | 1 image | Transform an image |
 | `inpaint` | local | 1 image + mask | Regenerate the masked region (white = change) |
+| `inpaint_remote` | remote | 1 image + mask | Masked A100 inpaint on the same Edit-2511 weights; unmasked pixels stay the photograph |
 | `outpaint` | local | 1 image | Extend past the frame (`direction`, `expand_pct`) |
 | `control_local` | local | 1 image | ControlNet (when enabled) |
 | `image_colab` | remote | none | Text to image on the Remote GPU |
-| `image_edit` | remote | 1–3 images | Instruction edit; extra images are references |
+| `image_edit` | remote | 1–3 images | Instruction edit; extra images are references. `input_fidelity=high` routes through `inpaint_remote` with a protect-face / named region mask |
+| `refine` | remote | 1 image | Facade: one sentence over a gallery image, routed to `inpaint_remote` or `image_edit`. Each turn is an ordinary job |
 | `t2v`, `long_video` | remote | none | Text to video; chained shots |
 | `i2v` | remote | 1 image (+ `last_frame`) | Image to video |
 | `upscale` | local | 1 image | Real-ESRGAN ×2/×4 (`scale`) |
 | `face_restore` | local | 1 image | GFPGAN |
 | `detail` | local | 1 image | Re-render faces/hands (`targets`, `denoise`, `prompt`) |
 | `matte` | local | 1 image | Background matte: `mode` = `cutout` (transparent PNG), `mask` (subject), `inverse_mask` (surroundings) |
+| `region_mask` | local | 1 image | SCHP / BiSeNet mask for hair, face, clothes, mouth or eyes (`region`, or `click_x` / `click_y`) |
 | `interpolate` | local | 1 video | Multiply the frame rate (`factor`, `method`) |
 | `extend_video` | remote | 1 video | Continue a clip from its last frame |
 
@@ -200,7 +203,7 @@ Response:
 - The number of `images` must fit the kind's `inputs.images` range.
 - Every asset must be live (not trashed), be of the right kind, and still have
   its file.
-- For `inpaint`, the mask must be the same size as the image.
+- For `inpaint` and `inpaint_remote`, the mask must be the same size as the image.
 - Gallery assets are used in place: nothing is copied.
 
 A job created here is indistinguishable from one created in the UI. It appears
@@ -347,9 +350,9 @@ The recipe fields, in order:
     stable across retries.
   - `-1`: resolved once at creation and recorded in the snapshot.
 - **`masks`** and **`mask`**: the recipe declares
-  `"masks": {"region": {"asset_id": 55}}`, and an `inpaint` stage names it with
-  `"mask": "region"`. Make masks with `POST /api/assets/import` (`role=mask`)
-  or with the `matte` tool (`mode: mask` or `inverse_mask`).
+  `"masks": {"region": {"asset_id": 55}}`, and an `inpaint` or `inpaint_remote` stage names it with
+  `"mask": "region"`. Make masks with `POST /api/assets/import` (`role=mask`),
+  the `matte` tool (`mode: mask` or `inverse_mask`), or the `region_mask` tool.
 - **Stages**: a recipe has 1 to 4 stages. Stage 2 onward runs on each output
   of the previous stage, and its axes multiply. A stage may also name up to two
   `references` (asset ids) as extra inputs for `image_edit`. When a parent
@@ -368,9 +371,10 @@ POST /api/variant-sets/preview   {"recipe": {...}, "limit": 100}
 ```
 
 `preview` returns every combination with its effective prompt, seed and output
-name, plus collisions and warnings. For example, it warns about an axis that
-changes nothing, or a stage that needs the Remote GPU while it is offline. It
-creates nothing.
+name, plus collisions, warnings, and an `eta` (`seconds`, `confidence`,
+`label`) once three comparable jobs of that kind exist. For example, it warns
+about an axis that changes nothing, or a stage that needs the Remote GPU while
+it is offline. It creates nothing.
 
 ```
 POST /api/variant-sets
@@ -460,6 +464,8 @@ exist and decode.
 | `corners_transparent` | All four corners at or below `transparent_threshold` |
 | `min_transparent_fraction`, `max_transparent_fraction` | Share of transparent pixels |
 | `safe_margin` | Clear pixels between visible content and every edge |
+| `unmasked_match` | Unmasked source pixels must equal the output (needs the source image and original hard mask) |
+| `face_identity_min` | Minimum OpenCV SFace cosine vs the first source face (0–1) |
 
 An output that fails a check is kept, and its item is marked `invalid` with the
 reasons.

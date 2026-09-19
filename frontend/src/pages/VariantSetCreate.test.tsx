@@ -182,6 +182,25 @@ describe("Variant Set editor", () => {
     expect(screen.getByRole("button", { name: /Create set · 6/ })).toBeDisabled();
   });
 
+  it("shows the previewed set ETA once the server returns one", async () => {
+    mocks.previewVariantSet.mockImplementation(async () => ({
+      total: 3,
+      cap: 1000,
+      stages: [],
+      items: [
+        { stage: 0, key: "k", values: {}, prompt: "p", negative_prompt: "", seed: 1, output_name: "a.png" },
+      ],
+      collisions: [],
+      warnings: [],
+      eta: { seconds: 90, confidence: "low", label: "a minute and a half" },
+    }));
+    renderCreate();
+    await addAxis("material", "wood, steel, glass", 0);
+    expect(await screen.findByTestId("variant-eta", {}, { timeout: 3000 })).toHaveTextContent(
+      "About a minute and a half",
+    );
+  });
+
   it("renders the operation's registry controls, minus the ones the set supplies", async () => {
     renderCreate();
     await screen.findAllByTestId("axis-editor");

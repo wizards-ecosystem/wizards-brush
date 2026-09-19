@@ -116,6 +116,7 @@ class JobKind(str, Enum):
     image_edit = "image_edit"
     img2img = "img2img"
     inpaint = "inpaint"
+    inpaint_remote = "inpaint_remote"
     outpaint = "outpaint"
     control_local = "control_local"
     t2v = "t2v"
@@ -127,6 +128,7 @@ class JobKind(str, Enum):
     interpolate = "interpolate"
     detail = "detail"
     matte = "matte"
+    region_mask = "region_mask"
 
 
 class AssetKind(str, Enum):

@@ -58,3 +58,24 @@ def test_higher_tier_means_more_pixels():
     small = dims_for(aspect="1:1", tier="Draft", device="local")
     big = dims_for(aspect="1:1", tier="High", device="local")
     assert big[0] * big[1] > small[0] * small[1]
+
+
+def test_a100_ultra_is_a_native_2k_bucket():
+    w, h = dims_for(aspect="16:9", tier="Ultra", device="a100")
+    assert max(w, h) == 2048
+    assert w % 16 == 0 and h % 16 == 0
+    high_w, high_h = dims_for(aspect="16:9", tier="High", device="a100")
+    assert max(high_w, high_h) <= 1664
+    assert w * h > high_w * high_h
+    square_w, square_h = dims_for(aspect="1:1", tier="Ultra", device="a100")
+    assert max(square_w, square_h) <= 2048
+    assert square_w * square_h > dims_for(aspect="1:1", tier="High", device="a100")[0] ** 2
+
+
+def test_sdxl_ultra_stays_on_the_trained_area():
+    from backend.app.generators.base import dims_for as dims
+
+    high = dims(aspect="1:1", tier="High", device="a100", family="sdxl")
+    ultra = dims(aspect="1:1", tier="Ultra", device="a100", family="sdxl")
+    assert high == ultra
+

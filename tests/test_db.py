@@ -39,6 +39,18 @@ def test_reconcile_orphans_cancels_stuck_jobs():
     assert db.get_job(job.id).status == JobStatus.canceled.value
 
 
+def test_reconcile_orphans_completes_running_jobs_that_already_have_assets():
+    job = db.create_job("image_local", {})
+    db.mark_running(job.id)
+    asset = db.add_asset("image", _touch("orphan-done.png"), job_id=job.id, width=8, height=8)
+    n = db.reconcile_orphans()
+    assert n >= 1
+    done = db.get_job(job.id)
+    assert done.status == JobStatus.done.value
+    assert done.message == "completed before restart"
+    assert asset.id in done.result["asset_ids"]
+
+
 def test_remote_orphan_identity_is_available_before_reconciliation():
     job = db.create_job("t2v", {})
     db.mark_running(job.id)

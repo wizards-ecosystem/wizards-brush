@@ -79,6 +79,22 @@ def test_run_remote_retries_5xx_then_succeeds(monkeypatch, remote_gpu_env):
     assert any("retry" in m for m in msgs)
 
 
+def test_run_remote_5xx_fails_when_health_is_down(monkeypatch, remote_gpu_env):
+    calls = {"post": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(502, text="tunnel")
+        calls["post"] += 1
+        return httpx.Response(530, text="origin down")
+
+    _mock_client_factory(monkeypatch, handler)
+    with pytest.raises(RuntimeError, match="not answering /health"):
+        cc.run_remote("/image", {})
+    assert calls["post"] == 1
+
+
+
 def test_run_remote_4xx_fails_fast(monkeypatch, remote_gpu_env):
     calls = {"post": 0}
 
@@ -135,6 +151,8 @@ def test_run_remote_poll_5xx_is_retried(monkeypatch, remote_gpu_env):
     polls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"ok": True, "worker_alive": True})
         if request.url.path == "/image":
             return httpx.Response(200, json={"token": "t6"})
         polls["n"] += 1

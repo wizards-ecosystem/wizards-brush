@@ -53,9 +53,28 @@ class ValidationSpec(BaseModel):
     safe_margin: int | None = Field(default=None, ge=0, le=4096)
     # Alpha at or below this counts as transparent (0-254).
     transparent_threshold: int = Field(default=8, ge=0, le=254)
+    # Identity lock: unmasked source pixels must match the output (feather
+    # excluded). Needs the source image and the original hard mask in `meta`.
+    unmasked_match: bool = False
+    # Minimum OpenCV SFace cosine vs the first source face, or None to skip.
+    face_identity_min: float | None = Field(default=None, ge=0.0, le=1.0)
 
     def is_empty(self) -> bool:
         return self == ValidationSpec()
+
+
+def cutout_spec(*, coverage: float = 0.20, safe_margin: int = 16,
+                **extra: Any) -> ValidationSpec:
+    """Named cutout profile: real alpha, coverage band, edge margin.
+
+    Coverage is the expected transparent fraction; the allowed band is
+    ``coverage ± 0.35``, clamped to (0, 1). Four transparent corners are not
+    required — a product that fills a corner is still a valid cutout.
+    """
+    lo = max(0.02, min(coverage - 0.35, 0.95))
+    hi = min(0.98, max(coverage + 0.35, lo + 0.05))
+    return ValidationSpec(alpha="required", min_transparent_fraction=lo,
+                          max_transparent_fraction=hi, safe_margin=safe_margin, **extra)
 
 
 @dataclass(frozen=True)
@@ -138,4 +157,5 @@ def run(
 
 # The built-in checks register themselves; imported last because they import
 # `register` and the types above from this package.
+from . import identity as _identity  # noqa: F401
 from . import image as _builtin  # noqa: F401

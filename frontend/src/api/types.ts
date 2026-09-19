@@ -669,6 +669,7 @@ export interface VariantPreview {
   items: VariantPreviewItem[];
   collisions: { stage: number; name: string; keys: string[] }[];
   warnings: string[];
+  eta?: { seconds: number | null; confidence: string; label: string };
 }
 
 export type VariantItemState =

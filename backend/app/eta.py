@@ -112,6 +112,14 @@ def swap_seconds() -> float:
     return DEFAULT_SWAP_SECONDS
 
 
+def for_params(kind: str, params: dict) -> Estimate:
+    """Historical estimate for a job that does not exist yet (set preview)."""
+    rate, samples = rate_for(kind)
+    if rate is None:
+        return Estimate(None, "unknown" if samples == 0 else "estimating")
+    return Estimate(cost_of(params) * rate, "estimated")
+
+
 def for_queued(job: Job, *, resident_model: str | None = None) -> Estimate:
     """How long `job` will take once it starts, including a swap if it needs one."""
     rate, samples = rate_for(job.kind)

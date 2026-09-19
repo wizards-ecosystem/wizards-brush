@@ -116,10 +116,16 @@ async def lifespan(app: FastAPI):
     # already holds it. Two processes would run two job lanes over one queue.
     acquire_process_lock()
     init_db()
+    try:
+        from .variant_sets.shipped import ensure_shipped
+
+        ensure_shipped()
+    except Exception as e:  # noqa: BLE001 — missing recipes must not stop startup
+        logger.warning("shipped variant recipes skipped: %s", e)
     abandoned_remote = remote_orphans()
     n = reconcile_orphans()
     if n:
-        logger.info("canceled %d job(s) interrupted mid-run by the restart", n)
+        logger.info("reconciled %d job(s) left running by the previous process", n)
     if abandoned_remote:
         import asyncio
 

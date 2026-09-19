@@ -348,6 +348,27 @@ one private Hub repository, depended on a write-scoped token, encoded model-
 specific scheduler/VAE choices, and was not imported by the app. Configurable
 SDXL slots plus family-aware scheduler tuning cover the reusable behavior.
 
+### Flagship-parity image stack (2026-09-18)
+
+Closed-model photorealism (GPT Image 2, Grok Imagine Image 2.0) is not a weight
+we can ship. Product behaviors those apps use were adopted on Apache/MIT
+weights that fit one A100.
+
+| Decision | Outcome | Why |
+|---|---|---|
+| Optional mask on `image_edit` (Plus restyle) | Reject | Plus has no mask contract; compositing a restyle is not identity. A second kind, `inpaint_remote`, uses `QwenImageEditInpaintPipeline` on the same 2511 weights |
+| Qwen-Image-2.0 as default | Reject until weights | Unified gen+edit and native 2K are the hoped successor; not a Diffusers default and not a reviewed Hub revision in this checkout |
+| Qwen-Image-Layered | Reject for now | RGBA isolation is useful; it is a new slot and eviction, not the identity foundation |
+| SAM 3 as default region wand | Reject | SAM License is not Apache; SCHP ATR-18 (MIT ONNX) is the default parser. SAM 3 remains operator-opt-in later |
+| InsightFace buffalo_l / CLIP-as-face | Reject | buffalo_l weights are research-only; CLIP is the wrong metric. OpenCV SFace + YuNet are Apache-2.0 |
+| Mediapipe-box hair masks | Reject | A face box is not hair. SCHP class `hair` is |
+| Graph engine / Comfy workflows | Reject (unchanged) | Region wand is SCHP/click → mask asset → `inpaint_remote` |
+| High `input_fidelity` as a prompt adjective | Reject | High auto-builds a protect-face / named SCHP region and refuses full-frame Plus |
+| Native 2K via Real-ESRGAN | Reject | ESRGAN is finishing, not native. A100 Ultra is the ~2K long-side bucket |
+| Grok-class video (audio, 1080p) | Reject for this stack | Separate program on Wan/LTX |
+
+Adopted: shared EditPlus + EditInpaint on one resident edit checkpoint; source-space composite; SCHP + BiSeNet region masks; unmasked-pixel lock; SFace identity gate; named cutout profile (coverage + safe_margin, not four corners); Refine as an API facade over ordinary jobs; Lightning as the interactive default; photoreal finish with no GFPGAN; native-alpha as prompt invariant plus BiRefNet; named Variant Set recipes.
+
 ## Validation contract
 
 The implementation is guarded at three levels:

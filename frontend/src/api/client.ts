@@ -263,7 +263,7 @@ export const api = {
   },
 
   tool: (
-    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video" | "matte",
+    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "extend-video" | "matte" | "region-mask",
     body: Record<string, any>,
   ) => postJson(`/api/tools/${kind}`, body).then((r) => j<{ job_id: number }>(r)),
 

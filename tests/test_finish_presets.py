@@ -16,6 +16,7 @@ from backend.app.routers.common import resolve_finish
     ("preset", "expected"),
     [
         ("none", (False, False, False)),
+        ("photoreal", (False, False, False)),
         ("faces", (True, True, False)),
         ("upscale", (False, False, True)),
         ("faces + upscale", (True, True, True)),

@@ -170,7 +170,11 @@ def test_remote_request_models_have_field_and_collection_bounds():
     source = make_remote_gpu.SRC.read_text()
     assert "Prompt = Annotated[str, Field(max_length=2000)]" in source
     assert "images_b64: list[EncodedImage] = Field(min_length=1, max_length=3)" in source
+    assert "mask_b64: EncodedImage" in source
     assert 'client_job_id: str = Field(default="", max_length=128)' in source
+    assert '@app.post("/inpaint")' in source
+    assert "QwenImageEditInpaintPipeline" in source
+    assert "edit_inpaint" in source
 
 
 def test_remote_dependencies_are_complete_hash_locked_without_cuda_shadow_packages():

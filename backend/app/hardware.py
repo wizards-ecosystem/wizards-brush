@@ -36,15 +36,15 @@ class Profile:
 
 PROFILES: tuple[Profile, ...] = (
     Profile("cpu", "CPU only", 0.0, 768,
-            {"Draft": 0.15, "Standard": 0.25, "High": 0.35}, max_batch=1),
+            {"Draft": 0.15, "Standard": 0.25, "High": 0.35, "Ultra": 0.35}, max_batch=1),
     Profile("8gb", "8 GB", 7.0, 1024,
-            {"Draft": 0.20, "Standard": 0.40, "High": 0.60}, max_batch=8),
+            {"Draft": 0.20, "Standard": 0.40, "High": 0.60, "Ultra": 0.60}, max_batch=8),
     Profile("12gb", "12 GB", 11.0, 1152,
-            {"Draft": 0.25, "Standard": 0.50, "High": 0.75}, max_batch=8),
+            {"Draft": 0.25, "Standard": 0.50, "High": 0.75, "Ultra": 0.75}, max_batch=8),
     Profile("16gb", "16 GB", 15.0, 1280,
-            {"Draft": 0.30, "Standard": 0.60, "High": 0.92}, max_batch=8),
+            {"Draft": 0.30, "Standard": 0.60, "High": 0.92, "Ultra": 0.92}, max_batch=8),
     Profile("24gb", "24 GB or more", 23.0, 1664,
-            {"Draft": 0.40, "Standard": 0.80, "High": 1.30}, max_batch=8),
+            {"Draft": 0.40, "Standard": 0.80, "High": 1.30, "Ultra": 1.30}, max_batch=8),
 )
 
 FALLBACK = PROFILES[0]

@@ -174,7 +174,13 @@ def resolve_classes(model: str, *, local_files_only: bool = False):
     base_name = idx.get("_class_name", "DiffusionPipeline")
     base = getattr(diffusers, base_name)
     img2img = getattr(diffusers, base_name.replace("Pipeline", "Img2ImgPipeline"), None)
-    inpaint = getattr(diffusers, base_name.replace("Pipeline", "InpaintPipeline"), None)
+    inpaint_name = {
+        "Flux2KleinPipeline": "Flux2KleinInpaintPipeline",
+        "Flux2Pipeline": "Flux2KleinInpaintPipeline",
+    }.get(base_name, base_name.replace("Pipeline", "InpaintPipeline"))
+    inpaint = getattr(diffusers, inpaint_name, None)
+    if inpaint is None and "Klein" in base_name:
+        inpaint = getattr(diffusers, "Flux2KleinInpaintPipeline", None)
     return base, img2img, inpaint
 
 

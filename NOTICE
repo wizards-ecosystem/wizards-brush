@@ -86,6 +86,32 @@ HiDream-O1-Image: https://github.com/HiDream-ai/HiDream-O1-Image
     Brush invokes its documented interface and changes the documented optional
     attention flag for portability; it carries no upstream source expression.
 
+SCHP (Self-Correction for Human Parsing): https://github.com/GoGoDuck912/Self-Correction-Human-Parsing
+    Copyright the SCHP authors. Licensed under the MIT License.
+
+    backend/app/generators/parsing.py downloads an ATR-18 ONNX export published
+    as pirocheto/schp-atr-18 (MIT, derived from those weights) at a pinned
+    commit and SHA-256 the first time a region mask is built. The weights are
+    not bundled. Preprocessing (512x512, BGR ImageNet mean/std) follows the
+    export's preprocessor_config.json; inference and mask compositing are ours.
+    Custom Python on that Hub repository is never imported.
+
+BiSeNet face parsing: https://github.com/zllrunning/face-parsing.PyTorch
+    Copyright the face-parsing.PyTorch authors. Licensed under the MIT License.
+
+    Mouth and eye masks use a CelebAMask-HQ BiSeNet ONNX from the MIT-licensed
+    yakhyo/face-parsing packaging (resnet18.onnx at the `weights` release,
+    pinned by SHA-256). The original training code is MIT; the ONNX is data.
+    See backend/app/generators/parsing.py.
+
+OpenCV zoo SFace and YuNet:
+    https://github.com/opencv/opencv_zoo (Apache License, Version 2.0)
+
+    backend/app/generators/identity.py fetches face_recognition_sface_2021dec.onnx
+    and face_detection_yunet_2023mar.onnx at pinned SHA-256 values for the
+    face_identity_min validator. InsightFace buffalo_l weights are research-only
+    and are not used.
+
 --------------------------------------------------------------------------------
 Read and reimplemented; NOT copied
 --------------------------------------------------------------------------------

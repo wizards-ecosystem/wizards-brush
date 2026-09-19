@@ -34,6 +34,7 @@ from ..queue import lane_for
 from . import images, tools, videos
 from .common import (
     _submission_response,
+    as_int,
     error_responses,
     get_handler,
     normalize_request_id,
@@ -59,8 +60,8 @@ class Inputs:
 
 _IMAGE_KINDS = frozenset({
     JobKind.image_local.value, JobKind.image_colab.value, JobKind.img2img.value,
-    JobKind.inpaint.value, JobKind.outpaint.value, JobKind.image_edit.value,
-    JobKind.control_local.value,
+    JobKind.inpaint.value, JobKind.inpaint_remote.value, JobKind.outpaint.value,
+    JobKind.image_edit.value, JobKind.control_local.value,
 })
 _VIDEO_KINDS = frozenset({JobKind.t2v.value, JobKind.i2v.value, JobKind.long_video.value})
 # The routes that check the local card before queuing, and the ones that also
@@ -76,6 +77,7 @@ GENERATOR_INPUTS: dict[str, Inputs] = {
     JobKind.image_colab.value: Inputs(),
     JobKind.img2img.value: Inputs(1, 1),
     JobKind.inpaint.value: Inputs(1, 1, mask="required"),
+    JobKind.inpaint_remote.value: Inputs(1, 1, mask="required"),
     JobKind.outpaint.value: Inputs(1, 1),
     JobKind.image_edit.value: Inputs(1, 3),
     JobKind.control_local.value: Inputs(1, 1),
@@ -228,6 +230,30 @@ def _catalogue(remote: dict[str, Any] | None = None) -> dict[str, JobKindInfo]:
             inputs=_inputs_view(inputs_for(kind)),
             params=controls.params_schema({str(c["name"]): c for c in tool.controls}),
         )
+    if (target := out.get("inpaint_remote") or out.get("image_edit")) is not None:
+        from ..generators import parsing
+
+        extra: dict[str, dict[str, Any]] = {
+            "region": {
+                "name": "region", "label": "Region", "type": "select", "default": "",
+                "options": ["", *parsing.REGIONS],
+            },
+            "click_x": {"name": "click_x", "label": "Click X", "type": "number",
+                        "default": -1, "min": -1, "max": 16384},
+            "click_y": {"name": "click_y", "label": "Click Y", "type": "number",
+                        "default": -1, "min": -1, "max": 16384},
+        }
+        spec = registry_specs().get(target.kind, {})
+        known = {**_controls_of(spec), **extra}
+        out["refine"] = JobKindInfo(
+            kind="refine", title="Refine",
+            description="One-sentence edit of a gallery image. Routes to masked "
+                        "inpaint or a restyle; each turn is an ordinary job.",
+            category="generator", output="image", lane=target.lane,
+            available=target.available, unavailable_reason=target.unavailable_reason,
+            inputs=_inputs_view(Inputs(1, 1)),
+            params=controls.params_schema(known),
+        )
     return out
 
 
@@ -340,6 +366,9 @@ async def create_job(body: JobCreate) -> JobSubmission:
                                          request_id=request_id)
         return _submission(result, duplicate=False)
 
+    if body.kind == "refine":
+        return await _create_refine(body, info, request_id)
+
     from ..variant_sets.operations import registry_specs
 
     spec = registry_specs()[body.kind]
@@ -376,6 +405,72 @@ def _validated(kind: str, params: dict[str, Any],
         return controls.check_params(params, known, subject=kind)
     except controls.ControlError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+
+
+async def _create_refine(body: JobCreate, info: JobKindInfo,
+                         request_id: str | None) -> JobSubmission:
+    """Facade: one sentence becomes an ordinary inpaint_remote or image_edit job."""
+    from PIL import Image as PILImage
+
+    from ..generators import parsing
+    from ..refine import infer_region, is_restyle, refine_defaults
+    from ..utils.io import save_image
+    from ..variant_sets.operations import registry_specs
+
+    target_kind = (JobKind.inpaint_remote.value
+                   if JobKind.inpaint_remote.value in registry_specs()
+                   else JobKind.image_edit.value)
+    spec = registry_specs()[target_kind]
+    extra: dict[str, dict[str, Any]] = {
+        "region": {"name": "region", "type": "select", "default": "",
+                   "options": ["", *parsing.REGIONS]},
+        "click_x": {"name": "click_x", "type": "number", "default": -1, "min": -1, "max": 16384},
+        "click_y": {"name": "click_y", "type": "number", "default": -1, "min": -1, "max": 16384},
+    }
+    clean = _validated("refine", body.params, {**_controls_of(spec), **extra})
+    paths, _mask, _last = _resolve("refine", Inputs(1, 1), body.inputs)
+    await _require_runnable(info)
+    prompt = str(clean.get("prompt") or "")
+    raw = refine_defaults(prompt, {**clean, "request_id": request_id})
+    raw["parent_asset_id"] = body.inputs.images[0]
+    region = str(raw.get("region") or "").strip()
+    click_x = as_int(raw.get("click_x"), -1, -1, 16384)
+    click_y = as_int(raw.get("click_y"), -1, -1, 16384)
+    with PILImage.open(paths[0]) as opened:
+        opened.load()
+        source = opened.convert("RGB")
+    if click_x >= 0 and click_y >= 0:
+        region = parsing.region_at(source, click_x, click_y)
+        raw["region"] = region
+    restyle = is_restyle(prompt) and not region
+    if restyle and str(raw.get("input_fidelity") or "high") != "high":
+        params = images.build_params(JobKind.image_edit.value, raw, paths)
+        handler = get_handler(JobKind.image_edit.value)
+        kind = JobKind.image_edit.value
+    else:
+        if not region:
+            region = infer_region(prompt) or "subject_minus_face"
+            raw["region"] = region
+        try:
+            mask = parsing.mask_for(source, region)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        if mask.getbbox() is None:
+            raise HTTPException(status_code=400, detail=f"region {region!r} is empty on this image")
+        mask_path = str(save_image(mask.convert("L"), "mask").path)
+        raw.setdefault("input_fidelity", "high")
+        if JobKind.inpaint_remote.value in registry_specs():
+            kind = JobKind.inpaint_remote.value
+            params = images.build_params(kind, raw, paths, mask_path)
+        else:
+            kind = JobKind.image_edit.value
+            params = images.build_params(kind, raw, paths)
+            params["mask_path"] = mask_path
+            params["input_fidelity"] = "high"
+        handler = get_handler(kind)
+    if handler is None:
+        raise HTTPException(status_code=500, detail=f"no handler for {kind}")
+    return _submission(await submit(kind, params, handler), duplicate=False)
 
 
 # ---- waiting --------------------------------------------------------------------------------

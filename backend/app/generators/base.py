@@ -60,22 +60,29 @@ ASPECTS: dict[str, tuple[int, int]] = {
 # its High tier buys more steps, not more pixels, and extra resolution comes from
 # upscaling afterwards, which is what the "Finishing" control is for.
 _TIER_MP: dict[str, dict[str, float]] = {
-    "local": {"Draft": 0.30, "Standard": 0.60, "High": 0.92},
-    "a100": {"Draft": 0.55, "Standard": 1.05, "High": 1.60},
+    "local": {"Draft": 0.30, "Standard": 0.60, "High": 0.92, "Ultra": 0.92},
+    "a100": {"Draft": 0.55, "Standard": 1.05, "High": 1.60, "Ultra": 2.36},
     # Qwen-Image-2512's official 2:3 example is exactly 1056x1584 (1.673 MP).
     # It is the image model's documented quality bucket, so use it instead of
-    # rounding the generic A100 budget down to 1040x1552.
-    "a100_qwen": {"Draft": 0.55, "Standard": 1.05, "High": 1.673},
-    "a100_sdxl": {"Draft": 0.65, "Standard": 1.05, "High": 1.05},
+    # rounding the generic A100 budget down to 1040x1552. Ultra aims at a ~2K
+    # long side on 80 GB; it is a native pixel budget, not an ESRGAN upscale.
+    "a100_qwen": {"Draft": 0.55, "Standard": 1.05, "High": 1.673, "Ultra": 3.15},
+    "a100_sdxl": {"Draft": 0.65, "Standard": 1.05, "High": 1.05, "Ultra": 1.05},
     # Not derived from VRAM. The hardware row is tuned for a quantized 6-12B
     # DiT and tops out at 0.92 MP on a 16 GB card; SDXL is a 2.6B UNet that fits
     # several times over, so that budget would put it BELOW its trained bucket
     # (softer, worse composition) for no memory reason at all.
-    "local_sdxl": {"Draft": 0.65, "Standard": 1.05, "High": 1.05},
+    "local_sdxl": {"Draft": 0.65, "Standard": 1.05, "High": 1.05, "Ultra": 1.05},
 }
 # Hard per-side ceilings so an extreme aspect can't blow past VRAM.
 _MAX_SIDE: dict[str, int] = {"local": 1280, "a100": 1664,
                              "a100_qwen": 1664, "a100_sdxl": 1536, "local_sdxl": 1536}
+# Ultra is the only tier allowed to use a 2K long side. Raising the device cap
+# for every tier would grow High 16:9, which is currently limited by 1664.
+_MAX_SIDE_TIER: dict[tuple[str, str], int] = {
+    ("a100", "Ultra"): 2048,
+    ("a100_qwen", "Ultra"): 2048,
+}
 
 
 def _local_limits() -> tuple[dict[str, float], int]:
@@ -92,6 +99,10 @@ def _local_limits() -> tuple[dict[str, float], int]:
         return p.tier_mp or _TIER_MP["local"], p.max_side
     except Exception:  # noqa: BLE001 — sizing must never fail
         return _TIER_MP["local"], _MAX_SIDE["local"]
+
+
+def _cap_for(key: str, tier: str, default: int) -> int:
+    return _MAX_SIDE_TIER.get((key, tier), _MAX_SIDE.get(key, default))
 
 
 def _snap(x: float, multiple: int = 16) -> int:
@@ -148,11 +159,14 @@ def dims_for(
         # An architecture's own limits beat both the device row and the probed
         # hardware budget: more VRAM does not make SDXL stop duplicating the
         # subject, and less VRAM is not why it should render below its bucket.
-        tier_mp, cap = _TIER_MP[key], _MAX_SIDE.get(key, 1280)
+        tier_mp, cap = _TIER_MP[key], _cap_for(key, tier, 1280)
     elif device == "local":
         tier_mp, cap = _local_limits()
+        if "Ultra" not in tier_mp and "High" in tier_mp:
+            tier_mp = {**tier_mp, "Ultra": tier_mp["High"]}
     else:
-        tier_mp, cap = _TIER_MP.get(device, _TIER_MP["local"]), _MAX_SIDE.get(device, 1280)
+        lookup = device if device in _TIER_MP else "local"
+        tier_mp, cap = _TIER_MP[lookup], _cap_for(lookup, tier, 1280)
     if width and height:
         return _cap_preserve(width, height, cap)
     rw, rh = ASPECTS.get(aspect, (1, 1))
@@ -183,11 +197,14 @@ def dims_for_ratio(
     """
     key = f"{device}_{family}" if family else ""
     if key in _TIER_MP:
-        tier_mp, cap = _TIER_MP[key], _MAX_SIDE.get(key, 1280)
+        tier_mp, cap = _TIER_MP[key], _cap_for(key, tier, 1280)
     elif device == "local":
         tier_mp, cap = _local_limits()
+        if "Ultra" not in tier_mp and "High" in tier_mp:
+            tier_mp = {**tier_mp, "Ultra": tier_mp["High"]}
     else:
-        tier_mp, cap = _TIER_MP.get(device, _TIER_MP["local"]), _MAX_SIDE.get(device, 1280)
+        lookup = device if device in _TIER_MP else "local"
+        tier_mp, cap = _TIER_MP[lookup], _cap_for(lookup, tier, 1280)
     return _dims_for_ratio(source_width, source_height, tier_mp, tier, cap)
 
 
