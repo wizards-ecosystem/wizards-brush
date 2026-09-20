@@ -38,6 +38,7 @@ REMOTE_GPU_REQUIREMENTS_LOCK = ""
 # =============================================================================
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -305,6 +306,30 @@ def _drop_shadowing_torch() -> None:
             hit.unlink(missing_ok=True)
 
 
+# RunPod writes the pod's identity here and sources it from the interactive
+# shell profile (/root/.bashrc), NOT into every process environment. Measured on
+# a live pod 2026-09-20: a non-interactive `ssh pod 'env'` has no RUNPOD_POD_ID
+# at all, while this file has it. Since ssh/nohup/systemd is exactly how the
+# docs tell an operator to start the worker, trusting the environment alone
+# meant the tunnel stayed ON for every realistic RunPod launch — the opposite of
+# the intent, and a cloudflared download on a metered GPU to reach a host that
+# already publishes HTTPS.
+_RUNPOD_ENV_FILE = Path("/etc/rp_environment")
+
+
+def _runpod_pod_id() -> str:
+    """This pod's id, from the environment or RunPod's own env file."""
+    pod_id = os.environ.get("RUNPOD_POD_ID", "").strip()
+    if pod_id:
+        return pod_id
+    try:
+        text = _RUNPOD_ENV_FILE.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""  # not a RunPod host, or the file is unreadable
+    found = re.search(r"""^\s*(?:export\s+)?RUNPOD_POD_ID=["']?([^"'\s]+)""", text, re.MULTILINE)
+    return found.group(1) if found else ""
+
+
 def _tunnel_enabled() -> bool:
     """Whether to run the bundled Cloudflare quick tunnel.
 
@@ -316,7 +341,7 @@ def _tunnel_enabled() -> bool:
     """
     if _flag("REMOTE_GPU_NO_TUNNEL"):
         return False
-    return not (os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_ENDPOINT_ID"))
+    return not (_runpod_pod_id() or os.environ.get("RUNPOD_ENDPOINT_ID"))
 
 
 def _bootstrap() -> None:
@@ -1720,8 +1745,6 @@ def _run_tunnel(port: int) -> None:
     managed host that failure is invisible — the platform's own URL keeps
     answering right up until the container exits.
     """
-    import re
-
     proc = subprocess.Popen(
         [
             str(REMOTE_GPU_TOOLS / "cloudflared-2026.8.3"), "tunnel", "--url",
@@ -1750,7 +1773,7 @@ def _launch() -> None:
     # RunPod injects PORT on load-balanced workers; a pod proxies whichever port
     # the template exposes. Honouring it keeps one image valid for both.
     port = int(os.environ.get("PORT", "8000"))
-    pod_id = os.environ.get("RUNPOD_POD_ID", "")
+    pod_id = _runpod_pod_id()
     if _tunnel_enabled():
         threading.Thread(target=_run_tunnel, args=(port,), daemon=True).start()
     elif pod_id:

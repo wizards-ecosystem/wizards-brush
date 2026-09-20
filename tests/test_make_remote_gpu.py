@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import os
+import pathlib
+import re
 import stat
 
 import pytest
@@ -338,7 +340,7 @@ def _lift(*names: str) -> dict:
     wanted = [n for n in ast.parse(make_remote_gpu.SRC.read_text()).body
               if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in wanted} == set(names), "remote_gpu.py lost a lifted function"
-    ns: dict = {"os": os}
+    ns: dict = {"os": os, "re": re, "Path": pathlib.Path}
     exec(compile(ast.Module(body=wanted, type_ignores=[]), "<remote_gpu>", "exec"), ns)
     return ns
 
@@ -350,12 +352,42 @@ def _lift(*names: str) -> dict:
     ({"REMOTE_GPU_NO_TUNNEL": "1"}, False),            # operator-managed reverse proxy
     ({"REMOTE_GPU_NO_TUNNEL": "false"}, True),         # explicit off means off, not "set"
 ])
-def test_tunnel_only_runs_where_there_is_no_route(monkeypatch, env, expected):
+def test_tunnel_only_runs_where_there_is_no_route(monkeypatch, tmp_path, env, expected):
     for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID", "REMOTE_GPU_NO_TUNNEL"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    assert _lift("_flag", "_tunnel_enabled")["_tunnel_enabled"]() is expected
+    ns = _lift("_flag", "_runpod_pod_id", "_tunnel_enabled")
+    ns["_RUNPOD_ENV_FILE"] = tmp_path / "absent"     # not a Runpod host
+    assert ns["_tunnel_enabled"]() is expected
+
+
+def test_runpod_is_detected_without_the_env_var(monkeypatch, tmp_path):
+    """Measured on a live pod 2026-09-20: Runpod exports RUNPOD_POD_ID into
+    /etc/rp_environment and sources it from the interactive shell profile, so a
+    worker started by ssh/nohup/systemd — exactly what docs/runpod.md tells an
+    operator to do — sees no RUNPOD_POD_ID at all.
+
+    Trusting the environment alone left the tunnel ON for every realistic Runpod
+    launch: a cloudflared download on a metered GPU, to reach a host that already
+    publishes HTTPS.
+    """
+    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID", "REMOTE_GPU_NO_TUNNEL"):
+        monkeypatch.delenv(key, raising=False)
+    env_file = tmp_path / "rp_environment"
+    env_file.write_text(
+        'export RUNPOD_DC_ID="EU-SE-1"\n'
+        "export RUNPOD_POD_ID='k4w9biw2diwp1u'\n"
+        'export RUNPOD_GPU_COUNT="1"\n'
+    )
+    ns = _lift("_flag", "_runpod_pod_id", "_tunnel_enabled")
+    ns["_RUNPOD_ENV_FILE"] = env_file
+    assert ns["_runpod_pod_id"]() == "k4w9biw2diwp1u"
+    assert ns["_tunnel_enabled"]() is False
+
+    # The environment still wins when it is populated.
+    monkeypatch.setenv("RUNPOD_POD_ID", "from-env")
+    assert ns["_runpod_pod_id"]() == "from-env"
 
 
 def test_the_server_outlives_the_tunnel():
