@@ -131,6 +131,7 @@ REMOTE_GPU_PREBUILT = _flag("REMOTE_GPU_PREBUILT")
 # bakes only the non-secret half (model slots, reviewed revisions, build id) and
 # HF_TOKEN / REMOTE_GPU_SHARED_SECRET arrive as deploy-time environment. Injected
 # literals still win, so a `make remote-gpu` file behaves exactly as before.
+REMOTE_GPU_FILE_CONFIG: dict = {}
 _CONFIG_FILE = os.environ.get("REMOTE_GPU_CONFIG_FILE", "").strip()
 if _CONFIG_FILE:
     import json as _json
@@ -138,7 +139,14 @@ if _CONFIG_FILE:
     _loaded = _json.loads(Path(_CONFIG_FILE).read_text(encoding="utf-8"))
     if not isinstance(_loaded, dict):
         raise SystemExit(f"!! {_CONFIG_FILE} is not a JSON object")
-    REMOTE_GPU_CONFIG = {**_loaded.get("config", {}), **REMOTE_GPU_CONFIG}
+    # Kept separate from REMOTE_GPU_CONFIG, not merged into it, because the two
+    # sit on opposite sides of the environment in _cfg()'s precedence. An
+    # injected literal is a choice made for one specific worker and wins
+    # outright; a baked image default is the weakest of the three, or the image
+    # could not be retargeted at deploy time without rebuilding it.
+    REMOTE_GPU_FILE_CONFIG = _loaded.get("config") or {}
+    if not isinstance(REMOTE_GPU_FILE_CONFIG, dict):
+        raise SystemExit(f"!! {_CONFIG_FILE} has a non-object 'config'")
     REMOTE_GPU_BUILD = REMOTE_GPU_BUILD or str(_loaded.get("build", ""))
 
 HF_TOKEN = HF_TOKEN or os.environ.get("HF_TOKEN", "")
@@ -166,7 +174,12 @@ if not REMOTE_GPU_REQUIREMENTS_LOCK.strip() and not REMOTE_GPU_PREBUILT:
 
 
 def _cfg(key: str, default: str = "") -> str:
-    """Config precedence: injected REMOTE_GPU_CONFIG > env > default.
+    """Config precedence: injected REMOTE_GPU_CONFIG > env > baked image config > default.
+
+    The environment sits in the middle deliberately. An injected literal came
+    from `make remote-gpu` for one specific worker, so it wins. A baked image
+    config is a build-time default that has to stay overridable, or the same
+    image could not be pointed at a different model without a rebuild.
 
     Membership tests, not truthiness: `or` would make a legitimate 0 or "" fall
     through to the default, so PREVIEW_EVERY=0 could not turn previews off and
@@ -175,6 +188,8 @@ def _cfg(key: str, default: str = "") -> str:
         return str(REMOTE_GPU_CONFIG[key])
     if key.upper() in os.environ:
         return str(os.environ[key.upper()])
+    if key in REMOTE_GPU_FILE_CONFIG and REMOTE_GPU_FILE_CONFIG[key] is not None:
+        return str(REMOTE_GPU_FILE_CONFIG[key])
     return default
 
 
@@ -197,11 +212,14 @@ FBCACHE_THRESHOLD = float(_cfg("fbcache_threshold", "0.05").strip() or 0)
 ENABLE_SAGE_ATTENTION = _cfg("enable_sage_attention", "false").lower() == "true"
 PREVIEW_EVERY = int(_cfg("preview_every", "2").strip() or 0)
 OFFLOAD = os.environ.get("A100_OFFLOAD", "false").lower() == "true"  # 80GB A100 -> keep on GPU
-MODEL_REVISIONS = REMOTE_GPU_CONFIG.get("model_revisions", {})
+MODEL_REVISIONS = (REMOTE_GPU_CONFIG.get("model_revisions")
+                   or REMOTE_GPU_FILE_CONFIG.get("model_revisions") or {})
 if not isinstance(MODEL_REVISIONS, dict) or not MODEL_REVISIONS:
     raise SystemExit(
-        "!! The generated worker has no reviewed model revisions.\n"
-        "   Re-run `make remote-gpu` from the current project checkout."
+        "!! The worker has no reviewed model revisions: every download would take\n"
+        "   whatever the Hub is serving today.\n"
+        "   Re-run `make remote-gpu` from the current project checkout, or rebuild the\n"
+        "   image after `make remote-gpu-config`."
     )
 
 

@@ -413,3 +413,38 @@ def test_image_never_bakes_the_secret_bearing_worker():
         assert not any(forbidden in src for src in sources), \
             f"the image must not carry {forbidden}"
     assert "REMOTE_GPU_PREBUILT=1" in body, "the image must skip the runtime pip install"
+
+
+def test_baked_image_config_is_the_weakest_source(monkeypatch):
+    """Precedence must be: injected literal > environment > baked image config.
+
+    The environment sits in the middle on purpose. An injected literal was
+    chosen for one specific worker. A baked image default has to stay
+    overridable, or the same image could not be pointed at a different model
+    without rebuilding it — which is most of the reason to use an image.
+    """
+    ns = _lift("_cfg")
+    ns["REMOTE_GPU_CONFIG"] = {}
+    ns["REMOTE_GPU_FILE_CONFIG"] = {"video_model": "baked/Wan"}
+    cfg = ns["_cfg"]
+
+    monkeypatch.delenv("VIDEO_MODEL", raising=False)
+    assert cfg("video_model", "fallback") == "baked/Wan"
+
+    monkeypatch.setenv("VIDEO_MODEL", "deployed/Wan")
+    assert cfg("video_model", "fallback") == "deployed/Wan", "env must beat the image"
+
+    ns["REMOTE_GPU_CONFIG"] = {"video_model": "injected/Wan"}
+    assert cfg("video_model", "fallback") == "injected/Wan", "make remote-gpu must beat env"
+
+    assert cfg("unset_key", "fallback") == "fallback"
+
+
+def test_falsy_config_values_still_win_over_the_default():
+    """`or` chaining here would resurrect a bug the comment in _cfg names:
+    PREVIEW_EVERY=0 must be able to turn previews off."""
+    ns = _lift("_cfg")
+    ns["REMOTE_GPU_CONFIG"] = {}
+    ns["REMOTE_GPU_FILE_CONFIG"] = {"preview_every": 0, "fbcache_threshold": 0.0}
+    assert ns["_cfg"]("preview_every", "2") == "0"
+    assert float(ns["_cfg"]("fbcache_threshold", "0.05")) == 0.0
