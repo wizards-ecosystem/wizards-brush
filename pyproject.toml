@@ -193,7 +193,7 @@ cache_dir = ".runtime/cache/pytest"
 [tool.mypy]
 python_version = "3.12"
 cache_dir = ".runtime/cache/mypy"
-files = ["backend", "worker", "scripts", "tests", "remote_gpu.py"]
+files = ["backend", "worker", "scripts", "tests"]
 plugins = ["pydantic.mypy"]
 check_untyped_defs = true
 no_implicit_optional = true
@@ -219,13 +219,11 @@ ignore_missing_imports = true
 module = ["backend.app.generators.*", "backend.app.utils.io"]
 warn_unused_ignores = false
 
-# remote_gpu.py is a single-file runner for a separately provisioned GPU
-# environment. Type-check it for real mistakes, but do not demand annotations
-# on its interactive-environment helpers.
+# The worker's ignores target optional deps (nunchaku, SageAttention, per-family
+# diffusers classes) that cannot all be present in one environment.
 [[tool.mypy.overrides]]
-module = ["remote_gpu", "remote_gpu_filled"]
+module = ["worker.*"]
 warn_unused_ignores = false
-check_untyped_defs = false
 
 # Tests assert liveness at runtime; Optional-pk unwrap noise adds nothing there.
 [[tool.mypy.overrides]]

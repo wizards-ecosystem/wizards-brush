@@ -80,7 +80,7 @@ BiRefNet: https://github.com/ZhengPeng7/BiRefNet
 HiDream-O1-Image: https://github.com/HiDream-ai/HiDream-O1-Image
     Copyright (c) 2026 HiDream.ai. Licensed under the MIT License.
 
-    `remote_gpu.py` fetches the publisher's official runner at a pinned commit
+    `the worker package (worker/)` fetches the publisher's official runner at a pinned commit
     into the operator's remote runtime when the optional HiDream model is
     enabled. The upstream runner is not bundled in this repository. Wizards
     Brush invokes its documented interface and changes the documented optional

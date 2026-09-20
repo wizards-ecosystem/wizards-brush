@@ -532,7 +532,7 @@ def get_edit_inpaint_pipe():
             status_code=409,
             detail=("this worker cannot inpaint: QwenImageEditInpaintPipeline is "
                     "not available in this Diffusers build. Restart with a current "
-                    "remote_gpu.py, or use /edit for a full-frame restyle."),
+                    "the worker, or use /edit for a full-frame restyle."),
         )
     return pipe
 

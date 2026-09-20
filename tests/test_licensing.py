@@ -55,7 +55,7 @@ def test_notice_covers_the_optional_hidream_runtime_fetch():
     vendored checkout. The attribution must remain visible with that boundary."""
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
     for required in ("HiDream-O1-Image", "HiDream.ai", "MIT License",
-                     "remote_gpu.py", "not bundled"):
+                     "worker/", "not bundled"):
         assert required in notice, f"NOTICE does not describe {required}"
 
 

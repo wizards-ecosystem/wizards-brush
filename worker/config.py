@@ -17,7 +17,10 @@ from . import runtime
 # Baked at image build time by `make remote-gpu-config`. Non-secret by
 # construction: model repositories and the revision pins that make a build
 # reproducible instead of "whatever the Hub served that day".
-BUILD = ""
+#
+# It deliberately carries no build fingerprint: /health reports
+# `worker.build_id()`, computed from the package's own sources, so the staleness
+# check cannot be fooled by a config file that says otherwise.
 _FILE_CONFIG: dict = {}
 _CONFIG_FILE = os.environ.get("REMOTE_GPU_CONFIG_FILE", "").strip()
 if _CONFIG_FILE:
@@ -27,7 +30,6 @@ if _CONFIG_FILE:
     _FILE_CONFIG = _loaded.get("config") or {}
     if not isinstance(_FILE_CONFIG, dict):
         raise SystemExit(f"!! {_CONFIG_FILE} has a non-object 'config'")
-    BUILD = str(_loaded.get("build", ""))
 
 
 def cfg(key: str, default: str = "", *, legacy: str = "") -> str:

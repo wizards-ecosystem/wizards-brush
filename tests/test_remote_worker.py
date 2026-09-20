@@ -1,8 +1,14 @@
-"""make_remote_gpu injection contract.
+"""The remote worker package: its deployment contract and its hard edges.
 
-remote_gpu.py is the one file with no runtime coverage, and `make remote_gpu` is how it
-reaches the A100. These tests pin the two things that actually broke: injection
-anchored on exact source text, and config keys silently missing from the payload.
+`worker/` is the one part of this repo with no runtime coverage in CI - it needs
+a GPU to do anything - so these tests pin the parts that have actually broken:
+the ingress that runs before a body is parsed, the request bounds, the
+dependency lock, and the host detection that decides how the worker is reached.
+
+`worker.runtime` imports nothing heavy, so it is imported directly. `worker.api`
+and `worker.pipelines` import torch at module scope, which conftest's _HEAVY
+guard forbids, and `worker.config` raises at import without a real secret - so
+functions from those three are lifted out of the source instead.
 """
 from __future__ import annotations
 
@@ -15,7 +21,15 @@ import stat
 
 import pytest
 
-from scripts import make_remote_gpu
+from scripts import make_remote_gpu_config as gen
+from worker import build_id, runtime
+
+REPO_ROOT = gen.ROOT
+WORKER = REPO_ROOT / "worker"
+API_SRC = (WORKER / "api.py").read_text()
+PIPELINES_SRC = (WORKER / "pipelines.py").read_text()
+CONFIG_SRC = (WORKER / "config.py").read_text()
+DOCKERFILE_SRC = (REPO_ROOT / "docker" / "remote-gpu" / "Dockerfile").read_text()
 
 
 def _src(hf='HF_TOKEN = ""', secret='REMOTE_GPU_SHARED_SECRET = ""',
@@ -26,87 +40,24 @@ def _src(hf='HF_TOKEN = ""', secret='REMOTE_GPU_SHARED_SECRET = ""',
     )
 
 
-def test_locates_every_declared_placeholder():
-    src = _src() + '\nREMOTE_GPU_BUILD = ""\n'
-    assert set(make_remote_gpu._assignment_lines(src)) == set(make_remote_gpu._TARGETS)
 
 
-@pytest.mark.parametrize("variant", [
-    "HF_TOKEN = ''",                 # single quotes
-    'HF_TOKEN   =   ""',             # extra spacing
-    'HF_TOKEN: str = ""',            # annotated
-])
-def test_injection_survives_reformatting(variant):
-    """The old regex anchored on `^HF_TOKEN = ""$`, so any of these broke
-    `make remote_gpu` with 'could not find the placeholder'."""
-    spans = make_remote_gpu._assignment_lines(_src(hf=variant))
-    assert "HF_TOKEN" in spans
 
 
-def test_missing_placeholder_is_the_only_hard_failure():
-    src = _src().replace('HF_TOKEN = ""\n', "")
-    assert "HF_TOKEN" not in make_remote_gpu._assignment_lines(src)
 
 
-def test_booleans_render_as_python_not_json():
-    """The bug this exists to prevent: json.dumps emits lowercase `false`, which
-    is a valid Python IDENTIFIER. The file parses cleanly, uploads fine, and then
-    dies with NameError at import on the A100 — after the runtime spins up and
-    the models start downloading. Nothing in the config was boolean until
-    enable_sage_attention, which is how it slipped through."""
-    line = make_remote_gpu._render("REMOTE_GPU_CONFIG", {"enable_sage_attention": False, "preview_every": 0})
-    assert "false" not in line and "False" in line
-    ns: dict = {}
-    exec(line, ns)
-    assert ns["REMOTE_GPU_CONFIG"]["enable_sage_attention"] is False
-    assert ns["REMOTE_GPU_CONFIG"]["preview_every"] == 0
 
 
-def test_every_injected_value_is_a_pure_literal():
-    """Guards the whole payload, not just booleans: anything that is not a
-    literal would resolve as a name at import time."""
-    import ast
-
-    from backend.app.config import settings
-
-    for name, value in (("HF_TOKEN", settings.hf_token),
-                        ("REMOTE_GPU_SHARED_SECRET", "abc123"),
-                        ("REMOTE_GPU_CONFIG", {"a": True, "b": None, "c": 1.5, "d": "x"}),
-                        ("REMOTE_GPU_REQUIREMENTS_LOCK",
-                         "demo==1 \\" + "\n  --hash=sha256:" + "a" * 64)):
-        node = ast.parse(make_remote_gpu._render(name, value)).body[0]
-        ast.literal_eval(node.value)  # raises if it is not a literal
 
 
-def test_render_produces_parseable_assignments():
-    for name, value in [("HF_TOKEN", "hf_abc"),
-                        ("REMOTE_GPU_SHARED_SECRET", "s3cr3t"),
-                        ("REMOTE_GPU_CONFIG", {"a": 1, "b": "x"})]:
-        line = make_remote_gpu._render(name, value)
-        ast.parse(line)  # must be valid Python on its own
-    # the annotation is preserved so the injected file still type-checks
-    assert make_remote_gpu._render("REMOTE_GPU_CONFIG", {}).startswith("REMOTE_GPU_CONFIG: dict = ")
 
 
-def test_render_escapes_values_that_would_break_the_source():
-    nasty = 'a"b\\c\nd'
-    line = make_remote_gpu._render("HF_TOKEN", nasty)
-    ns: dict = {}
-    exec(line, ns)
-    assert ns["HF_TOKEN"] == nasty
 
 
-def test_generated_remote_worker_is_atomic_and_private(tmp_path):
-    path = tmp_path / "remote_gpu_filled.py"
-    make_remote_gpu._write_private(path, "SECRET = 'first'\n")
-    make_remote_gpu._write_private(path, "SECRET = 'second'\n")
-    assert path.read_text() == "SECRET = 'second'\n"
-    if os.name == "posix":
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def _remote_ingress_class():
-    tree = ast.parse(make_remote_gpu.SRC.read_text())
+    tree = ast.parse(API_SRC)
     wanted = {"_RemoteBodyTooLarge", "_RemoteIngressMiddleware"}
     nodes = [
         node for node in tree.body
@@ -115,7 +66,9 @@ def _remote_ingress_class():
                     for target in node.targets))
         or (isinstance(node, ast.ClassDef) and node.name in wanted)
     ]
-    scope: dict = {}
+    import hmac
+
+    scope: dict = {"hmac": hmac}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "<remote-ingress>", "exec"), scope)
     return scope["_RemoteIngressMiddleware"]
 
@@ -169,20 +122,20 @@ def test_remote_ingress_rejects_oversized_authenticated_body_before_parsing():
 
 
 def test_remote_request_models_have_field_and_collection_bounds():
-    source = make_remote_gpu.SRC.read_text()
+    source = API_SRC
     assert "Prompt = Annotated[str, Field(max_length=2000)]" in source
     assert "images_b64: list[EncodedImage] = Field(min_length=1, max_length=3)" in source
     assert "mask_b64: EncodedImage" in source
     assert 'client_job_id: str = Field(default="", max_length=128)' in source
     assert '@app.post("/inpaint")' in source
-    assert "QwenImageEditInpaintPipeline" in source
+    # The pipeline classes live with the loaders, not with the routes.
+    assert "QwenImageEditInpaintPipeline" in PIPELINES_SRC
     assert "edit_inpaint" in source
 
 
 def test_remote_dependencies_are_complete_hash_locked_without_cuda_shadow_packages():
-    source = make_remote_gpu.SRC.read_text()
-    lock = (make_remote_gpu.ROOT / "scripts" / "remote-gpu-requirements.lock").read_text()
-    inputs = (make_remote_gpu.ROOT / "scripts" / "remote-gpu-requirements.in").read_text()
+    lock = (REPO_ROOT / "scripts" / "remote-gpu-requirements.lock").read_text()
+    inputs = (REPO_ROOT / "scripts" / "remote-gpu-requirements.in").read_text()
     logical = [line for line in lock.splitlines() if line and not line.startswith(("#", " "))]
     requested = [line for line in inputs.splitlines() if line and not line.startswith("#")]
     assert logical
@@ -191,38 +144,51 @@ def test_remote_dependencies_are_complete_hash_locked_without_cuda_shadow_packag
     assert lock.count("--hash=sha256:") >= len(logical)
     for forbidden in ("torch==", "numpy==", "nvidia-", "triton=="):
         assert forbidden not in lock
-    assert '"--require-hashes"' in source
-    assert '"--only-binary=:all:"' in source
-    assert '"--no-deps"' in source
-    assert '"diffusers==0.36.0"' not in source
+    # The hashed install is a build step now, not something the worker does to
+    # itself on a metered GPU.
+    assert "--require-hashes" in DOCKERFILE_SRC
+    assert "--only-binary=:all:" in DOCKERFILE_SRC
+    assert "--no-deps" in DOCKERFILE_SRC
+    # torch and numpy come from the CUDA base image, never from the lock, so the
+    # lock can never quietly replace a working CUDA build.
+    assert "diffusers==0.36.0" not in DOCKERFILE_SRC
 
 
-def test_real_remote_gpu_py_still_carries_every_placeholder():
-    """Guards the actual file: if someone renames or removes one of these,
-    `make remote_gpu` breaks, and this says so at test time instead. Compared against
-    _TARGETS rather than a hardcoded set so adding a placeholder cannot leave
-    this test asserting yesterday's list."""
-    spans = make_remote_gpu._assignment_lines(make_remote_gpu.SRC.read_text())
-    assert set(spans) == set(make_remote_gpu._TARGETS)
 
 
-def test_build_id_is_stable_and_ignores_secrets():
-    """The backend recomputes this from its own remote_gpu.py to detect a stale
-    notebook, so it must depend only on the source, never on injected values."""
-    src = make_remote_gpu.SRC.read_text()
-    assert make_remote_gpu.build_id(src) == make_remote_gpu.build_id(src)
-    assert make_remote_gpu.build_id(src) != make_remote_gpu.build_id(src + "\n# edit\n")
-
+def test_the_app_and_the_worker_fingerprint_the_same_thing(tmp_path):
+    """/health reports `worker.build_id()`; the app compares it with
+    `local_build_id()`. If the two ever disagree the app calls *every* worker
+    stale, which is worse than not checking - the warning stops meaning
+    anything. They must hash the same files, in the same order, byte for byte.
+    """
     from backend.app.remote_gpu_client import local_build_id
 
-    assert make_remote_gpu.build_id(src) == local_build_id()
+    assert build_id() == local_build_id()
+    assert build_id() == build_id()          # stable across calls
+
+    # And it must actually move when the source does.
+    import hashlib
+
+    def fingerprint(files):
+        digest = hashlib.sha256()
+        for path in sorted(files):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()[:12]
+
+    real = sorted(WORKER.glob("*.py"))
+    assert fingerprint(real) == build_id()
+    edited = tmp_path / "api.py"
+    edited.write_text((WORKER / "api.py").read_text() + "\n# edit\n")
+    assert fingerprint([p for p in real if p.name != "api.py"] + [edited]) != build_id()
 
 
 def test_config_payload_covers_every_knob_remote_gpu_reads():
-    """Any _cfg(...) key remote_gpu.py reads must be shipped by make_remote_gpu, or the two
+    """Any cfg(...) key the worker reads must be shipped by the config generator, or the two
     sides fall back to different defaults. That is how first-block cache ended up
     permanently on remotely (local default 0.0, Remote GPU default 0.05)."""
-    source = make_remote_gpu.SRC.read_text()
+    source = API_SRC
     read_keys = {
         node.args[0].value
         for node in ast.walk(ast.parse(source))
@@ -232,21 +198,20 @@ def test_config_payload_covers_every_knob_remote_gpu_reads():
     }
     # Against the real payload, not a hand-copied list — copying it is exactly
     # what went stale when the LTX engine was added.
-    shipped = set(make_remote_gpu.remote_gpu_config())
+    shipped = set(gen.remote_gpu_config())
     assert read_keys <= shipped, (
-        f"remote_gpu.py reads keys make_remote_gpu never ships: {read_keys - shipped}"
+        f"the worker reads keys the config generator never ships: {read_keys - shipped}"
     )
 
 
-# --- remote_gpu.py pure helpers -------------------------------------------------
-# remote_gpu.py cannot be imported: it pip-installs and imports torch at module
+# --- worker pure helpers -------------------------------------------------
+# worker.pipelines cannot be imported: it imports torch at module
 # scope. Pulling a single function out of its source keeps the pure logic
 # testable without any of that, and without a second copy to drift.
 def _extract(func_name: str, ns: dict | None = None):
     import ast
 
-    src = make_remote_gpu.SRC.read_text()
-    tree = ast.parse(src)
+    tree = ast.parse(PIPELINES_SRC)
     node = next(n for n in tree.body
                 if isinstance(n, ast.FunctionDef) and n.name == func_name)
     scope: dict = ns or {}
@@ -280,7 +245,8 @@ def _picker(monkeypatch, files=None):
             return _LIGHTNING_FILES if files is None else files
 
     monkeypatch.setattr(huggingface_hub, "HfApi", _Api)
-    return _extract("_pick_lightning_weight", {"_model_revision": lambda _repo: None})
+    return _extract("_pick_lightning_weight",
+                    {"config": type("C", (), {"model_revision": staticmethod(lambda _r: None)})})
 
 
 def test_base_pipeline_does_not_get_the_edit_adapter(monkeypatch):
@@ -322,57 +288,54 @@ def test_returns_none_when_nothing_matches_so_the_caller_can_warn(monkeypatch):
 
 
 # ---- container deployment contract -----------------------------------------
-# remote_gpu.py was written for a notebook: install at startup, tunnel out, keep
+# The worker was written for a notebook: install at startup, tunnel out, keep
 # state beside the script. A rented GPU inverts all three. These pin the parts
 # that let one file serve both without the container path regressing silently.
 
-DOCKERFILE = make_remote_gpu.ROOT / "docker" / "remote-gpu" / "Dockerfile"
+DOCKERFILE = REPO_ROOT / "docker" / "remote-gpu" / "Dockerfile"
 
 
-def _lift(*names: str) -> dict:
-    """Execute named top-level functions from the real remote_gpu.py.
+def _lift(source: str, *names: str) -> dict:
+    """Execute named top-level functions out of a worker module's source.
 
-    The module cannot be imported here: it imports torch at module scope, which
-    conftest's _HEAVY guard forbids and CI has no CUDA for. Lifting just these
-    definitions keeps the assertions about the code that actually ships rather
-    than a copy that can drift.
+    `worker.api`, `worker.pipelines` and `worker.config` cannot be imported
+    here - the first two pull torch at module scope, which conftest's _HEAVY
+    guard forbids, and config raises at import without a real secret. Lifting
+    the definitions keeps the assertion pointed at shipped code rather than a
+    copy that drifts. `worker.runtime` needs none of this and is imported.
     """
-    wanted = [n for n in ast.parse(make_remote_gpu.SRC.read_text()).body
+    wanted = [n for n in ast.parse(source).body
               if isinstance(n, ast.FunctionDef) and n.name in names]
-    assert {n.name for n in wanted} == set(names), "remote_gpu.py lost a lifted function"
+    assert {n.name for n in wanted} == set(names), "a lifted function is gone"
     ns: dict = {"os": os, "re": re, "Path": pathlib.Path}
-    exec(compile(ast.Module(body=wanted, type_ignores=[]), "<remote_gpu>", "exec"), ns)
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), "<worker>", "exec"), ns)
     return ns
 
 
 @pytest.mark.parametrize("env,expected", [
-    ({}, True),                                        # bare VM / notebook: no route of its own
-    ({"RUNPOD_POD_ID": "abc123"}, False),              # pod proxy already publishes HTTPS
-    ({"RUNPOD_ENDPOINT_ID": "e1"}, False),             # serverless endpoint likewise
-    ({"REMOTE_GPU_NO_TUNNEL": "1"}, False),            # operator-managed reverse proxy
-    ({"REMOTE_GPU_NO_TUNNEL": "false"}, True),         # explicit off means off, not "set"
+    ({}, False),                                # a plain VM publishes nothing itself
+    ({"RUNPOD_POD_ID": "abc123"}, True),        # pod proxy terminates TLS in front
+    ({"RUNPOD_ENDPOINT_ID": "e1"}, True),       # serverless endpoint likewise
 ])
-def test_tunnel_only_runs_where_there_is_no_route(monkeypatch, tmp_path, env, expected):
-    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID", "REMOTE_GPU_NO_TUNNEL"):
+def test_managed_host_detection(monkeypatch, tmp_path, env, expected):
+    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(runtime, "_RUNPOD_ENV_FILE", tmp_path / "absent")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    ns = _lift("_flag", "_runpod_pod_id", "_tunnel_enabled")
-    ns["_RUNPOD_ENV_FILE"] = tmp_path / "absent"     # not a Runpod host
-    assert ns["_tunnel_enabled"]() is expected
+    assert runtime.is_managed_host() is expected
 
 
 def test_runpod_is_detected_without_the_env_var(monkeypatch, tmp_path):
     """Measured on a live pod 2026-09-20: Runpod exports RUNPOD_POD_ID into
     /etc/rp_environment and sources it from the interactive shell profile, so a
-    worker started by ssh/nohup/systemd — exactly what docs/runpod.md tells an
-    operator to do — sees no RUNPOD_POD_ID at all.
+    worker started by ssh/nohup/systemd - exactly what docs/runpod.md tells an
+    operator to do - sees no RUNPOD_POD_ID in its environment at all.
 
-    Trusting the environment alone left the tunnel ON for every realistic Runpod
-    launch: a cloudflared download on a metered GPU, to reach a host that already
-    publishes HTTPS.
+    Reading the environment alone got this wrong for every realistic launch, and
+    the startup banner then printed no address to connect to.
     """
-    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID", "REMOTE_GPU_NO_TUNNEL"):
+    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID"):
         monkeypatch.delenv(key, raising=False)
     env_file = tmp_path / "rp_environment"
     env_file.write_text(
@@ -380,47 +343,39 @@ def test_runpod_is_detected_without_the_env_var(monkeypatch, tmp_path):
         "export RUNPOD_POD_ID='k4w9biw2diwp1u'\n"
         'export RUNPOD_GPU_COUNT="1"\n'
     )
-    ns = _lift("_flag", "_runpod_pod_id", "_tunnel_enabled")
-    ns["_RUNPOD_ENV_FILE"] = env_file
-    assert ns["_runpod_pod_id"]() == "k4w9biw2diwp1u"
-    assert ns["_tunnel_enabled"]() is False
+    monkeypatch.setattr(runtime, "_RUNPOD_ENV_FILE", env_file)
+    assert runtime.runpod_pod_id() == "k4w9biw2diwp1u"
+    assert runtime.is_managed_host() is True
+    # Verified against the live pod: this is the address it actually served on.
+    assert runtime.public_url(8000) == "https://k4w9biw2diwp1u-8000.proxy.runpod.net"
 
-    # The environment still wins when it is populated.
     monkeypatch.setenv("RUNPOD_POD_ID", "from-env")
-    assert ns["_runpod_pod_id"]() == "from-env"
+    assert runtime.runpod_pod_id() == "from-env"
 
 
-def test_the_server_outlives_the_tunnel():
-    """The tunnel used to own the process: uvicorn ran in a daemon thread while
-    the main thread blocked on cloudflared's wait(). A rate-limited or crashed
-    tunnel therefore ended the interpreter and took a perfectly healthy server
-    with it — invisible on a managed host, whose own URL keeps answering until
-    the container exits. uvicorn.run must be a statement in _launch's own body.
-    """
-    launch = next(n for n in ast.parse(make_remote_gpu.SRC.read_text()).body
-                  if isinstance(n, ast.FunctionDef) and n.name == "_launch")
-    serves_in_main_thread = any(
-        isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
-        and ast.unparse(stmt.value.func) == "uvicorn.run"
-        for stmt in launch.body
-    )
-    assert serves_in_main_thread, "_launch must serve in the main thread, not behind the tunnel"
+def test_a_plain_host_advertises_no_address(monkeypatch, tmp_path):
+    """Empty, not a guess: on a VM the operator supplies the route themselves."""
+    monkeypatch.delenv("RUNPOD_POD_ID", raising=False)
+    monkeypatch.setattr(runtime, "_RUNPOD_ENV_FILE", tmp_path / "absent")
+    assert runtime.public_url(8000) == ""
 
 
 def test_config_only_mode_ships_no_secrets(tmp_path, monkeypatch):
     """An image has to be publishable. The baked config carries the reproducible
     half — model slots and reviewed revision pins — and nothing that authenticates."""
-    monkeypatch.setattr(make_remote_gpu.settings, "hf_token", "hf_SECRETVALUE", raising=False)
-    monkeypatch.setattr(make_remote_gpu.settings, "remote_gpu_shared_secret",
+    monkeypatch.setattr(gen.settings, "hf_token", "hf_SECRETVALUE", raising=False)
+    monkeypatch.setattr(gen.settings, "remote_gpu_shared_secret",
                         "s3cr3tvalue", raising=False)
     out = tmp_path / "remote-gpu-config.json"
-    make_remote_gpu.write_config(out)
+    gen.write_config(out)
 
     import json
 
     payload = json.loads(out.read_text())
-    assert payload["build"] == make_remote_gpu.build_id(make_remote_gpu.SRC.read_text())
     assert payload["config"]["model_revisions"], "revision pins are what make the image reproducible"
+    # No fingerprint here: /health reports the package's own, so a config file
+    # cannot claim a build the code is not running.
+    assert "build" not in payload
     raw = out.read_text()
     assert "hf_SECRETVALUE" not in raw and "s3cr3tvalue" not in raw
     # Not 0600: an image layer read by another uid must still be able to open it.
@@ -428,7 +383,7 @@ def test_config_only_mode_ships_no_secrets(tmp_path, monkeypatch):
 
 
 def test_image_never_bakes_the_secret_bearing_worker():
-    """`make remote-gpu` writes remote_gpu_filled.py with real keys in it at 0600.
+    """Secrets must never enter an image layer, where a push publishes them.
     Copying that into an image would put them in a layer, where a later push
     publishes them. The image takes the tracked template plus runtime env."""
     body = DOCKERFILE.read_text()
@@ -440,25 +395,23 @@ def test_image_never_bakes_the_secret_bearing_worker():
                if line.strip().split(" ")[0] in {"COPY", "ADD"}
                for part in line.split()[1:-1]
                if not part.startswith("--")]
-    assert "remote_gpu.py" in sources
+    assert "worker" in sources
     for forbidden in ("remote_gpu_filled.py", ".env", "output/runtime_settings.json"):
         assert not any(forbidden in src for src in sources), \
             f"the image must not carry {forbidden}"
-    assert "REMOTE_GPU_PREBUILT=1" in body, "the image must skip the runtime pip install"
+    assert 'CMD ["python", "-m", "worker"]' in body, "the image must run the package"
 
 
 def test_baked_image_config_is_the_weakest_source(monkeypatch):
-    """Precedence must be: injected literal > environment > baked image config.
+    """Precedence must be: environment > baked image config > default.
 
-    The environment sits in the middle on purpose. An injected literal was
-    chosen for one specific worker. A baked image default has to stay
-    overridable, or the same image could not be pointed at a different model
-    without rebuilding it — which is most of the reason to use an image.
+    A build-time default has to stay overridable at deploy time, or the same
+    image could not be pointed at a different model without rebuilding it —
+    which is most of the reason to build one.
     """
-    ns = _lift("_cfg")
-    ns["REMOTE_GPU_CONFIG"] = {}
-    ns["REMOTE_GPU_FILE_CONFIG"] = {"video_model": "baked/Wan"}
-    cfg = ns["_cfg"]
+    ns = _lift(CONFIG_SRC, "cfg")
+    ns["_FILE_CONFIG"] = {"video_model": "baked/Wan"}
+    cfg = ns["cfg"]
 
     monkeypatch.delenv("VIDEO_MODEL", raising=False)
     assert cfg("video_model", "fallback") == "baked/Wan"
@@ -466,17 +419,23 @@ def test_baked_image_config_is_the_weakest_source(monkeypatch):
     monkeypatch.setenv("VIDEO_MODEL", "deployed/Wan")
     assert cfg("video_model", "fallback") == "deployed/Wan", "env must beat the image"
 
-    ns["REMOTE_GPU_CONFIG"] = {"video_model": "injected/Wan"}
-    assert cfg("video_model", "fallback") == "injected/Wan", "make remote-gpu must beat env"
-
     assert cfg("unset_key", "fallback") == "fallback"
+
+
+def test_legacy_config_keys_still_resolve(monkeypatch):
+    """The app's generated config still emits the `a100_*` names, and a worker
+    that stopped reading them would silently fall back to its own defaults."""
+    ns = _lift(CONFIG_SRC, "cfg")
+    ns["_FILE_CONFIG"] = {"a100_image_model": "legacy/Qwen"}
+    monkeypatch.delenv("IMAGE_MODEL", raising=False)
+    monkeypatch.delenv("A100_IMAGE_MODEL", raising=False)
+    assert ns["cfg"]("image_model", "fallback", legacy="a100_image_model") == "legacy/Qwen"
 
 
 def test_falsy_config_values_still_win_over_the_default():
     """`or` chaining here would resurrect a bug the comment in _cfg names:
     PREVIEW_EVERY=0 must be able to turn previews off."""
-    ns = _lift("_cfg")
-    ns["REMOTE_GPU_CONFIG"] = {}
-    ns["REMOTE_GPU_FILE_CONFIG"] = {"preview_every": 0, "fbcache_threshold": 0.0}
-    assert ns["_cfg"]("preview_every", "2") == "0"
-    assert float(ns["_cfg"]("fbcache_threshold", "0.05")) == 0.0
+    ns = _lift(CONFIG_SRC, "cfg")
+    ns["_FILE_CONFIG"] = {"preview_every": 0, "fbcache_threshold": 0.0}
+    assert ns["cfg"]("preview_every", "2") == "0"
+    assert float(ns["cfg"]("fbcache_threshold", "0.05")) == 0.0

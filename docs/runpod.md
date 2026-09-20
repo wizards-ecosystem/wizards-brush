@@ -13,7 +13,7 @@ exposure, the model licences and applicable law are yours.
 
 ## Why a container here
 
-On your own hardware, `remote_gpu.py` installing its dependencies at startup is merely
+On your own hardware, a worker installing its dependencies at startup is merely
 slow. On rented hardware it is the worst possible moment — a network call, a dependency
 resolver and an ABI negotiation, each able to fail minutes into a metered session. It is
 also a bet on the host's Python: the worker's lock is a set of CPython 3.12 manylinux
@@ -54,7 +54,7 @@ fast for 1.7× the price is the cheaper card.
 From the repo root, with Docker running:
 
 ```bash
-make remote-gpu-config      # non-secret: model slots + reviewed revision pins + build id
+make remote-gpu-config      # non-secret: model slots + reviewed revision pins
 make remote-gpu-image       # builds and tags with the build id
 ```
 

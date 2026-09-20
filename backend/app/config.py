@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # Strongest single-A100 comparison that is both straightforward to deploy
     # and small enough to run at its published bf16 recipe.
     # HiDream uses its official custom Pixel-DiT runner rather than Diffusers;
-    # remote_gpu.py detects this dedicated slot and loads that runner explicitly.
+    # The worker detects this dedicated slot and loads that runner explicitly.
     a100_image_model_hidream: str = Field(
         default="HiDream-ai/HiDream-O1-Image", alias="A100_IMAGE_MODEL_HIDREAM")
     # Generic optional A100 image slot for an additional Diffusers model.
@@ -146,8 +146,8 @@ class Settings(BaseSettings):
     fbcache_threshold: float = Field(default=0.0, alias="FBCACHE_THRESHOLD")
     # Emit a live latent preview every N denoising steps (0 = off).
     preview_every: int = Field(default=2, alias="PREVIEW_EVERY")
-    # SageAttention backend on the remote GPU pipes. Shipped to the remote runner
-    # by `make remote-gpu`; local generation does not use it. Kept here (rather than
+    # SageAttention backend on the remote GPU pipes. Baked into the worker image
+    # by `make remote-gpu-config`; local generation does not use it. Kept here (rather than
     # env-only on the remote side) so one .env is the single source of truth —
     # it used to default to a different value there with no way to override.
     enable_sage_attention: bool = Field(default=False, alias="ENABLE_SAGE_ATTENTION")

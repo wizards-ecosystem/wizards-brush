@@ -13,20 +13,15 @@ to run the worker and expose its authenticated HTTPS endpoint. You are
 responsible for the account, hardware, network exposure, model licenses, and
 applicable law.
 
-## Two ways to run the worker
+## What the worker is
 
-The worker is one Python file and runs either way:
+A Python package, `worker/`, deployed as a container image. It speaks an
+authenticated HTTP protocol over HTTPS; where that HTTPS comes from is the host's
+business, not the worker's.
 
-- **A machine or notebook you already have.** Follow this page. The worker installs its
-  own hash-locked dependency closure on first start and prints a quick tunnel URL.
-- **A container, on hardware you rent.** `docker/remote-gpu/Dockerfile` resolves the same
-  dependency closure at build time instead, which removes the startup install and the
-  gamble on the host's Python version. [Running the worker on RunPod](runpod.md) is a
-  worked example; the image is provider-neutral and works anywhere that runs a container
-  with a GPU.
-
-The rest of this page describes the first path. Both speak the same protocol and connect
-to the app the same way.
+[Running the worker on RunPod](runpod.md) is a worked example of renting the
+hardware. The image is provider-neutral and runs anywhere that can run a
+container with a GPU, including one you own.
 
 ## Before you start
 
@@ -57,33 +52,33 @@ drive makes every model swap unpredictable.
 In your local The Wizard's Brush checkout:
 
 ```bash
-cp .env.example .env  # only if .env does not already exist
-openssl rand -hex 32  # use this output as REMOTE_GPU_SHARED_SECRET
-make remote-gpu
+cp .env.example .env        # only if .env does not already exist
+openssl rand -hex 32        # use this output as REMOTE_GPU_SHARED_SECRET
+make remote-gpu-config      # model slots + reviewed revision pins; no secrets
+make remote-gpu-image       # builds the image, tagged with the worker build id
 ```
 
-`make remote-gpu` writes `remote_gpu_filled.py`. It injects `HF_TOKEN`, the
-shared secret, selected model IDs, reviewed model revision pins, the complete
-hash-locked dependency set, and a build fingerprint. The tracked
-`remote_gpu.py` is only a template and refuses to run directly. The generated
-file is ignored and written with owner-only permissions because it contains
-secrets; copy it through a private channel and do not commit or attach it to an
-issue.
+Push the image somewhere the GPU host can pull from, then run it there with
+`REMOTE_GPU_SHARED_SECRET` and `HF_TOKEN` in its environment and the port
+published. **Secrets are never baked into the image** — that is what makes it
+publishable — so they arrive at deploy time.
 
-On the remote GPU machine:
+### Without Docker
+
+The package runs directly too, which is the path for a machine you own:
 
 ```bash
-python remote_gpu_filled.py
+pip install --require-hashes --only-binary=:all: --no-deps \
+    -r scripts/remote-gpu-requirements.lock
+REMOTE_GPU_SHARED_SECRET=... REMOTE_GPU_CONFIG_FILE=docker/remote-gpu/remote-gpu-config.json \
+    python -m worker
 ```
 
-In an interactive Python notebook, upload the same generated file and run:
+torch, torchvision and numpy are deliberately **not** in the lock: they come from
+your CUDA runtime, so the lock can never replace a working build. Python 3.12 on
+Linux x86-64 is required — the lock is a set of cp312 manylinux wheel hashes.
 
-```python
-%run remote_gpu_filled.py
-```
-
-The worker starts an authenticated FastAPI service and, by default, prints a
-temporary HTTPS tunnel URL. Copy that URL into **Settings → Remote GPU** in the
+The worker prints the address it is reachable at. Copy that into **Settings → Remote GPU** in the
 local app. Enter the same shared secret; the Settings API requires it again any
 time the URL host changes so a stale credential cannot be forwarded to a new
 authority. The app checks `/health`; its Diagnosis page reports the connected GPU,
@@ -100,8 +95,10 @@ running an older build.
   app only accepts public HTTPS URLs and sends the secret on every request.
 - Set `API_TOKEN` for the local app before exposing its own LAN
   listener beyond trusted devices.
-- Rebuild and restart the worker after changing `remote_gpu.py`; the build
-  fingerprint turns stale workers into a visible Diagnosis warning.
+- Rebuild and redeploy after changing anything in `worker/`. The build
+  fingerprint is computed from the package's own sources and reported by
+  `/health`, so a stale worker becomes a visible Diagnosis warning instead of
+  behaviour that quietly contradicts your checkout.
 - The worker authenticates before reading a request body, caps each request and
   typed field, and caps its in-memory queue. Keep route-level authentication in
   place even when another proxy also authenticates.

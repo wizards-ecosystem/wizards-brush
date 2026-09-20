@@ -1,13 +1,13 @@
 # The Wizard's Brush — Remote GPU worker, as a container.
 #
-# Why this exists: remote_gpu.py was written for a notebook or a bare VM, where
+# Why this exists: the worker was written for a notebook or a bare VM, where
 # the only way to get dependencies is to install them at startup. On rented GPU
 # hardware that is the worst possible time — a network call, a dependency
 # resolver and an ABI negotiation, each able to fail minutes after the clock
 # started, on a machine you are paying for by the second. This image does all of
 # it once, at build time, on your own machine.
 #
-# It also removes the Python-3.12 gamble. remote_gpu.py refuses any other
+# It also removes the Python-3.12 gamble. The worker refuses any other
 # interpreter because its lock is a set of cp312 manylinux wheel hashes; a stock
 # host image may or may not oblige. Here we choose the base, so it always does.
 #
@@ -56,7 +56,7 @@ RUN python -m pip install --upgrade pip setuptools wheel
 RUN python -m pip install --index-url "${TORCH_INDEX_URL}" \
         "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"
 
-# The same hashed, binary-only, --no-deps install remote_gpu.py would do at
+# The same hashed, binary-only, --no-deps install the worker used to do at
 # runtime — run here instead, and only once.
 COPY scripts/remote-gpu-requirements.lock /tmp/remote-gpu-requirements.lock
 RUN python -m pip install --require-hashes --only-binary=:all: --no-deps \
@@ -68,17 +68,15 @@ RUN python -m pip install --require-hashes --only-binary=:all: --no-deps \
 RUN python -m pip uninstall -y torchao || true
 
 WORKDIR /app
-# The tracked template, not remote_gpu_filled.py: an image that can be published
-# must carry no secrets. HF_TOKEN and REMOTE_GPU_SHARED_SECRET arrive as
-# deploy-time environment, which remote_gpu.py already falls back to.
-COPY remote_gpu.py /app/remote_gpu.py
+# The worker package. It carries no secrets by construction: HF_TOKEN and
+# REMOTE_GPU_SHARED_SECRET arrive as deploy-time environment, so this image is
+# publishable as-is.
+COPY worker /app/worker
 # Non-secret build config: model slots + reviewed revision pins + build id.
 # Generate with `make remote-gpu-config` before building.
 COPY docker/remote-gpu/remote-gpu-config.json /app/remote-gpu-config.json
 
-ENV REMOTE_GPU_PREBUILT=1 \
-    REMOTE_GPU_NO_TUNNEL=1 \
-    REMOTE_GPU_CONFIG_FILE=/app/remote-gpu-config.json \
+ENV REMOTE_GPU_CONFIG_FILE=/app/remote-gpu-config.json \
     PORT=8000
 
 # Weights, caches and the HiDream checkout all live under REMOTE_GPU_ROOT.
@@ -90,4 +88,4 @@ ENV REMOTE_GPU_PREBUILT=1 \
 ENV REMOTE_GPU_ROOT=/app/.wizards-brush-remote-gpu
 
 EXPOSE 8000
-CMD ["python", "/app/remote_gpu.py"]
+CMD ["python", "-m", "worker"]

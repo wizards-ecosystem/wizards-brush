@@ -107,16 +107,6 @@ def runpod_pod_id() -> str:
     return runpod_env("RUNPOD_POD_ID")
 
 
-def runpod_api_key() -> str:
-    """The key this pod can use to terminate itself.
-
-    Runpod injects an account-scoped key. That is more power than a self-destruct
-    needs, and it sits inside a rented container, so a deliberately narrow key
-    passed as pod env is preferable where the provider allows one.
-    """
-    return runpod_env("RUNPOD_API_KEY")
-
-
 def public_url(port: int) -> str:
     """The address this host already publishes for `port`, if it publishes one.
 

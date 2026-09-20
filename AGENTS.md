@@ -9,15 +9,15 @@
 - `make doctor` must show every active writable path inside the checkout
 - `make test` - backend pytest (`.venv/bin/python -m pytest tests -q`)
 - single test: `.venv/bin/python -m pytest tests/test_db.py -k name -q`
-- `make lint` - ruff over `backend worker tests scripts remote_gpu.py`. The rule set is pinned
+- `make lint` - ruff over `backend worker tests scripts`. The rule set is pinned
   explicitly in `pyproject.toml` (`[tool.ruff.lint] select`) - relying on ruff's defaults
   turned the tree red on a version bump alone. `E402` stays ignored (lazy heavy imports);
   ruff's version comes from `uv.lock`, so CI and local cannot disagree
-- `make typecheck` - mypy (pydantic plugin; **includes `remote_gpu.py`** - it is the most
-  failure-prone file here, and type-checking it immediately found a Pillow API misuse)
+- `make typecheck` - mypy (pydantic plugin; **includes `worker/`** - it is the most
+  failure-prone code here and has no runtime coverage in CI, so the type checker is the
+  only thing standing between a refactor and a broken GPU deploy)
 - frontend: `source scripts/project-env.sh && cd frontend && npm run lint && npm run test && npm run build`
   (build runs strict `tsc -b`)
-- `make remote-gpu` - inject `.env` secrets into gitignored `remote_gpu_filled.py` for an operator-controlled Remote GPU worker
 - `make remote-gpu-config` / `make remote-gpu-image` - the container path: emit the
   **non-secret** half of the worker config (model slots, reviewed revisions, build id) and
   build `docker/remote-gpu/Dockerfile` from it. An image must be publishable, so secrets
@@ -77,25 +77,19 @@
   replayed verbatim on rerun, so a traversal path accepted once is replayed forever
 - `backend/app/outpaint.py` - pure outpaint geometry (plan/build/composite), no torch
 - `backend/app/remote_gpu_client.py` - submit+poll protocol (Cloudflare ~100s limit ⇒ token/poll), bounded retry, **secret redaction on every surfaced error**
-- `remote_gpu.py` - the entire operator-controlled Remote GPU server, one file. `make_remote_gpu.py` locates
-  the injected constants **by AST**, so reformatting no longer breaks `make remote-gpu`, and
-  injects Python literals via `repr()` (JSON's lowercase `false` is a valid Python
-  identifier - it parses, then NameErrors on the A100). `/health` reports `features`,
-  `worker_alive`, `queue_depth`, `speed_loaded` and `build`; the registry gates Remote GPU
-  controls on those features through `_remote_has()`, so the UI never offers what the live
-  session cannot actually do
-- `backend/app/provisioners/` - **how remote GPU hardware comes to exist**, as distinct
-  from `backends/`, which talks to hardware that already does. `manual` is the default and
-  cannot spend anything; `runpod` creates a pod over plain REST. Provisioning happens only
-  from an explicit user action - never a timer, a launch, or a queued job. A session is
-  written to runtime settings *before* `start()` returns so a crash cannot orphan a billing
-  resource, `adopt()` reports at startup what a previous run left running, and a second
-  start is refused rather than doubling the bill. The API key never reaches the worker and
-  is redacted from every surfaced error. Adding a provider is a module + a registry row.
-  **Teardown is Start/Stop plus the clean-shutdown hook, deliberately - there is no idle
-  watchdog.** A pod nobody stops bills until somebody stops it; `adopt()`'s startup warning
-  and the UI's running-cost readout are the chosen mitigation, on the grounds that making
-  the spend visible beats automating a self-destruct.
+- `worker/` - the operator-controlled Remote GPU worker, a package deployed as a
+  container image (`docker/remote-gpu/Dockerfile`). It was one pasted file shaped by
+  Colab - CELL markers, nest_asyncio, a runtime pip install, a cloudflared tunnel, an
+  80 KB lock injected as a string literal - and every one of those is gone. Config
+  precedence is **environment > baked image config > default**, so one image retargets at
+  deploy time; secrets are environment only, which is what makes the image publishable.
+  `runtime.py` holds provider knowledge (Runpod's `/etc/rp_environment`, which is sourced
+  only into interactive shells, so a worker started by ssh/nohup never sees RUNPOD_POD_ID
+  in its env). `/health` reports `features`, `worker_alive`, `queue_depth`, `disk_free_gb`
+  and `build`; the registry gates Remote GPU controls on those features through
+  `_remote_has()`. **`build` is `worker.build_id()`, and `remote_gpu_client.local_build_id()`
+  must hash the same files the same way** - if they disagree the app calls every worker
+  stale and the warning stops meaning anything.
 - `backend/app/enrichment.py` - async post-save worker (Florence-2 captions/auto-tags on CPU); never blocks generation
 - `backend/app/variant_sets/` - Variant Sets: named axes x one template over shared sources.
   **No new job kind and no new job status**: children are ordinary jobs of existing kinds,
@@ -175,7 +169,7 @@ on a file inside it. The retained decisions and evidence live in
   to the app folder (`~` for the rest of the home). Stored rows keep the real paths.
 - Document a route's refusals with `error_responses(...)` from `routers/common.py`; every
   `/api` router already gets 401 from `main.py`.
-- Logging via `backend/app/log.py` (`log.get("tag")` - tag becomes the `[name]` prefix); level comes from `Settings.log_level` (env var beats `.env`); no `print` in `backend/`; scripts and remote_gpu.py keep print.
+- Logging via `backend/app/log.py` (`log.get("tag")` - tag becomes the `[name]` prefix); level comes from `Settings.log_level` (env var beats `.env`); no `print` in `backend/`; scripts and `worker/` keep print.
 - Asset `generator` strings are persisted identifiers - renaming one needs a back-compat
   entry in `frontend/src/lib/generators.ts` GEN_TO_SPEC.
 - **Deletes are soft.** `delete_assets` stamps `deleted_at`; only `purge_deleted` touches
@@ -219,7 +213,7 @@ on a file inside it. The retained decisions and evidence live in
 - `/result` does **not** free the result on read. It used to `pop()`, so a dropped tunnel
   response - the exact failure the retry loop exists for - turned every later poll into a 500.
   The client `/ack`s once it has the bytes; a TTL reclaims the rest.
-- Never commit `.env`, `remote_gpu_filled.py`, `output/runtime_settings.json`.
+- Never commit `.env`, `docker/remote-gpu/remote-gpu-config.json`, `output/runtime_settings.json`.
 - **`mediapipe` is capped `<0.10.30`.** It dropped `mp.solutions` there, which breaks the
   auto-detailer *and* `controlnet_aux` (which imports it at package scope, taking ControlNet
   depth/pose with it). A test guards the cap.
@@ -247,7 +241,7 @@ on a file inside it. The retained decisions and evidence live in
   cannot finish, and `/health` reports `disk_free_gb` so the UI can warn first.
 - **SDXL checkpoints on Remote GPU need their scheduler set.** SDXL repos ship
   `EulerDiscreteScheduler`, but the community checkpoints are tuned on DPM++ 2M SDE Karras
-  (they are routinely published at 30 steps, CFG 2.5-4.5). `_tune_scheduler` in `remote_gpu.py`
+  (they are routinely published at 30 steps, CFG 2.5-4.5). `_tune_scheduler` in `worker/pipelines.py`
   swaps it for SDXL only - Qwen/Flux/Wan ship flow-matching schedulers that are part of how
   they were trained, and swapping those breaks them.
 - **The A100 holds one image model at a time.** They are 35-58 GB, so a switch is an evict
@@ -258,13 +252,10 @@ on a file inside it. The retained decisions and evidence live in
 - **A batch is one job.** Assets must be announced as they are persisted
   (`_announce_asset` → a non-droppable `{"type": "asset"}` frame), or a client that refreshes
   only on the job's terminal event shows nothing until the last image of eight is done.
-- Changing `remote_gpu.py` needs `make remote-gpu` **and** a Remote GPU worker
-  restart - or, on the container path, `make remote-gpu-image`, a push, and a **new pod**,
-  because hosts cache images per machine and a reused tag serves stale code. Never tag the
-  image `latest` for that reason. `/health` reports a `build` hash so the app can tell when
-  the worker is behind either way.
-- **The quick tunnel is not the deployment, and must never own the process.** uvicorn runs
-  in the main thread; the tunnel is the daemon. It used to be inverted, so a rate-limited
-  cloudflared ended the interpreter and took a healthy server with it. `_tunnel_enabled()`
-  also stands the tunnel down entirely where the host already publishes HTTPS
-  (`RUNPOD_POD_ID` / `RUNPOD_ENDPOINT_ID` / `REMOTE_GPU_NO_TUNNEL`).
+- Changing anything in `worker/` needs `make remote-gpu-image`, a push, and a **new pod**:
+  hosts cache images per machine, so a reused tag serves stale code. Never tag the image
+  `latest`. `/health` reports the `build` hash so the app can tell when a worker is behind.
+- **Measured on an A100, 2026-09-20** (numbers in `docs/runpod.md`): Qwen-Image-2512 at
+  1024² takes ~20 s warm end-to-end; a cold pod is ~15 min, two-thirds of it re-downloading
+  weights. `quality` sets the step count **and** the resolution and overrides an explicit
+  `steps`, so a sweep over `steps` alone returns byte-identical images.

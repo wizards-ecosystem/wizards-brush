@@ -366,17 +366,27 @@ async def _check_health() -> dict:
 
 
 def local_build_id() -> str:
-    """Fingerprint of this repo's remote_gpu.py, matching what `make remote_gpu` injects.
+    """Fingerprint of this repo's worker package, matching what /health reports.
 
     Lets remote_gpu_health() tell whether the worker is running the current code.
-    A stale worker is invisible otherwise: a fix shipped locally looks live
-    while the remote GPU still executes the old build, and the only symptom is
-    behaviour that contradicts the source you are reading."""
+    A stale worker is invisible otherwise: a fix shipped locally looks live while
+    the remote GPU still executes the old build, and the only symptom is
+    behaviour that contradicts the source you are reading.
+
+    This must stay byte-identical to `worker.build_id()` - same files, same
+    order, same bytes. If the two ever disagree the app reports *every* worker as
+    stale, which is worse than not checking, because the warning stops meaning
+    anything. `tests/test_remote_worker.py` pins them together.
+    """
     import hashlib
 
-    src = ROOT / "remote_gpu.py"
+    package = ROOT / "worker"
     try:
-        return hashlib.sha256(src.read_bytes()).hexdigest()[:12]
+        digest = hashlib.sha256()
+        for path in sorted(package.glob("*.py")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()[:12]
     except OSError:
         return ""
 
