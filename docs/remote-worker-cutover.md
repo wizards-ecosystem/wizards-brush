@@ -165,6 +165,40 @@ The package has only ever run on CPU. Before this branch merges:
    check working.
 5. **Terminate.** Do not stop: stopping releases the GPU and you may not get it back.
 
+## Added since: provisioning (`7c327c6`, `c02c29d`)
+
+The app can now rent its own hardware — `backend/app/provisioners/`, the
+`/api/remote-gpu/session` routes, `worker/watchdog.py`, and a Start GPU control.
+Built and covered (28 backend tests, 5 frontend), but with one gap that matters:
+
+> **Every provisioner test mocks the HTTP transport. No pod has ever been created
+> through this code path.** The request bodies are asserted against the REST v2
+> schema, not against Runpod.
+
+Closing it needs something only the account owner can produce: a **`RUNPOD_API_KEY`
+in `.env`**. MCP OAuth authenticates the tools in a session; it does not yield a
+key the app can hold. Until one exists the provisioner cannot be exercised at all.
+
+When it is, the live checks worth making, in order:
+
+1. `POST /api/remote-gpu/session` creates a pod, and the returned `base_url`
+   resolves to a worker that answers `/health`.
+2. The pod's env actually carries `REMOTE_GPU_SHARED_SECRET` and the idle switch
+   values — read them back with `get-pod`.
+3. `DELETE /api/remote-gpu/session` terminates it and clears the stored session.
+4. Kill the app with `SIGKILL` while a pod is up, restart, and confirm the startup
+   adoption warning names it and that it is still stoppable.
+5. Set `RUNPOD_IDLE_TERMINATE_MIN=1`, leave it alone, and confirm the pod
+   terminates itself. **This is the one that protects real money**, and it is the
+   only one that cannot be inferred from the unit tests.
+6. Confirm the watchdog does *not* fire during a long render.
+
+Note for (5): the worker self-terminates with the key Runpod injects into
+`/etc/rp_environment`. If a narrower key is passed as pod env instead, verify it
+has permission to delete its own pod — a scoped key that cannot will fail silently
+into the "keeps billing" path, which is precisely the failure the switch exists to
+prevent.
+
 ## Traps already paid for
 
 - **"Running" ≠ ready.** The pod reported `RUNNING` with `runtime: null` for ~7 minutes
