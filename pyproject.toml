@@ -193,7 +193,7 @@ cache_dir = ".runtime/cache/pytest"
 [tool.mypy]
 python_version = "3.12"
 cache_dir = ".runtime/cache/mypy"
-files = ["backend", "scripts", "tests", "remote_gpu.py"]
+files = ["backend", "worker", "scripts", "tests", "remote_gpu.py"]
 plugins = ["pydantic.mypy"]
 check_untyped_defs = true
 no_implicit_optional = true

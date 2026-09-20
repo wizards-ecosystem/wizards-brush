@@ -9,7 +9,7 @@
 - `make doctor` must show every active writable path inside the checkout
 - `make test` - backend pytest (`.venv/bin/python -m pytest tests -q`)
 - single test: `.venv/bin/python -m pytest tests/test_db.py -k name -q`
-- `make lint` - ruff over `backend tests scripts remote_gpu.py`. The rule set is pinned
+- `make lint` - ruff over `backend worker tests scripts remote_gpu.py`. The rule set is pinned
   explicitly in `pyproject.toml` (`[tool.ruff.lint] select`) - relying on ruff's defaults
   turned the tree red on a version bump alone. `E402` stays ignored (lazy heavy imports);
   ruff's version comes from `uv.lock`, so CI and local cannot disagree

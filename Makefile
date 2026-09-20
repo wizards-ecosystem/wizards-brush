@@ -76,7 +76,7 @@ test:         ## run the backend test suite
 	$(PROJECT_ENV) .venv/bin/python -m pytest tests -q
 
 lint:         ## run ruff over backend, tests, scripts, and the remote runner
-	$(PROJECT_ENV) .venv/bin/ruff check backend tests scripts remote_gpu.py
+	$(PROJECT_ENV) .venv/bin/ruff check backend worker tests scripts remote_gpu.py
 
 typecheck:    ## type-check backend, tests, scripts, and remote runner
 	$(PROJECT_ENV) .venv/bin/python -m mypy
