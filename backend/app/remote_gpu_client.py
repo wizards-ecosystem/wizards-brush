@@ -470,7 +470,7 @@ def run_remote(
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last = RuntimeError(f"Remote GPU unreachable: {e}")
             if progress_cb:
-                progress_cb(0.02, f"connecting to A100 (retry {attempt + 1}/5) …")
+                progress_cb(0.02, f"connecting to the Remote GPU (retry {attempt + 1}/5) …")
             time.sleep(min(2 ** attempt, 10))
         raise last or RuntimeError("Remote GPU POST failed")
 
@@ -541,7 +541,7 @@ def run_remote(
                     if miss > 10:
                         raise RuntimeError(f"Remote GPU connection lost: {e}") from e
                     if progress_cb:
-                        progress_cb(last_frac, "A100 link hiccup — retrying …")
+                        progress_cb(last_frac, "Remote GPU link hiccup — retrying …")
                     time.sleep(min(poll * miss, 15))
                     continue
                 now = time.monotonic()
@@ -559,14 +559,14 @@ def run_remote(
                 active = active or remote_progress > 0.0 or preview is not None
                 if progress_cb:
                     last_frac = max(0.1, remote_progress)
-                    progress_cb(last_frac, f"A100 {status}",
+                    progress_cb(last_frac, f"Remote GPU {status}",
                                 preview=_preview_bytes(preview))
                 if status == "done":
                     result = _validated_result(path, payload, d.get("result"))
                     _ack_remote()   # result is in our memory now — let the A100 drop it
                     return result
                 if status == "error":
-                    # The A100 reports a cancelled job as an error rather than
+                    # The worker reports a cancelled job as an error rather than
                     # handing back the partially-denoised image it was holding.
                     # Surface that as cancellation, not as a failure, so the
                     # queue marks the job canceled instead of showing the user

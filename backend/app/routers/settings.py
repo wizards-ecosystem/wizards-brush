@@ -102,7 +102,7 @@ def _settings_payload() -> dict:
 
     models = [
         {
-            "label": f"{'This machine' if variant.lane == 'local' else 'A100 image'} · "
+            "label": f"{'This machine' if variant.lane == 'local' else 'Remote GPU image'} · "
                      f"{variant.name.title()}",
             "id": variants.repo_of(variant),
             # `variants` retains "colab" as a private compatibility key; do
@@ -114,10 +114,10 @@ def _settings_payload() -> dict:
         for variant in variants.available(lane)
     ]
     extras = (
-        ("A100 image editing", settings.qwen_edit_model, "remote_gpu", "image-edit"),
-        ("A100 video · Wan", settings.video_model, "remote_gpu", "video"),
-        ("A100 video · Hunyuan", settings.hunyuan_video_model, "remote_gpu", "video"),
-        ("A100 video · LTX", settings.ltx_video_model, "remote_gpu", "video"),
+        ("Remote GPU image editing", settings.qwen_edit_model, "remote_gpu", "image-edit"),
+        ("Remote GPU video · Wan", settings.video_model, "remote_gpu", "video"),
+        ("Remote GPU video · Hunyuan", settings.hunyuan_video_model, "remote_gpu", "video"),
+        ("Remote GPU video · LTX", settings.ltx_video_model, "remote_gpu", "video"),
     )
     models.extend(
         {"label": label, "id": model, "lane": lane, "kind": kind}

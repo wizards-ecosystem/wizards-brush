@@ -150,7 +150,7 @@ the kinds and settings available on yours.
 | `image_local` | local | none | Text to image on the local GPU (model picked by `model_variant`) |
 | `img2img` | local | 1 image | Transform an image |
 | `inpaint` | local | 1 image + mask | Regenerate the masked region (white = change) |
-| `inpaint_remote` | remote | 1 image + mask | Masked A100 inpaint on the same Edit-2511 weights; unmasked pixels stay the photograph |
+| `inpaint_remote` | remote | 1 image + mask | Masked remote inpaint on the same Edit-2511 weights; unmasked pixels stay the photograph |
 | `outpaint` | local | 1 image | Extend past the frame (`direction`, `expand_pct`) |
 | `control_local` | local | 1 image | ControlNet (when enabled) |
 | `image_colab` | remote | none | Text to image on the Remote GPU |

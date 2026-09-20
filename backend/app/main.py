@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI):
             asyncio.to_thread(cancel_remote_identity, token, client_id)
             for _job_id, token, client_id in abandoned_remote
         ))
-        logger.info("reclaimed %d/%d interrupted A100 job(s)",
+        logger.info("reclaimed %d/%d interrupted Remote GPU job(s)",
                     sum(bool(done) for done in reclaimed), len(abandoned_remote))
     start_all()
     # After the lanes exist: anything still queued never started, so it survives

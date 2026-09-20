@@ -19,7 +19,7 @@ export function ProgressBar({ job, preview }: { job: Job; preview?: string }) {
   const lane = laneOf(job.kind, specs);
   const remaining = eta(job);
   const width = job.status === "queued" ? 4 : done ? 100 : percent;
-  const colour = failed ? "bg-danger" : done ? "bg-ok" : lane === "A100" ? "bg-accent2" : "bg-accent";
+  const colour = failed ? "bg-danger" : done ? "bg-ok" : lane === "Remote GPU" ? "bg-accent2" : "bg-accent";
 
   return (
     <div className="flex min-w-0 items-center gap-3">
@@ -27,7 +27,7 @@ export function ProgressBar({ job, preview }: { job: Job; preview?: string }) {
         <div className="media-tile size-14 shrink-0">
           <img src={preview} alt="Live generation preview" className="h-full w-full object-cover" />
           <span
-            className={`absolute right-1 top-1 size-1.5 animate-pulse rounded-full ${lane === "A100" ? "bg-accent2" : "bg-accent"}`}
+            className={`absolute right-1 top-1 size-1.5 animate-pulse rounded-full ${lane === "Remote GPU" ? "bg-accent2" : "bg-accent"}`}
           />
         </div>
       )}
@@ -38,7 +38,7 @@ export function ProgressBar({ job, preview }: { job: Job; preview?: string }) {
               name={failed ? "alert" : done ? "check" : job.status === "running" ? "make" : "queue"}
               size={14}
               className={
-                failed ? "text-danger" : done ? "text-ok" : lane === "A100" ? "text-accent2" : "text-accent"
+                failed ? "text-danger" : done ? "text-ok" : lane === "Remote GPU" ? "text-accent2" : "text-accent"
               }
             />
             <span className="technical shrink-0 text-[9px] uppercase tracking-wide text-muted">{lane}</span>

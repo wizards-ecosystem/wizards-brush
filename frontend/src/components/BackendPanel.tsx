@@ -19,7 +19,7 @@ export function BackendPanel() {
   const remote = system?.remote_gpu;
   const running = Object.values(jobs).filter((job) => job.status === "running");
   const localJob = running.find((job) => laneOf(job.kind, specs) === "local GPU");
-  const remoteJob = running.find((job) => laneOf(job.kind, specs) === "A100");
+  const remoteJob = running.find((job) => laneOf(job.kind, specs) === "Remote GPU");
   const vramPct = gpu?.memory_total_mb
     ? Math.min(100, Math.round(((gpu.memory_used_mb || 0) / gpu.memory_total_mb) * 100))
     : 0;

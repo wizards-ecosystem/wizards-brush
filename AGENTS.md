@@ -171,7 +171,12 @@ on a file inside it. The retained decisions and evidence live in
   `/api` router already gets 401 from `main.py`.
 - Logging via `backend/app/log.py` (`log.get("tag")` - tag becomes the `[name]` prefix); level comes from `Settings.log_level` (env var beats `.env`); no `print` in `backend/`; scripts and `worker/` keep print.
 - Asset `generator` strings are persisted identifiers - renaming one needs a back-compat
-  entry in `frontend/src/lib/generators.ts` GEN_TO_SPEC.
+  entry in `frontend/src/lib/generators.ts` GEN_TO_SPEC. The remote image generator is still
+  `colab_a100` for exactly that reason: it names neither Colab nor necessarily an A100
+  any more, but it is written into every remote asset ever made here, and a second name
+  for one thing is a cost paid forever against a field users do not read. The **labels**
+  were fixed instead - the lane is "Remote GPU" everywhere a person can see it, because
+  a run on an A40 proved "A100" was a guess.
 - **Deletes are soft.** `delete_assets` stamps `deleted_at`; only `purge_deleted` touches
   the filesystem. Every accessor (`get_asset`, `get_assets`, `search_assets`) hides trashed
   rows, so they cannot leak back into search, stats, exports or the remix pickers.

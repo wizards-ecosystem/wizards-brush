@@ -48,10 +48,12 @@ export const HIDE_KEYS = new Set([
   "parent_asset_id",
 ]);
 
-export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "A100" {
+/** Which lane a job runs on. The remote lane is named for what it is, not for a
+ * card: it was "A100" until a run on an A40 proved that label was a guess. */
+export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "Remote GPU" {
   const spec = specs.find((s) => s.id === kind);
-  if (spec) return spec.needs_remote ? "A100" : "local GPU";
-  return LOCAL_TOOL_KINDS.has(kind) ? "local GPU" : "A100";
+  if (spec) return spec.needs_remote ? "Remote GPU" : "local GPU";
+  return LOCAL_TOOL_KINDS.has(kind) ? "local GPU" : "Remote GPU";
 }
 
 /** Any job whose kind matches a generator spec can be re-run by id. */
