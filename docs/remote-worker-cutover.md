@@ -165,39 +165,36 @@ The package has only ever run on CPU. Before this branch merges:
    check working.
 5. **Terminate.** Do not stop: stopping releases the GPU and you may not get it back.
 
-## Added since: provisioning (`7c327c6`, `c02c29d`)
+## Added since: provisioning (`7c327c6`, `c02c29d`, `6c571b6`)
 
-The app can now rent its own hardware — `backend/app/provisioners/`, the
-`/api/remote-gpu/session` routes, `worker/watchdog.py`, and a Start GPU control.
-Built and covered (28 backend tests, 5 frontend), but with one gap that matters:
+The app can rent its own hardware — `backend/app/provisioners/`, the
+`/api/remote-gpu/session` routes, and a Start GPU control. Covered by 20 backend
+tests and 5 frontend, with one gap:
 
 > **Every provisioner test mocks the HTTP transport. No pod has ever been created
-> through this code path.** The request bodies are asserted against the REST v2
+> through this code path.** Request bodies are asserted against the REST v2
 > schema, not against Runpod.
 
-Closing it needs something only the account owner can produce: a **`RUNPOD_API_KEY`
-in `.env`**. MCP OAuth authenticates the tools in a session; it does not yield a
-key the app can hold. Until one exists the provisioner cannot be exercised at all.
+Closing it needs a **`RUNPOD_API_KEY` in `.env`**, which only the account owner can
+produce — MCP OAuth authenticates tools in a session but yields no key the app can
+hold. When one exists:
 
-When it is, the live checks worth making, in order:
-
-1. `POST /api/remote-gpu/session` creates a pod, and the returned `base_url`
-   resolves to a worker that answers `/health`.
-2. The pod's env actually carries `REMOTE_GPU_SHARED_SECRET` and the idle switch
-   values — read them back with `get-pod`.
+1. `POST /api/remote-gpu/session` creates a pod whose `base_url` answers `/health`.
+2. The pod's env carries `REMOTE_GPU_SHARED_SECRET` — read it back with `get-pod`.
 3. `DELETE /api/remote-gpu/session` terminates it and clears the stored session.
-4. Kill the app with `SIGKILL` while a pod is up, restart, and confirm the startup
-   adoption warning names it and that it is still stoppable.
-5. Set `RUNPOD_IDLE_TERMINATE_MIN=1`, leave it alone, and confirm the pod
-   terminates itself. **This is the one that protects real money**, and it is the
-   only one that cannot be inferred from the unit tests.
-6. Confirm the watchdog does *not* fire during a long render.
+4. `SIGKILL` the app with a pod up, restart, and confirm the startup adoption
+   warning names it and that it is still stoppable from the UI.
 
-Note for (5): the worker self-terminates with the key Runpod injects into
-`/etc/rp_environment`. If a narrower key is passed as pod env instead, verify it
-has permission to delete its own pod — a scoped key that cannot will fail silently
-into the "keeps billing" path, which is precisely the failure the switch exists to
-prevent.
+**There is no automatic teardown beyond Start/Stop and the clean-shutdown hook.**
+An idle watchdog was built and verified on hardware (it terminated a pod 62s after
+the last authenticated request), then removed on 2026-09-20 as overengineering:
+the owner's call is that a forgotten pod is the owner's problem. Do not reintroduce
+it without that conversation. The agreed mitigation is visibility — the running-cost
+readout and the adoption warning — not automation.
+
+The worker side is verified on an A100 (`91327bdfe88f`): package boots, build id
+matches, host detection prints the proxy URL, empty secret refuses, 401 without
+the secret, and three real Qwen-Image renders. Numbers are in `docs/runpod.md`.
 
 ## Traps already paid for
 

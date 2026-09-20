@@ -92,12 +92,10 @@
   resource, `adopt()` reports at startup what a previous run left running, and a second
   start is refused rather than doubling the bill. The API key never reaches the worker and
   is redacted from every surfaced error. Adding a provider is a module + a registry row.
-- `worker/watchdog.py` - the half of teardown that survives a SIGKILL. The app stops the
-  pod on a clean shutdown; a crash or a closed laptop runs no shutdown code, so the worker
-  terminates itself after configured silence plus a hard session ceiling. Any authenticated
-  request is the heartbeat - the client's existing `/result` polling and 15 s `/health`
-  re-check already provide it - and a queued or running job always counts as activity, so
-  the switch cannot interrupt a render. `decide()` is pure so the policy is testable.
+  **Teardown is Start/Stop plus the clean-shutdown hook, deliberately - there is no idle
+  watchdog.** A pod nobody stops bills until somebody stops it; `adopt()`'s startup warning
+  and the UI's running-cost readout are the chosen mitigation, on the grounds that making
+  the spend visible beats automating a self-destruct.
 - `backend/app/enrichment.py` - async post-save worker (Florence-2 captions/auto-tags on CPU); never blocks generation
 - `backend/app/variant_sets/` - Variant Sets: named axes x one template over shared sources.
   **No new job kind and no new job status**: children are ordinary jobs of existing kinds,

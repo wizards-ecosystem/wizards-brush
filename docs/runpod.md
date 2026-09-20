@@ -172,10 +172,6 @@ So **click to first image is ~15 minutes cold**, and roughly two-thirds of it is
 re-downloading what the last session already had. That is what a network volume
 buys back, and the only thing it buys.
 
-The idle switch was verified on the same pod: armed at one minute, and with the
-last authenticated request at 19:51:53Z the pod stopped answering **62 seconds
-later** and the proxy returned 404 — terminated, not merely unreachable.
-
 Note `quality` sets the step count *and* the resolution on this lane, and it
 overrides an explicit `steps` in the job params. A sweep that varies `steps`
 alone returns byte-identical images.
@@ -203,26 +199,19 @@ the pod's URL into settings for you; stopping terminates the pod and clears it.
 "rent a GPU because a job was queued". The only thing that creates a pod is you
 pressing the button.
 
-### How it avoids leaving a GPU running
+### Stopping it is your job
 
-Two independent mechanisms, because they fail differently.
+Press **Stop**, or quit the app cleanly and it terminates the pod for you
+(`REMOTE_GPU_STOP_ON_EXIT`, on by default).
 
-The app terminates the pod when it shuts down cleanly (`REMOTE_GPU_STOP_ON_EXIT`,
-on by default). That covers Ctrl-C and a normal quit.
+**That is the whole of it.** There is no idle timer and no self-destruct: a pod
+that nothing stops keeps billing until something does. A crash, an OOM kill or a
+closed laptop runs no shutdown code, so in those cases the pod survives you.
 
-It cannot cover a SIGKILL, an OOM kill, a crash or a laptop that sleeps and never
-wakes — none of which run shutdown code. So the **worker terminates itself** after
-`RUNPOD_IDLE_TERMINATE_MIN` with no authenticated request, plus a hard
-`RUNPOD_MAX_SESSION_HOURS` ceiling. It needs no new heartbeat: the client already
-polls `/result` throughout a render and re-checks `/health` every 15 seconds, and
-a job in flight always counts as activity, so a long video is never interrupted
-by the thing meant to stop idle billing.
-
-Set `RUNPOD_IDLE_TERMINATE_MIN=0` to disable it, and understand what you are
-choosing — a forgotten pod then bills until you notice.
-
-On startup the app also reports any session a previous run left behind, because
-the alternative is finding out from an invoice.
+This is a deliberate choice of visibility over automation. The control shows the
+running cost the entire time a pod is up, and if the app restarts while one is
+still running it says so at startup with the elapsed time and the spend so far —
+because the alternative is finding out from an invoice. Watch the number.
 
 ### Keeping the model cache
 

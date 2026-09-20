@@ -126,20 +126,6 @@ def test_start_sends_the_worker_image_and_never_the_api_key(runpod_env, monkeypa
     assert SessionStore().load().id == "pod-abc"
 
 
-def test_idle_switch_is_passed_to_the_worker(runpod_env, monkeypatch):
-    """The app's shutdown hook cannot run after a SIGKILL; the worker's can."""
-    seen: dict = {}
-
-    def handler(request):
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(201, json={"id": "pod-abc"})
-
-    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
-    monkeypatch.setattr(settings, "runpod_idle_terminate_min", 20)
-    provisioners.get_provisioner().start()
-    assert seen["body"]["env"]["REMOTE_GPU_IDLE_TERMINATE_MIN"] == "20"
-
-
 def test_a_second_start_is_refused_instead_of_doubling_the_bill(runpod_env, monkeypatch):
     def handler(request):
         if request.method == "POST":
@@ -263,51 +249,3 @@ def test_start_route_on_manual_explains_rather_than_500s(client):
 
 def test_stop_route_is_safe_with_nothing_running(client):
     assert client.request("DELETE", "/api/remote-gpu/session").status_code == 200
-
-
-# ---- the worker's own switch ----------------------------------------------
-# The app terminates the pod on a clean shutdown. This is what covers the rest:
-# a SIGKILL, an OOM kill, or a laptop that sleeps and never wakes.
-from worker import watchdog
-
-
-@pytest.mark.parametrize("case,expected", [
-    ({"elapsed_s": 60, "quiet_s": 10, "busy": False,
-      "idle_limit_s": 1200, "max_session_s": 0}, ""),
-    ({"elapsed_s": 5000, "quiet_s": 1500, "busy": False,
-      "idle_limit_s": 1200, "max_session_s": 0}, "idle"),
-    # A long render polls /result, but if a client ever goes quiet mid-job the
-    # switch must still not fire — that would destroy paid-for work.
-    ({"elapsed_s": 5000, "quiet_s": 9999, "busy": True,
-      "idle_limit_s": 1200, "max_session_s": 0}, ""),
-    # The ceiling outranks work in flight: it exists to bound a wedged client
-    # that keeps the worker warm forever.
-    ({"elapsed_s": 25000, "quiet_s": 0, "busy": True,
-      "idle_limit_s": 1200, "max_session_s": 21600}, "max_session"),
-    # Unconfigured means off. A worker on hardware you own deletes nothing.
-    ({"elapsed_s": 99999, "quiet_s": 99999, "busy": False,
-      "idle_limit_s": 0, "max_session_s": 0}, ""),
-])
-def test_idle_switch_policy(case, expected):
-    assert watchdog.decide(**case) == expected
-
-
-def test_touch_resets_the_idle_clock():
-    watchdog.touch()
-    assert watchdog.idle_seconds() < 1.0
-
-
-def test_switch_stays_off_when_this_is_not_a_rented_pod(monkeypatch, capsys):
-    """Configuration alone must not arm a self-destruct on someone's own box."""
-    monkeypatch.setenv("REMOTE_GPU_IDLE_TERMINATE_MIN", "20")
-    monkeypatch.setattr(watchdog.runtime, "runpod_pod_id", lambda: "")
-    armed: list = []
-
-    def _thread(*_args, **_kwargs):
-        armed.append(1)
-        raise AssertionError("the switch must not arm off a Runpod pod")
-
-    monkeypatch.setattr(watchdog.threading, "Thread", _thread)
-    watchdog.start(lambda: False)
-    assert not armed
-    assert "stays off" in capsys.readouterr().out

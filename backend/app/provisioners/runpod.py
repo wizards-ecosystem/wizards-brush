@@ -123,12 +123,6 @@ class RunpodProvisioner:
                 "HF_TOKEN": settings.hf_token or "",
                 "PORT": str(port),
                 MARKER_ENV: "1",
-                # Dead-man's switch. The app terminates the pod on a clean
-                # shutdown, but a crash, an OOM kill or a lost laptop runs no
-                # shutdown code at all - so the worker also watches for silence
-                # and terminates itself.
-                "REMOTE_GPU_IDLE_TERMINATE_MIN": str(settings.runpod_idle_terminate_min),
-                "REMOTE_GPU_MAX_SESSION_HOURS": str(settings.runpod_max_session_hours),
             },
         }
         if (settings.runpod_network_volume_id or "").strip():

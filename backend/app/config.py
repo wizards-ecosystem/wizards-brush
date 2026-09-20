@@ -199,18 +199,10 @@ class Settings(BaseSettings):
     runpod_network_volume_id: str = Field(default="", alias="RUNPOD_NETWORK_VOLUME_ID")
     runpod_data_center_ids: str = Field(default="", alias="RUNPOD_DATA_CENTER_IDS")
     runpod_worker_port: int = Field(default=8000, ge=1, le=65535, alias="RUNPOD_WORKER_PORT")
-    # The dead-man's switch. The app terminates the pod when it shuts down
-    # cleanly, but a crash, an OOM kill or a closed laptop runs no shutdown code,
-    # so the worker also terminates itself after this much silence. 0 disables it,
-    # which means a forgotten pod bills until you notice.
-    runpod_idle_terminate_min: int = Field(default=20, ge=0, le=1440,
-                                           alias="RUNPOD_IDLE_TERMINATE_MIN")
-    runpod_max_session_hours: int = Field(default=6, ge=0, le=168,
-                                          alias="RUNPOD_MAX_SESSION_HOURS")
     # Terminate rented hardware when the app shuts down cleanly. On by default:
     # the common mistake is leaving a GPU running overnight, not losing a cached
-    # model. Turn it off to keep a pod (and its warm cache) across an app restart
-    # - the worker's own idle switch is then the only thing that stops it.
+    # model. Turn it off to keep a pod, and its warm cache, across a restart -
+    # then nothing stops it but the Stop button.
     remote_gpu_stop_on_exit: bool = Field(default=True, alias="REMOTE_GPU_STOP_ON_EXIT")
 
     # app

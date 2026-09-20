@@ -11,8 +11,8 @@ import os
 
 import uvicorn
 
-from . import runtime, watchdog
-from .api import app, busy
+from . import runtime
+from .api import app
 
 
 def main() -> None:
@@ -28,8 +28,6 @@ def main() -> None:
         print(f"[worker] serving on 0.0.0.0:{port} — publish this port with a "
               f"route you control, and keep the shared secret in front of it.",
               flush=True)
-    # Arm before serving: the first request may be the only one.
-    watchdog.start(busy)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
