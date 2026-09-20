@@ -38,6 +38,9 @@ from .routers import (
     wildcards,
 )
 from .routers import (
+    remote_gpu as remote_gpu_router,
+)
+from .routers import (
     settings as settings_router,
 )
 from .routers.common import error_responses
@@ -154,10 +157,67 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 — a set that cannot recover must not stop startup
         logger.warning("variant set reconciliation skipped: %s", e)
     threading.Thread(target=_warm_and_sweep, daemon=True).start()
+    # Rented hardware bills whether or not this process is alive, so say plainly
+    # what the last run left behind. A previous process may have been killed in a
+    # way that ran no shutdown code at all.
+    _adopt_remote_session()
     try:
         yield
     finally:
+        _release_remote_session()
         release_process_lock()
+
+
+def _adopt_remote_session() -> None:
+    """Report rented hardware a previous process left running.
+
+    Not a failure path: a pod outliving the app is normal when the app was
+    killed rather than stopped. The point is that it is *said out loud* at
+    startup, because the alternative is discovering it on a bill.
+    """
+    try:
+        from . import provisioners
+
+        provisioner = provisioners.get_provisioner()
+        session = provisioner.adopt()
+    except Exception as exc:  # noqa: BLE001 — never block startup on an optional feature
+        logger.warning("could not check for a leftover Remote GPU session: %s", exc)
+        return
+    if session is None:
+        return
+    cost = session.cost_estimate_usd()
+    spend = f", about ${cost:.2f} so far" if cost is not None else ""
+    logger.warning(
+        "a Remote GPU session from a previous run is still up: %s %s (%.0f min%s). "
+        "Stop it from Settings, or it keeps billing.",
+        provisioner.label, session.id, session.elapsed_s() / 60.0, spend,
+    )
+
+
+def _release_remote_session() -> None:
+    """Terminate rented hardware on a clean shutdown.
+
+    This is best-effort by nature. A SIGKILL, an OOM kill or a lost machine runs
+    none of this, which is exactly why the worker carries its own idle switch —
+    this path is the fast, tidy case, not the guarantee.
+    """
+    if not settings.remote_gpu_stop_on_exit:
+        return
+    try:
+        from . import provisioners
+
+        provisioner = provisioners.get_provisioner()
+        if provisioner.id == "manual":
+            return
+        if provisioner.status() is None:
+            return
+        logger.info("terminating the rented Remote GPU session")
+        provisioner.stop()
+    except Exception as exc:  # noqa: BLE001 — shutdown must complete regardless
+        logger.error(
+            "could not terminate the rented Remote GPU session (%s). "
+            "It may still be billing — check your provider's console.", exc,
+        )
 
 
 _API_DESCRIPTION = """\
@@ -251,7 +311,8 @@ app.add_middleware(BrowserSecurityMiddleware, settings=settings)
 
 # API routers (grid after images — it reuses images' registered handlers)
 # job_api precedes jobs: GET /jobs/kinds must match before GET /jobs/{job_id}.
-for r in (system.router, settings_router.router, images.router, videos.router,
+for r in (system.router, settings_router.router, remote_gpu_router.router,
+          images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router):

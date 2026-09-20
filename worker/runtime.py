@@ -88,18 +88,33 @@ def free_disk_gb(path: str | Path = ROOT) -> float:
 _RUNPOD_ENV_FILE = Path("/etc/rp_environment")
 
 
-def runpod_pod_id() -> str:
-    """This Runpod pod's id, from the environment or Runpod's own env file."""
-    pod_id = os.environ.get("RUNPOD_POD_ID", "").strip()
-    if pod_id:
-        return pod_id
+def runpod_env(name: str) -> str:
+    """A Runpod-injected variable, from the environment or Runpod's env file."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
     try:
         text = _RUNPOD_ENV_FILE.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""  # not a Runpod host, or the file is unreadable
-    found = re.search(r"""^\s*(?:export\s+)?RUNPOD_POD_ID=["']?([^"'\s]+)""",
+    found = re.search(rf"""^\s*(?:export\s+)?{re.escape(name)}=["']?([^"'\s]+)""",
                       text, re.MULTILINE)
     return found.group(1) if found else ""
+
+
+def runpod_pod_id() -> str:
+    """This Runpod pod's id."""
+    return runpod_env("RUNPOD_POD_ID")
+
+
+def runpod_api_key() -> str:
+    """The key this pod can use to terminate itself.
+
+    Runpod injects an account-scoped key. That is more power than a self-destruct
+    needs, and it sits inside a rented container, so a deliberately narrow key
+    passed as pod env is preferable where the provider allows one.
+    """
+    return runpod_env("RUNPOD_API_KEY")
 
 
 def public_url(port: int) -> str:

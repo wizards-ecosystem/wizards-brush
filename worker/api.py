@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException
 from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
-from . import build_id, config, pipelines, runtime
+from . import build_id, config, pipelines, runtime, watchdog
 
 # ---- API ------------------------------------------------------------------
 app = FastAPI(title="The Wizard's Brush Remote GPU Server")
@@ -61,6 +61,10 @@ class _RemoteIngressMiddleware:
         if not hmac.compare_digest(supplied, self.secret):
             await self._respond(send, 401, "bad or missing X-Gen-Secret")
             return
+        # An authenticated request is the heartbeat the idle switch watches for.
+        # Unauthenticated noise must not count: a public proxy URL attracts
+        # scanners, and a scanner is not a reason to hold a GPU open.
+        watchdog.touch()
         raw_length = headers.get(b"content-length")
         if raw_length:
             try:
@@ -691,3 +695,14 @@ def i2v(req: VideoReq, x_gen_secret: str | None = Header(default=None)):
     if not req.image_b64:
         raise HTTPException(status_code=400, detail="image_b64 required for i2v")
     return _enqueue(_video_run(req, "i2v"), req.client_job_id)
+
+
+def busy() -> bool:
+    """Whether work is in flight, for the idle switch.
+
+    A queued or running job counts even when its client has gone quiet, so a
+    long render is never interrupted by the thing meant to stop idle billing.
+    """
+    if _TASKQ.qsize():
+        return True
+    return any(job.get("status") in ("queued", "running") for job in _JOBS.values())
