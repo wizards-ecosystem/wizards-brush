@@ -3,7 +3,7 @@ PROJECT_ENV = source scripts/project-env.sh &&
 .DEFAULT_GOAL := help
 
 .PHONY: host-check install setup bootstrap install-nunchaku migrate dev start stop browser browser-dev build models models-status \
-	benchmark-local-plan benchmark-local benchmark-a100-plan benchmark-a100 remote-gpu test clean-gens \
+	benchmark-local-plan benchmark-local benchmark-a100-plan benchmark-a100 remote-gpu remote-gpu-config remote-gpu-image test clean-gens \
 	clean clean-build clean-cache clean-runtime lint typecheck check release-check doctor offline-check \
 	optional-check sbom-check release-layout-check release-bundle help
 
@@ -63,6 +63,14 @@ benchmark-a100: ## run the two-prompt A100 matrix against a live Remote GPU work
 
 remote-gpu:   ## write remote_gpu_filled.py with local settings injected
 	$(PROJECT_ENV) .venv/bin/python scripts/make_remote_gpu.py
+
+remote-gpu-config: ## write the non-secret worker config the container image bakes in
+	$(PROJECT_ENV) .venv/bin/python scripts/make_remote_gpu.py --config docker/remote-gpu/remote-gpu-config.json
+
+remote-gpu-image: remote-gpu-config ## build the Remote GPU container image (tag from the build id)
+	$(PROJECT_ENV) docker build --platform=linux/amd64 \
+	  -f docker/remote-gpu/Dockerfile \
+	  -t wizards-brush-remote-gpu:$$($(PROJECT_ENV) .venv/bin/python -c "import json;print(json.load(open('docker/remote-gpu/remote-gpu-config.json'))['build'])") .
 
 test:         ## run the backend test suite
 	$(PROJECT_ENV) .venv/bin/python -m pytest tests -q

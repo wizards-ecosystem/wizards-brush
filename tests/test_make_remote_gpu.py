@@ -317,3 +317,99 @@ def test_returns_none_when_nothing_matches_so_the_caller_can_warn(monkeypatch):
     something arbitrary — the caller falls back and says so."""
     pick = _picker(monkeypatch, files=["model.safetensors", "README.md"])
     assert pick("some/repo", "image") is None
+
+
+# ---- container deployment contract -----------------------------------------
+# remote_gpu.py was written for a notebook: install at startup, tunnel out, keep
+# state beside the script. A rented GPU inverts all three. These pin the parts
+# that let one file serve both without the container path regressing silently.
+
+DOCKERFILE = make_remote_gpu.ROOT / "docker" / "remote-gpu" / "Dockerfile"
+
+
+def _lift(*names: str) -> dict:
+    """Execute named top-level functions from the real remote_gpu.py.
+
+    The module cannot be imported here: it imports torch at module scope, which
+    conftest's _HEAVY guard forbids and CI has no CUDA for. Lifting just these
+    definitions keeps the assertions about the code that actually ships rather
+    than a copy that can drift.
+    """
+    wanted = [n for n in ast.parse(make_remote_gpu.SRC.read_text()).body
+              if isinstance(n, ast.FunctionDef) and n.name in names]
+    assert {n.name for n in wanted} == set(names), "remote_gpu.py lost a lifted function"
+    ns: dict = {"os": os}
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), "<remote_gpu>", "exec"), ns)
+    return ns
+
+
+@pytest.mark.parametrize("env,expected", [
+    ({}, True),                                        # bare VM / notebook: no route of its own
+    ({"RUNPOD_POD_ID": "abc123"}, False),              # pod proxy already publishes HTTPS
+    ({"RUNPOD_ENDPOINT_ID": "e1"}, False),             # serverless endpoint likewise
+    ({"REMOTE_GPU_NO_TUNNEL": "1"}, False),            # operator-managed reverse proxy
+    ({"REMOTE_GPU_NO_TUNNEL": "false"}, True),         # explicit off means off, not "set"
+])
+def test_tunnel_only_runs_where_there_is_no_route(monkeypatch, env, expected):
+    for key in ("RUNPOD_POD_ID", "RUNPOD_ENDPOINT_ID", "REMOTE_GPU_NO_TUNNEL"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert _lift("_flag", "_tunnel_enabled")["_tunnel_enabled"]() is expected
+
+
+def test_the_server_outlives_the_tunnel():
+    """The tunnel used to own the process: uvicorn ran in a daemon thread while
+    the main thread blocked on cloudflared's wait(). A rate-limited or crashed
+    tunnel therefore ended the interpreter and took a perfectly healthy server
+    with it — invisible on a managed host, whose own URL keeps answering until
+    the container exits. uvicorn.run must be a statement in _launch's own body.
+    """
+    launch = next(n for n in ast.parse(make_remote_gpu.SRC.read_text()).body
+                  if isinstance(n, ast.FunctionDef) and n.name == "_launch")
+    serves_in_main_thread = any(
+        isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+        and ast.unparse(stmt.value.func) == "uvicorn.run"
+        for stmt in launch.body
+    )
+    assert serves_in_main_thread, "_launch must serve in the main thread, not behind the tunnel"
+
+
+def test_config_only_mode_ships_no_secrets(tmp_path, monkeypatch):
+    """An image has to be publishable. The baked config carries the reproducible
+    half — model slots and reviewed revision pins — and nothing that authenticates."""
+    monkeypatch.setattr(make_remote_gpu.settings, "hf_token", "hf_SECRETVALUE", raising=False)
+    monkeypatch.setattr(make_remote_gpu.settings, "remote_gpu_shared_secret",
+                        "s3cr3tvalue", raising=False)
+    out = tmp_path / "remote-gpu-config.json"
+    make_remote_gpu.write_config(out)
+
+    import json
+
+    payload = json.loads(out.read_text())
+    assert payload["build"] == make_remote_gpu.build_id(make_remote_gpu.SRC.read_text())
+    assert payload["config"]["model_revisions"], "revision pins are what make the image reproducible"
+    raw = out.read_text()
+    assert "hf_SECRETVALUE" not in raw and "s3cr3tvalue" not in raw
+    # Not 0600: an image layer read by another uid must still be able to open it.
+    assert stat.S_IMODE(out.stat().st_mode) & stat.S_IRGRP
+
+
+def test_image_never_bakes_the_secret_bearing_worker():
+    """`make remote-gpu` writes remote_gpu_filled.py with real keys in it at 0600.
+    Copying that into an image would put them in a layer, where a later push
+    publishes them. The image takes the tracked template plus runtime env."""
+    body = DOCKERFILE.read_text()
+    # Only the directives that actually put bytes in a layer. Matching the whole
+    # file would flag the comment explaining why these are excluded — which is
+    # exactly what the first version of this test did.
+    sources = [part
+               for line in body.splitlines()
+               if line.strip().split(" ")[0] in {"COPY", "ADD"}
+               for part in line.split()[1:-1]
+               if not part.startswith("--")]
+    assert "remote_gpu.py" in sources
+    for forbidden in ("remote_gpu_filled.py", ".env", "output/runtime_settings.json"):
+        assert not any(forbidden in src for src in sources), \
+            f"the image must not carry {forbidden}"
+    assert "REMOTE_GPU_PREBUILT=1" in body, "the image must skip the runtime pip install"

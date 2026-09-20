@@ -45,9 +45,20 @@ from pathlib import Path
 # Keep cache, downloaded packages, models, tools, and temporary files beside the
 # uploaded script. A remote runtime can be ephemeral, but it follows the same
 # no-home-directory-spill contract as the local app.
+# `REMOTE_GPU_ROOT` overrides where everything is kept. A notebook or a bare VM
+# has nowhere better than "beside the script", but a container image is built
+# once and run against storage chosen at deploy time: on RunPod that is the
+# network volume at /runpod-volume (serverless) or /workspace (a pod), and
+# putting the cache there is the difference between re-downloading 58 GB of
+# weights every session and not. The default keeps the historical behaviour.
+_ROOT_OVERRIDE = os.environ.get("REMOTE_GPU_ROOT", "").strip()
 REMOTE_GPU_ROOT = (
-    Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-) / ".wizards-brush-remote-gpu"
+    Path(_ROOT_OVERRIDE).expanduser().resolve()
+    if _ROOT_OVERRIDE
+    else (
+        Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    ) / ".wizards-brush-remote-gpu"
+)
 REMOTE_GPU_CACHE = REMOTE_GPU_ROOT / "cache"
 REMOTE_GPU_CONFIG_DIR = REMOTE_GPU_ROOT / "config"
 REMOTE_GPU_DATA = REMOTE_GPU_ROOT / "data"
@@ -103,6 +114,33 @@ os.environ.update({
 Path(os.environ["PIP_CONFIG_FILE"]).touch()
 sys.path.insert(0, str(REMOTE_GPU_PYTHON))
 
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# A container image resolves the dependency closure at build time, so the runtime
+# pip install, the torchvision de-shadowing and the torchao removal are all
+# build-time concerns there. Installing on a paid GPU at every start was the most
+# fragile thing this file did: a network call, a resolver and an ABI negotiation,
+# each able to fail minutes after the GPU clock started.
+# `docker/remote-gpu/Dockerfile` sets this.
+REMOTE_GPU_PREBUILT = _flag("REMOTE_GPU_PREBUILT")
+
+# An image must be publishable, so it carries no secrets: `make remote-gpu-config`
+# bakes only the non-secret half (model slots, reviewed revisions, build id) and
+# HF_TOKEN / REMOTE_GPU_SHARED_SECRET arrive as deploy-time environment. Injected
+# literals still win, so a `make remote-gpu` file behaves exactly as before.
+_CONFIG_FILE = os.environ.get("REMOTE_GPU_CONFIG_FILE", "").strip()
+if _CONFIG_FILE:
+    import json as _json
+
+    _loaded = _json.loads(Path(_CONFIG_FILE).read_text(encoding="utf-8"))
+    if not isinstance(_loaded, dict):
+        raise SystemExit(f"!! {_CONFIG_FILE} is not a JSON object")
+    REMOTE_GPU_CONFIG = {**_loaded.get("config", {}), **REMOTE_GPU_CONFIG}
+    REMOTE_GPU_BUILD = REMOTE_GPU_BUILD or str(_loaded.get("build", ""))
+
 HF_TOKEN = HF_TOKEN or os.environ.get("HF_TOKEN", "")
 REMOTE_GPU_SHARED_SECRET = REMOTE_GPU_SHARED_SECRET or os.environ.get("REMOTE_GPU_SHARED_SECRET", "")
 # The tunnel URL is public and unauthenticated at the network layer, so the
@@ -117,11 +155,13 @@ if REMOTE_GPU_SHARED_SECRET.strip().lower() in _WEAK_SECRETS:
         "   Run `make remote-gpu` locally (after setting REMOTE_GPU_SHARED_SECRET in .env,\n"
         "   e.g. `openssl rand -hex 16`) and copy the generated remote_gpu_filled.py."
     )
-if not REMOTE_GPU_REQUIREMENTS_LOCK.strip():
+if not REMOTE_GPU_REQUIREMENTS_LOCK.strip() and not REMOTE_GPU_PREBUILT:
     raise SystemExit(
         "!! This is the unconfigured remote_gpu.py template.\n"
         "   Run `make remote-gpu` in the project checkout and copy the generated\n"
-        "   remote_gpu_filled.py so dependency hashes and model revisions are present."
+        "   remote_gpu_filled.py so dependency hashes and model revisions are present,\n"
+        "   or run the container image, which installed the same hashed lock at build\n"
+        "   time and sets REMOTE_GPU_PREBUILT=1."
     )
 
 
@@ -247,11 +287,26 @@ def _drop_shadowing_torch() -> None:
             hit.unlink(missing_ok=True)
 
 
+def _tunnel_enabled() -> bool:
+    """Whether to run the bundled Cloudflare quick tunnel.
+
+    A managed host already publishes an HTTPS route to this container — RunPod's
+    pod proxy on `https://<pod-id>-<port>.proxy.runpod.net`, or a serverless
+    endpoint — so a second tunnel there buys nothing and costs a download, a
+    process, and one more thing that can fail. The quick tunnel stays the
+    default for a bare VM or a notebook, which have no route of their own.
+    """
+    if _flag("REMOTE_GPU_NO_TUNNEL"):
+        return False
+    return not (os.environ.get("RUNPOD_POD_ID") or os.environ.get("RUNPOD_ENDPOINT_ID"))
+
+
 def _bootstrap() -> None:
     """Install service deps idempotently; torch/numpy stay runtime-provided.
 
     Provision a CUDA-compatible torch build on a VM before running this file.
-    Some managed GPU environments provide one already.
+    Some managed GPU environments provide one already, and a prebuilt image
+    (`REMOTE_GPU_PREBUILT=1`) has already done all of this at build time.
     """
     import hashlib
     import platform
@@ -264,23 +319,28 @@ def _bootstrap() -> None:
             f"{sys.version_info.major}.{sys.version_info.minor}"
         )
 
-    requirement_id = hashlib.sha256(REMOTE_GPU_REQUIREMENTS_LOCK.encode()).hexdigest()
-    marker = REMOTE_GPU_STATE / f"dependencies-{requirement_id}"
-    if not marker.exists():
-        lock_path = REMOTE_GPU_CONFIG_DIR / f"requirements-{requirement_id}.txt"
-        lock_path.write_text(REMOTE_GPU_REQUIREMENTS_LOCK, encoding="utf-8")
-        lock_path.chmod(0o600)
-        subprocess.run([
-            sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-            "--target", str(REMOTE_GPU_PYTHON), "--require-hashes",
-            "--only-binary=:all:", "--no-deps", "-r", str(lock_path),
-        ], check=True)
-        marker.touch()
-    _drop_shadowing_torch()
+    if not REMOTE_GPU_PREBUILT:
+        requirement_id = hashlib.sha256(REMOTE_GPU_REQUIREMENTS_LOCK.encode()).hexdigest()
+        marker = REMOTE_GPU_STATE / f"dependencies-{requirement_id}"
+        if not marker.exists():
+            lock_path = REMOTE_GPU_CONFIG_DIR / f"requirements-{requirement_id}.txt"
+            lock_path.write_text(REMOTE_GPU_REQUIREMENTS_LOCK, encoding="utf-8")
+            lock_path.chmod(0o600)
+            subprocess.run([
+                sys.executable, "-m", "pip", "install", "-q", "--upgrade",
+                "--target", str(REMOTE_GPU_PYTHON), "--require-hashes",
+                "--only-binary=:all:", "--no-deps", "-r", str(lock_path),
+            ], check=True)
+            marker.touch()
+        _drop_shadowing_torch()
+        # Some runtime images ship torchao 0.10, which peft's LoRA loader rejects.
+        # We do not use it (full bf16), so remove it to avoid that version conflict.
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "torchao"], check=False)
+    # Runs in both paths: it pins a *model* repository, not a package, so a
+    # prebuilt image still has to land it wherever REMOTE_GPU_ROOT points.
     _prepare_hidream()
-    # Some runtime images ship torchao 0.10, which peft's LoRA loader rejects.
-    # We do not use it (full bf16), so remove it to avoid that version conflict.
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "torchao"], check=False)
+    if not _tunnel_enabled():
+        return
     cloudflared = REMOTE_GPU_TOOLS / "cloudflared-2026.8.3"
     cloudflared_sha256 = "f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e"
 
@@ -1623,38 +1683,66 @@ def i2v(req: VideoReq, x_gen_secret: str | None = Header(default=None)):
 
 # ══════════════════ CELL 3 — launch (paste everything below into a new cell, run last) ══════════════════
 # ---- launcher: uvicorn + optional cloudflared tunnel -----------------------
-def _launch() -> None:
+def _banner(url: str, note: str = "") -> None:
+    print("\n" + "=" * 70)
+    print("  PUBLIC URL  ->  ", url)
+    print("  Paste it into the app:  Settings -> Remote GPU URL")
+    if note:
+        print(f"  {note}")
+    print("=" * 70, flush=True)
+
+
+def _run_tunnel(port: int) -> None:
+    """Quick tunnel for a host with no public route of its own.
+
+    Runs in a background thread so the tunnel cannot outlive-or-kill the server.
+    It used to be the other way round: uvicorn sat in a daemon thread while the
+    main thread blocked on the tunnel's `wait()`, so a cloudflared crash or a
+    rate-limit ended the process and took the still-healthy server with it. On a
+    managed host that failure is invisible — the platform's own URL keeps
+    answering right up until the container exits.
+    """
     import re
-    import threading
-    import time
-
-    import nest_asyncio
-    import uvicorn
-
-    nest_asyncio.apply()
-    threading.Thread(
-        target=lambda: uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning"),
-        daemon=True,
-    ).start()
-    time.sleep(4)
-    print("Local server up on :8000")
 
     proc = subprocess.Popen(
         [
             str(REMOTE_GPU_TOOLS / "cloudflared-2026.8.3"), "tunnel", "--url",
-            "http://localhost:8000", "--no-autoupdate",
+            f"http://localhost:{port}", "--no-autoupdate",
         ],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     for line in proc.stdout:  # type: ignore[union-attr]
         m = re.search(r"https://[-a-z0-9]+\.trycloudflare\.com", line)
         if m:
-            print("\n" + "=" * 70)
-            print("  PUBLIC URL  ->  ", m.group(0))
-            print("  Paste it into the app:  Settings -> Remote GPU URL")
-            print("=" * 70)
+            _banner(m.group(0))
             break
-    proc.wait()  # block so the server keeps running
+    code = proc.wait()
+    print(f"[remote-gpu] !! the quick tunnel exited ({code}); the server is still "
+          f"serving on :{port}. Restart the tunnel or use a route you control.",
+          flush=True)
+
+
+def _launch() -> None:
+    import threading
+
+    import nest_asyncio
+    import uvicorn
+
+    nest_asyncio.apply()
+    # RunPod injects PORT on load-balanced workers; a pod proxies whichever port
+    # the template exposes. Honouring it keeps one image valid for both.
+    port = int(os.environ.get("PORT", "8000"))
+    pod_id = os.environ.get("RUNPOD_POD_ID", "")
+    if _tunnel_enabled():
+        threading.Thread(target=_run_tunnel, args=(port,), daemon=True).start()
+    elif pod_id:
+        _banner(f"https://{pod_id}-{port}.proxy.runpod.net",
+                "This RunPod proxy URL is public; the shared secret is the only auth.")
+    else:
+        print(f"[remote-gpu] serving on 0.0.0.0:{port} — tunnel disabled; publish "
+              f"this port with a route you control.", flush=True)
+    # Foreground, in the main thread: the server is the process.
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 if __name__ == "__main__":

@@ -125,7 +125,34 @@ def _write_private(path: pathlib.Path, content: str) -> None:
         pending.unlink(missing_ok=True)
 
 
+def write_config(path: pathlib.Path) -> None:
+    """Emit the NON-SECRET half of the worker config for a container image.
+
+    An image has to be publishable, so it must not carry `HF_TOKEN` or the
+    shared secret; those arrive as deploy-time environment instead. What it can
+    and should carry is the part that makes a build reproducible — the model
+    slots and the reviewed revision pins — because those are the difference
+    between "this image" and "this image, whatever the Hub happened to serve".
+
+    Deliberately not `_write_private`: this file is not a secret, and 0600
+    inside an image that later runs as another user is a support ticket.
+    """
+    import json
+
+    source = SRC.read_text()
+    payload = {"build": build_id(source), "config": remote_gpu_config()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote {path} (no secrets; set HF_TOKEN and REMOTE_GPU_SHARED_SECRET at deploy time)")
+
+
 def main() -> None:
+    if len(sys.argv) > 1:
+        if sys.argv[1] != "--config" or len(sys.argv) != 3:
+            sys.exit("usage: make_remote_gpu.py [--config <path>]")
+        write_config(pathlib.Path(sys.argv[2]))
+        return
+
     source = SRC.read_text()
     spans = _assignment_lines(source)
     missing = [t for t in _TARGETS if t not in spans]
