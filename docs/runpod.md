@@ -148,6 +148,38 @@ The app's Diagnosis page should then report the GPU, the feature list, model
 availability, queue depth, free disk, and whether the worker is running an older build
 than your checkout.
 
+## Measured, 2026-09-20
+
+One A100-SXM4-80GB (Secure, $1.59/hr — the $1.39 in the table above is the
+community price), Qwen-Image-2512, end to end through the app: submit, queue,
+remote lane, proxy, render, transfer, persist. Wall clock, not GPU time.
+
+| Quality | Steps | Resolution | Warm |
+|---|---|---|---|
+| Draft | 20 | 736² | **8.0 s** |
+| Standard | 30 | 1024² | **19.6 s** |
+| High | 50 | 1296² | **41.0 s** |
+
+Cold start on a fresh pod, in the order you wait for it:
+
+| Phase | Time |
+|---|---|
+| Pod create → container running (14.7 GB image pull) | ~7 min |
+| Qwen-Image download, ~58 GB | ~6–8 min |
+| Load into VRAM + first render | 82 s |
+
+So **click to first image is ~15 minutes cold**, and roughly two-thirds of it is
+re-downloading what the last session already had. That is what a network volume
+buys back, and the only thing it buys.
+
+The idle switch was verified on the same pod: armed at one minute, and with the
+last authenticated request at 19:51:53Z the pod stopped answering **62 seconds
+later** and the proxy returned 404 — terminated, not merely unreachable.
+
+Note `quality` sets the step count *and* the resolution on this lane, and it
+overrides an explicit `steps` in the job params. A sweep that varies `steps`
+alone returns byte-identical images.
+
 ## Letting the app do it for you
 
 Everything above is the manual path: you create the pod, you stop it. The app can
