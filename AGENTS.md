@@ -18,6 +18,10 @@
 - frontend: `source scripts/project-env.sh && cd frontend && npm run lint && npm run test && npm run build`
   (build runs strict `tsc -b`)
 - `make remote-gpu` - inject `.env` secrets into gitignored `remote_gpu_filled.py` for an operator-controlled Remote GPU worker
+- `make remote-gpu-config` / `make remote-gpu-image` - the container path: emit the
+  **non-secret** half of the worker config (model slots, reviewed revisions, build id) and
+  build `docker/remote-gpu/Dockerfile` from it. An image must be publishable, so secrets
+  arrive as deploy-time env instead of being injected into the file. See `docs/runpod.md`
 
 ## Architecture map
 
@@ -221,9 +225,10 @@ on a file inside it. The retained decisions and evidence live in
   from `model_index.json`, not from `inspect.signature`.
 - **Keep Remote GPU model weights on the worker's local disk.** Network-mounted
   storage is normally far slower than a direct Hub fetch and makes model reloads
-  unpredictable. The runner stores weights under
-  `.wizards-brush-remote-gpu/models` on the remote worker's local disk; cache
-  lifetime is determined by that worker, not by the local app.
+  unpredictable. The runner stores weights under `REMOTE_GPU_ROOT` (default
+  `.wizards-brush-remote-gpu/` beside the script); cache lifetime is determined by that
+  worker, not by the local app. **A container must set it**, or every start
+  re-downloads tens of GB into a layer that is discarded on stop.
 - Remote GPU runtime disk is the hard ceiling on which video models are usable. LTX-2
   checkpoints are 150-200 GB and will not fit alongside Qwen (57.7 GB) and Wan
   (~31 GB); `_load_ltx` refuses with a 507 rather than starting a download that
@@ -242,5 +247,12 @@ on a file inside it. The retained decisions and evidence live in
   (`_announce_asset` → a non-droppable `{"type": "asset"}` frame), or a client that refreshes
   only on the job's terminal event shows nothing until the last image of eight is done.
 - Changing `remote_gpu.py` needs `make remote-gpu` **and** a Remote GPU worker
-  restart. `/health` reports a `build` hash so the app can tell when the worker
-  is behind.
+  restart - or, on the container path, `make remote-gpu-image`, a push, and a **new pod**,
+  because hosts cache images per machine and a reused tag serves stale code. Never tag the
+  image `latest` for that reason. `/health` reports a `build` hash so the app can tell when
+  the worker is behind either way.
+- **The quick tunnel is not the deployment, and must never own the process.** uvicorn runs
+  in the main thread; the tunnel is the daemon. It used to be inverted, so a rate-limited
+  cloudflared ended the interpreter and took a healthy server with it. `_tunnel_enabled()`
+  also stands the tunnel down entirely where the host already publishes HTTPS
+  (`RUNPOD_POD_ID` / `RUNPOD_ENDPOINT_ID` / `REMOTE_GPU_NO_TUNNEL`).

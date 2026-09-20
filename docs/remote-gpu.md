@@ -13,6 +13,21 @@ to run the worker and expose its authenticated HTTPS endpoint. You are
 responsible for the account, hardware, network exposure, model licenses, and
 applicable law.
 
+## Two ways to run the worker
+
+The worker is one Python file and runs either way:
+
+- **A machine or notebook you already have.** Follow this page. The worker installs its
+  own hash-locked dependency closure on first start and prints a quick tunnel URL.
+- **A container, on hardware you rent.** `docker/remote-gpu/Dockerfile` resolves the same
+  dependency closure at build time instead, which removes the startup install and the
+  gamble on the host's Python version. [Running the worker on RunPod](runpod.md) is a
+  worked example; the image is provider-neutral and works anywhere that runs a container
+  with a GPU.
+
+The rest of this page describes the first path. Both speak the same protocol and connect
+to the app the same way.
+
 ## Before you start
 
 Provision a remote environment with:
@@ -32,8 +47,10 @@ Provision a remote environment with:
   convenience path for a machine you control; an operator-managed reverse proxy
   or tunnel is also suitable if it forwards HTTPS to the worker.
 
-Do not put model caches on a slow network-mounted drive. The worker is designed
-to cache on the runtime's local disk for the life of that runtime.
+Model caches, the HiDream checkout and every other download live under
+`REMOTE_GPU_ROOT`, which defaults to a directory beside the script. Set it to point at
+whatever storage should outlive the runtime. Prefer local disk: a slow network-mounted
+drive makes every model swap unpredictable.
 
 ## Configure and start
 
