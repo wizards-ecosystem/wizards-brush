@@ -743,3 +743,22 @@ export interface VariantSetDetail extends VariantSetSummary {
   recipe?: VariantRecipeSpec;
   items: VariantItem[];
 }
+
+/** A rented Remote GPU session, as the lifecycle routes report it. */
+export interface RemoteSession {
+  provisioner: string;
+  label: string;
+  /** This install may rent hardware at all. False for the self-hosted default. */
+  can_provision: boolean;
+  running: boolean;
+  state: "off" | "starting" | "ready" | "stopping" | "error";
+  detail: string;
+  pod_id: string;
+  base_url: string;
+  gpu: string;
+  elapsed_s: number;
+  hourly_usd: number | null;
+  /** Compute only, and an estimate — the provider bills from its own clock. */
+  cost_estimate_usd: number | null;
+  worker_connected: boolean;
+}

@@ -148,6 +148,66 @@ The app's Diagnosis page should then report the GPU, the feature list, model
 availability, queue depth, free disk, and whether the worker is running an older build
 than your checkout.
 
+## Letting the app do it for you
+
+Everything above is the manual path: you create the pod, you stop it. The app can
+also do both, which is the difference between "a lane for people who own an A100"
+and "a lane anyone can use".
+
+Set it up once in `.env`:
+
+```bash
+REMOTE_GPU_PROVISIONER=runpod
+RUNPOD_API_KEY=rpa_...          # console.runpod.io/user/settings; prefer a scoped key
+RUNPOD_IMAGE=<your-registry>/wizards-brush-remote-gpu:<build-id>
+RUNPOD_GPU_TYPE=NVIDIA A100-SXM4-80GB
+```
+
+A **Start GPU** control then appears in the workshop panel, showing the hourly
+rate before you press it and the running spend while it is up. Starting writes
+the pod's URL into settings for you; stopping terminates the pod and clears it.
+
+**Nothing provisions on its own.** There is no timer, no start-on-launch, and no
+"rent a GPU because a job was queued". The only thing that creates a pod is you
+pressing the button.
+
+### How it avoids leaving a GPU running
+
+Two independent mechanisms, because they fail differently.
+
+The app terminates the pod when it shuts down cleanly (`REMOTE_GPU_STOP_ON_EXIT`,
+on by default). That covers Ctrl-C and a normal quit.
+
+It cannot cover a SIGKILL, an OOM kill, a crash or a laptop that sleeps and never
+wakes — none of which run shutdown code. So the **worker terminates itself** after
+`RUNPOD_IDLE_TERMINATE_MIN` with no authenticated request, plus a hard
+`RUNPOD_MAX_SESSION_HOURS` ceiling. It needs no new heartbeat: the client already
+polls `/result` throughout a render and re-checks `/health` every 15 seconds, and
+a job in flight always counts as activity, so a long video is never interrupted
+by the thing meant to stop idle billing.
+
+Set `RUNPOD_IDLE_TERMINATE_MIN=0` to disable it, and understand what you are
+choosing — a forgotten pod then bills until you notice.
+
+On startup the app also reports any session a previous run left behind, because
+the alternative is finding out from an invoice.
+
+### Keeping the model cache
+
+By default a terminated pod takes its container disk with it, so the next start
+re-downloads the weights. Set `RUNPOD_NETWORK_VOLUME_ID` and the worker's cache
+moves to `/workspace`, which survives termination — at roughly $0.07/GB/month and
+the cost of pinning every pod to that volume's data centre. The arithmetic in the
+storage section above still applies: this is buying time, not money.
+
+### Using a different provider
+
+`REMOTE_GPU_PROVISIONER=manual` is the default and always available. Adding
+another provider is a module in `backend/app/provisioners/` implementing
+`configured`/`start`/`status`/`stop`/`adopt`, plus a row in that package's
+registry and its own `.env` block. The rest of the app only ever learns a base
+URL, so nothing else needs to know the provider exists.
+
 ## 6. Cost guard
 
 Pods bill per second, for as long as they exist — running *or* stopped-with-disk. When

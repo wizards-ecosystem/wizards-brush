@@ -4,6 +4,7 @@ import { laneOf } from "../lib/generators";
 import { useStore } from "../store/useStore";
 import { Icon } from "./icons";
 import { ProgressBar } from "./ProgressBar";
+import { RemoteGpuControl } from "./RemoteGpuControl";
 import { Button, StatusIndicator } from "./ui";
 
 /** Live compute telemetry presented as one workshop instrument strip. */
@@ -147,6 +148,9 @@ export function BackendPanel() {
               </div>
             )}
           </div>
+          {/* Renders nothing unless this install is configured to rent hardware,
+              so the self-hosted default sees no trace of it. */}
+          <RemoteGpuControl />
         </section>
       </div>
     </div>
