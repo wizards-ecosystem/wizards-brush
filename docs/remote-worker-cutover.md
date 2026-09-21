@@ -20,27 +20,45 @@ A100-SXM4-80GB, 2026-09-20, ~$1.60 total across two pods:
 Also verified locally: the image builds from the package, runs, and reports a
 build id identical to the checkout's.
 
-## 1. The live provisioner test — needs you
+## 1. The live provisioner test — DONE (2026-09-20)
 
-**Every provisioner test mocks the HTTP transport. No pod has ever been created
-through `backend/app/provisioners/`.** Request bodies are asserted against the
-REST v2 schema, not against Runpod.
+Verified against the real Runpod API, through the app's own routes rather than
+the MCP tools:
 
-It needs a **`RUNPOD_API_KEY` in `.env`** — console.runpod.io/user/settings,
-scoped if the permission model allows it for pods. No MCP tool mints keys, and
-the account key Runpod injects into a pod at `/etc/rp_environment` is not a
-credential to lift off rented hardware.
+| Check | Result |
+|---|---|
+| `GET /api/remote-gpu/session` before start | `off`, `can_provision: true` |
+| `POST` creates a pod | pod id + correct `<id>-8000.proxy.runpod.net` URL |
+| Rate and GPU reported | $0.49/hr, NVIDIA A40 |
+| A second `POST` | **409**, refused rather than billed twice |
+| Shared secret reaches the pod env | exact match, read back from the API |
+| `WIZARDS_BRUSH_MANAGED` marker | set |
+| **API key never sent to the pod** | confirmed — pod env holds no `rpa_` value |
+| Cost estimate accrues | $0.0001 → $0.006 over 45 s |
+| Provisioner READY vs worker connected | reported separately, as designed |
+| `DELETE` | terminates; a follow-up list shows **0 pods** |
 
-With one present:
+**Crash recovery, the one that matters with no watchdog:** created a pod,
+`SIGKILL`ed the app so no shutdown code ran, restarted. The startup log said:
 
-1. `POST /api/remote-gpu/session` creates a pod whose `base_url` answers `/health`.
-2. The pod's env carries `REMOTE_GPU_SHARED_SECRET` — read it back with `get-pod`.
-3. `DELETE /api/remote-gpu/session` terminates it and clears the stored session.
-4. `SIGKILL` the app with a pod up, restart, and confirm the startup adoption
-   warning names it with elapsed time and spend, and that Stop still works.
+```
+WARNING [startup] a Remote GPU session from a previous run is still up:
+Runpod js1nqi9yr93ils (0 min, about $0.00 so far). Stop it from Settings…
+```
 
-Step 4 matters most: with no idle watchdog, that warning is the only thing
-between a forgotten pod and an invoice.
+`GET` then reported it running with the right pod id, elapsed time and spend, and
+**Stop worked from the restarted app**. That is the whole safety story: nothing
+automatic, but nothing invisible either.
+
+Two facts worth carrying:
+
+- **Pod env is readable back through the API.** Anyone with the Runpod key can
+  read `REMOTE_GPU_SHARED_SECRET`. Normal for platform env vars, but it means the
+  two credentials are not independent.
+- The "pulling the worker image" detail is shown whenever the pod is `RUNNING`
+  with no `runtime` block. For a small image that is Runpod's port-assignment lag
+  rather than a pull, so the wording flatters the cause. Accurate for the real
+  worker image, which genuinely is pulling.
 
 ## 2. Publishing an image — a decision, not a task
 
