@@ -1,31 +1,45 @@
 # The Wizard's Brush — Remote GPU worker, as a container.
 #
-# Why this exists: the worker was written for a notebook or a bare VM, where
-# the only way to get dependencies is to install them at startup. On rented GPU
-# hardware that is the worst possible time — a network call, a dependency
+# Why this exists: the worker was written for a notebook or a bare VM, where the
+# only way to get dependencies is to install them at startup. On rented GPU
+# hardware that is the worst possible moment — a network call, a dependency
 # resolver and an ABI negotiation, each able to fail minutes after the clock
 # started, on a machine you are paying for by the second. This image does all of
 # it once, at build time, on your own machine.
 #
-# It also removes the Python-3.12 gamble. The worker refuses any other
-# interpreter because its lock is a set of cp312 manylinux wheel hashes; a stock
-# host image may or may not oblige. Here we choose the base, so it always does.
+# It also removes the Python-3.12 gamble entirely. The worker refuses any other
+# interpreter because its lock is a set of cp312 manylinux wheel hashes, and this
+# base *is* 3.12 — not a host image that might be.
 #
 # Build (from the repo root, after `make remote-gpu-config`):
-#   docker build --platform=linux/amd64 -f docker/remote-gpu/Dockerfile -t wizards-brush-remote-gpu:<tag> .
+#   make remote-gpu-image
 #
-# --platform matters: Runpod hosts are x86_64, and an arm64 image built on Apple
-# Silicon fails with "exec format error" after the push, not before it.
+# --platform=linux/amd64 matters: Runpod hosts are x86_64, and an arm64 image
+# built on Apple Silicon fails with "exec format error" after the push, not
+# before it.
 #
 # Never tag this `latest`. Hosts cache images per machine, so a mutable tag
 # serves stale code with no way to tell which build is live — the same problem
 # /health's `build` fingerprint exists to catch. Tag with the build id.
 
-# CUDA 12.8 covers A100 / H100 / H200. For an RTX PRO 6000 (Blackwell, sm_120)
-# pass a CUDA 13 base and a matching torch index: Runpod reports no 12.8 hosts
-# for that card at all.
-ARG CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
-FROM ${CUDA_IMAGE}
+# ---------------------------------------------------------------------------
+# Base: a plain Python image, NOT nvidia/cuda.
+#
+# Measured on the cuda-base build: `cuda-libraries-12-8` 3.11 GB + cuDNN 1.05 GB
+# + cudart 204 MB, while the torch layer was 6.96 GB — because torch's cu128
+# wheels already pull nvidia-cublas/cudnn/cufft/... as dependencies and ship
+# their own CUDA runtime. The base was carrying a second copy of libraries torch
+# brings anyway, for ~4.4 GB.
+#
+# What the container genuinely needs from outside is the *driver*, and that comes
+# from the host through the container runtime, not from any image. So the CUDA
+# base buys nothing here.
+#
+# If you ever add something that links system CUDA (a compiled extension, nvcc),
+# this is the line to change back — and the image will grow by those 4.4 GB again.
+# ---------------------------------------------------------------------------
+ARG BASE_IMAGE=python:3.12-slim-bookworm
+FROM ${BASE_IMAGE}
 
 # torch, torchvision and numpy are deliberately NOT in the hashed lock: the lock
 # is the non-Torch closure, installed with --no-deps so it can never quietly
@@ -40,17 +54,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-# git is not optional: _prepare_hidream() pins the HiDream runner by commit.
+# git: _prepare_hidream() pins the HiDream runner by commit.
+# libgomp1: torch's OpenMP runtime, which a slim base does not carry and which
+# fails at import rather than at build time if it is missing.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.12 python3.12-venv ca-certificates git \
+        ca-certificates git libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# A venv, not the system interpreter. Ubuntu 24.04 marks its Python
-# externally-managed (PEP 668) and ships Debian-packaged libraries pip cannot
-# uninstall — the documented cause of "Cannot uninstall cryptography ... no
-# RECORD file was found" on images like this one.
-RUN python3.12 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:${PATH}"
 RUN python -m pip install --upgrade pip setuptools wheel
 
 RUN python -m pip install --index-url "${TORCH_INDEX_URL}" \

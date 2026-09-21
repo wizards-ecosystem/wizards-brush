@@ -79,6 +79,12 @@ docker build --platform=linux/amd64 -f docker/remote-gpu/Dockerfile \
   -t wizards-brush-remote-gpu:<build-id>-cu130 .
 ```
 
+The image is about **12 GB**. It was 19.1 GB until the `nvidia/cuda` base went:
+torch's cu128 wheels already pull `nvidia-cudnn-cu12` and friends, so the base
+was carrying a second copy of CUDA for ~7 GB. A plain `python:3.12-slim` base
+keeps only what the host cannot supply — the driver comes from the container
+runtime, never from an image.
+
 Two rules that are not style preferences:
 
 - **`--platform=linux/amd64`.** RunPod hosts are x86_64. An arm64 image built on Apple
@@ -228,6 +234,38 @@ another provider is a module in `backend/app/provisioners/` implementing
 `configured`/`start`/`status`/`stop`/`adopt`, plus a row in that package's
 registry and its own `.env` block. The rest of the app only ever learns a base
 URL, so nothing else needs to know the provider exists.
+
+## What it actually costs
+
+Worked from the measured timings above, at A100 SXM Secure ($1.59/hr — the $1.39
+in the GPU table is the community price).
+
+**Two five-hour sessions a month — 10 GPU-hours:**
+
+| | |
+|---|---|
+| Compute, 10 hrs | $15.90 |
+| Container disk, 150 GB for 10 hrs | $0.21 |
+| Network volume | $0.00 (none) |
+| **Total** | **≈ $16/month**, $0 when idle |
+
+At the Standard tier (30 steps, 1024², 19.6 s) a five-hour session is roughly 875
+images, so **just under a cent each**. High (50 steps, 1296², 41 s) is about $0.019.
+
+**Long sessions change what matters.** The ~15-minute cold start is 5% of a
+five-hour session rather than half of a twenty-minute one, so startup stops being
+worth optimising and the hourly rate becomes the whole bill. The gap between an
+A100 and an H100 SXM at 10 hrs/month is $13 — more than doubling the total.
+
+### Why not a network volume
+
+It loses on cost at any realistic usage. A volume saves only the model *download*
+(the image pull is untouched), worth ~3–5 minutes of billed time per session, or
+about **$0.09**. Break-even against the smallest useful volume (80 GB, $5.60/mo)
+is roughly **65 sessions a month**; at 200 GB it is ~130.
+
+Buy one to stop *waiting*, not to save money — and size it to the models you
+actually keep resident, not to the default 200 GB.
 
 ## 6. Cost guard
 

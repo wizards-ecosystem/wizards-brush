@@ -62,7 +62,7 @@ Two facts worth carrying:
 
 ## 2. Publishing an image — a decision, not a task
 
-Today a fork has to install Docker, build a **19 GB** image, push it to a registry
+Today a fork has to install Docker, build a **~12 GB** image, push it to a registry
 they own, and name it in `.env` before the Start button can do anything. That is a
 build-and-publish pipeline standing in front of a feature.
 
@@ -81,8 +81,9 @@ anything distributed.
 
 ## 3. Smaller things
 
-- **The image is 19.1 GB.** Most of it is the CUDA runtime and torch. It is a
-  one-time pull per host, but it is also ~7 minutes of the cold start.
+- **The image is ~12 GB**, down from 19.1 GB once the redundant `nvidia/cuda`
+  base went. Still a one-time pull per host, and still a large part of the cold
+  start; the remaining bulk is torch's own bundled CUDA, which is not optional.
 - **A second provisioner would prove the seam.** `manual` and `runpod` share an
   interface nothing else has exercised; adding Lambda or Vast is a module plus a
   registry row, and would confirm the abstraction is real rather than theoretical.

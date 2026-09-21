@@ -402,6 +402,20 @@ def test_image_never_bakes_the_secret_bearing_worker():
     assert 'CMD ["python", "-m", "worker"]' in body, "the image must run the package"
 
 
+def test_image_carries_torchs_non_obvious_system_dependency():
+    """torch needs libgomp at *import*, and a slim base does not ship it.
+
+    The image dropped the nvidia/cuda base because torch's cu128 wheels already
+    bundle CUDA - measured at ~4.4 GB of duplication - but that base also
+    happened to provide OpenMP. Removing this line fails nothing at build time
+    and then breaks every worker on its first import.
+    """
+    body = DOCKERFILE_SRC
+    assert "libgomp1" in body
+    # git is equally load-bearing: _prepare_hidream pins the runner by commit.
+    assert "git" in body
+
+
 def test_baked_image_config_is_the_weakest_source(monkeypatch):
     """Precedence must be: environment > baked image config > default.
 
