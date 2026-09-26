@@ -6,6 +6,10 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+No changes yet.
+
+## [0.1.6] - 2026-09-26
+
 ### Fixed
 
 - The Remote GPU worker advertises HiDream-O1 only when its torch can run it
@@ -222,6 +226,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
 [0.1.5]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.5
 [0.1.4]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.4
 [0.1.3]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.3
