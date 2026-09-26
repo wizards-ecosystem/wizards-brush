@@ -21,7 +21,12 @@
 - `make remote-gpu-config` / `make remote-gpu-image` - the container path: emit the
   **non-secret** half of the worker config (model slots, reviewed revisions, build id) and
   build `docker/remote-gpu/Dockerfile` from it. An image must be publishable, so secrets
-  arrive as deploy-time env instead of being injected into the file. See `docs/runpod.md`
+  arrive as deploy-time env instead of being injected into the file. See `docs/runpod.md`.
+  Releases publish that image to GHCR tagged by build id (`.github/workflows/worker-image.yml`,
+  run after the approved publish; an existing tag is never overwritten), and the Runpod
+  provisioner runs `ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu:<local_build_id()>`
+  when `RUNPOD_IMAGE` is empty - after checking the tag exists, so an edited `worker/`
+  refuses instead of renting a pod that can never pull
 
 ## Architecture map
 

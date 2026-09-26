@@ -43,7 +43,7 @@ public HTTPS, long work uses submit-and-poll tokens, cancellation is propagated,
 and surfaced errors redact the configured secret. The operator owns provider,
 network, data handling, and model-license compliance.
 
-The public-tunnel worker authenticates and limits request bytes in pure ASGI
+The worker authenticates and limits request bytes in pure ASGI
 middleware before FastAPI parses JSON or base64 fields. Individual routes repeat
 the secret check as defense in depth, request models bound fields and collection
 sizes, and the in-memory queue has a finite capacity.

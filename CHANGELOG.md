@@ -25,6 +25,29 @@ contributors know which user-facing changes need release notes.
   submit with local finishing. A restart completes a running job that already
   has assets instead of cancelling it.
 - Local inpaint uses the selected family's InpaintPipeline (Klein included).
+- The Remote GPU worker is a package, `worker/`, deployed as a container image
+  (`make remote-gpu-config`, `make remote-gpu-image`). Config precedence is
+  environment, then the baked image config, then defaults; secrets are
+  environment only, so an image is publishable.
+- Each release publishes that image to
+  `ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu`, tagged with the worker
+  build id and attested.
+- Start GPU: with `REMOTE_GPU_PROVISIONER=runpod` and a Runpod API key, the app
+  rents a pod, points the Remote GPU lane at it and terminates it on Stop or a
+  clean exit. It shows the hourly rate before starting and the spend while
+  running, refuses a second pod, and after a crash names a pod still running at
+  startup. `RUNPOD_IMAGE` is optional; empty runs the published image matching
+  the checkout, after checking it exists. See `docs/runpod.md`.
+
+### Changed
+
+- The remote lane is labelled "Remote GPU" everywhere a person reads it. The
+  stored generator id `colab_a100` is unchanged.
+
+### Removed
+
+- The single-file `remote_gpu.py` worker, `make remote-gpu` and the notebook
+  path. Build or pull the container image instead.
 
 ### Fixed
 

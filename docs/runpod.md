@@ -49,9 +49,22 @@ The RTX PRO 6000 is the interesting one — 96 GB of Blackwell for $0.30 over an
 below). Benchmark it against an A100 before committing; at these rates a card twice as
 fast for 1.7× the price is the cheaper card.
 
-## 2. Build and push the image
+## 2. Get the image
 
-From the repo root, with Docker running:
+**Use the published one.** Each release pushes the worker image to GHCR, tagged
+with the worker's build id and built from the shipped default config:
+
+```
+ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu:<build-id>
+```
+
+`python -c "from worker import build_id; print(build_id())"` prints the tag
+that matches your checkout, and the app's Start GPU control uses exactly that
+tag when `RUNPOD_IMAGE` is empty. Nothing to build, no registry of your own.
+
+**Build your own** when you have changed `worker/` (the build id changes with
+it, and no release published that tag) or want model slots other than the
+defaults baked in. From the repo root, with Docker running:
 
 ```bash
 make remote-gpu-config      # non-secret: model slots + reviewed revision pins
@@ -72,7 +85,6 @@ For a Blackwell card, override the CUDA line:
 
 ```bash
 docker build --platform=linux/amd64 -f docker/remote-gpu/Dockerfile \
-  --build-arg CUDA_IMAGE=nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04 \
   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 \
   --build-arg TORCH_VERSION=<a torch built for cu130> \
   --build-arg TORCHVISION_VERSION=<its matching torchvision> \
@@ -120,7 +132,7 @@ pattern.
 
 ## 4. Create the pod
 
-- **Image:** the tag you pushed.
+- **Image:** the published tag for your build, or the one you pushed.
 - **Expose HTTP Ports:** `8000`.
 - **Container disk:** large enough for the models you enable, if you are not mounting a
   volume.
@@ -132,8 +144,7 @@ pattern.
 | `HF_TOKEN` | a HuggingFace token, read-only scope is enough |
 | `REMOTE_GPU_ROOT` | `/workspace/wizards-brush` if you attached a volume |
 
-The image sets `REMOTE_GPU_PREBUILT=1` and `REMOTE_GPU_NO_TUNNEL=1` itself, and the
-worker refuses to start on an empty or placeholder secret.
+The worker refuses to start on an empty or placeholder secret.
 
 **The secret is not optional.** The pod proxy URL is public and RunPod adds no
 authentication in front of it; the shared secret is the only thing between this GPU and
@@ -148,7 +159,7 @@ https://<pod-id>-8000.proxy.runpod.net
 ```
 
 Paste it into **Settings → Remote GPU**, with the same secret. The pod id is stable
-across stop/start, so unlike the quick tunnel this URL is worth saving.
+across stop/start, so this URL is worth saving.
 
 The app's Diagnosis page should then report the GPU, the feature list, model
 availability, queue depth, free disk, and whether the worker is running an older build
@@ -193,9 +204,14 @@ Set it up once in `.env`:
 ```bash
 REMOTE_GPU_PROVISIONER=runpod
 RUNPOD_API_KEY=rpa_...          # console.runpod.io/user/settings; prefer a scoped key
-RUNPOD_IMAGE=<your-registry>/wizards-brush-remote-gpu:<build-id>
 RUNPOD_GPU_TYPE=NVIDIA A100-SXM4-80GB
 ```
+
+`RUNPOD_IMAGE` is optional: empty runs the published image for your checkout's
+build id. Before creating anything, Start checks that tag exists on GHCR and
+refuses if it does not — an edited `worker/` has a build id no release
+published, and a pod that cannot pull its image bills while it tries. Set
+`RUNPOD_IMAGE` to your own push in that case.
 
 A **Start GPU** control then appears in the workshop panel, showing the hourly
 rate before you press it and the running spend while it is up. Starting writes
@@ -234,6 +250,22 @@ another provider is a module in `backend/app/provisioners/` implementing
 `configured`/`start`/`status`/`stop`/`adopt`, plus a row in that package's
 registry and its own `.env` block. The rest of the app only ever learns a base
 URL, so nothing else needs to know the provider exists.
+
+Only Runpod has been built, so the interface has not yet been proved against a
+provider that does things differently. What a second one would run into:
+
+- **Vast.ai** runs a Docker image with env vars, like Runpod, but exposes a
+  plain `IP:port` rather than a ready HTTPS proxy URL. The worker leaves HTTPS
+  to the host, so that provisioner would have to supply it.
+- **Lambda** rents VMs, not containers. `start()` would have to SSH in and run
+  the image, which is a much larger shape than a single create call.
+
+Both are deferred, not declined.
+
+**The two credentials are not independent.** Pod env is readable back through
+Runpod's API, so anyone holding `RUNPOD_API_KEY` can read
+`REMOTE_GPU_SHARED_SECRET` from a running pod. That is normal for platform env
+vars; it means rotating one does not protect you from a leak of the other.
 
 ## What it actually costs
 
@@ -283,14 +315,26 @@ caps connection time at 100s. The worker and client already handle this — ever
 returns a token immediately and the client polls `/result/{token}` — so if you see this,
 something is calling the worker directly rather than through the app.
 
-**"Running" but nothing answers.** Green means the container exists, not that the service
-is up. First boot also loads a model. Give it a minute, then check the pod logs.
+**"Running" but nothing answers.** Green means the container object exists, not that the
+service is up. A pod has reported `RUNNING` with `runtime: null` for ~7 minutes while it
+pulled the image, and `ssh` answered `container not found` the whole time. The app shows
+this as "pulling the worker image" and reports the provisioner's state separately from
+whether the worker answers. First boot also loads a model. Check the pod logs.
+
+**SSH into the pod does not work.** Runpod's SSH proxy never registered on either pod this
+was tested with, and it needs a PTY, which breaks `scp`. Use the **direct TCP** endpoint
+from the pod's `runtime.ports` instead; it appears only once the container is up.
+
+**`pip install` fails with "externally-managed-environment" on a `runpod/pytorch` base.**
+That is PEP 668; it wants `--break-system-packages`. The Dockerfile avoids it by not using
+that base, which is one more reason to run the image rather than install onto a pod.
 
 **Your code changes did nothing.** You are on a cached image tag. Rebuild with a new
 build id and recreate the pod; `/health` reports `build` so the app's Diagnosis page will
 tell you when the worker is behind your checkout.
 
-**Zero GPU pods on restart.** You stopped a pod and someone else rented the card. Either
+**Zero GPU pods on restart** ("not enough free GPUs on the host machine"). You stopped a
+pod and someone else rented the card; with no volume, the container disk is gone too. Either
 wait, or terminate and redeploy — and use a network volume so the data does not care.
 
 **LTX-2 refuses with a 507.** Its checkpoints are 150–200 GB and `_load_ltx` checks free
