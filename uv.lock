@@ -1991,7 +1991,7 @@ wheels = [
 
 [[package]]
 name = "wizards-brush"
-version = "0.1.4"
+version = "0.1.5"
 source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
