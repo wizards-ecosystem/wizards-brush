@@ -20,14 +20,21 @@ export function Tools() {
   const [filter, setFilter] = useState<"" | "image" | "video">("");
   // Why background matting cannot run here, if it cannot (optional dependency).
   const [matteBlocked, setMatteBlocked] = useState<string | null>(null);
+  const [regionBlocked, setRegionBlocked] = useState<string | null>(null);
+  const [region, setRegion] = useState("upper-clothes");
   useEffect(() => {
     let live = true;
     api
       .jobKinds()
       .then((kinds) => {
         const matte = kinds.find((k) => k.kind === "matte");
-        if (live)
+        const regionMask = kinds.find((k) => k.kind === "region_mask");
+        if (live) {
           setMatteBlocked(matte && !matte.available ? matte.unavailable_reason || "unavailable" : null);
+          setRegionBlocked(
+            regionMask && !regionMask.available ? regionMask.unavailable_reason || "unavailable" : null,
+          );
+        }
       })
       .catch(() => {});
     return () => {
@@ -36,7 +43,7 @@ export function Tools() {
   }, []);
 
   const run = async (
-    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "matte",
+    kind: "upscale" | "face-restore" | "interpolate" | "detail" | "matte" | "region-mask",
     extra: Record<string, unknown> = {},
   ) => {
     if (!sel) return;
@@ -221,6 +228,35 @@ export function Tools() {
               <p className="text-[11px] leading-relaxed text-muted">
                 {matteBlocked ||
                   "A transparent PNG, or a mask saved to the gallery for inpainting and variant sets (white = change). BiRefNet-lite (MIT), on this machine."}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="label">Region mask</div>
+              <select
+                className="input text-xs"
+                aria-label="Parsing region"
+                value={region}
+                onChange={(e) => setRegion(e.target.value)}
+                disabled={!!regionBlocked}
+              >
+                <option value="upper-clothes">Upper clothes</option>
+                <option value="clothes">Clothes</option>
+                <option value="hair">Hair</option>
+                <option value="face">Face</option>
+                <option value="mouth">Mouth</option>
+                <option value="eyes">Eyes</option>
+                <option value="subject_minus_face">Subject except face</option>
+              </select>
+              <Button
+                className="w-full"
+                disabled={!!regionBlocked}
+                onClick={() => run("region-mask", { region })}
+              >
+                Save SCHP mask
+              </Button>
+              <p className="text-[11px] leading-relaxed text-muted">
+                {regionBlocked ||
+                  "Hair, face, clothes, mouth or eyes from SCHP / BiSeNet (MIT). White = change. Use it with A100 inpaint or a Variant Set."}
               </p>
             </div>
           </div>

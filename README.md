@@ -162,7 +162,7 @@ The local lane ships with an intentionally small public profile:
 
 The optional Remote GPU lane supports large image, editing, and video models on
 a machine you own or are explicitly authorized to expose. It is not a hosted
-service. The generated `remote_gpu_filled.py` contains secrets, stays ignored,
+service. Secrets are never baked into the worker image; they arrive as
 and reports a build fingerprint so stale workers are visible.
 
 The generated worker is provider-neutral and can run from a shell or an
@@ -220,7 +220,8 @@ TLS termination and the narrowly scoped WSL firewall helper.
 | `make check` | Backend lint, types, tests plus frontend lint, format, tests, build |
 | `make release-check` | Full local release gate including containment and dependency checks |
 | `make release-bundle` | Build and verify the minimal checksummed Linux archive |
-| `make remote-gpu` | Generate the ignored operator worker from `.env` |
+| `make remote-gpu-config` | Write the non-secret worker config the image bakes in |
+| `make remote-gpu-image` | Build the Remote GPU container image |
 | `make clean-build` / `make clean-cache` / `make clean-runtime` | Remove increasingly broad rebuildable state |
 
 Run `make help` for the complete list.

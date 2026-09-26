@@ -25,7 +25,7 @@ and model-license questions belong with their respective provider or publisher.
 4. Reproduce with the smallest prompt, settings, and input files that demonstrate the problem.
 5. Remove tokens, private URLs, prompts, generated media, personal data, and machine usernames from everything you attach.
 
-Do not attach `.env`, `remote_gpu_filled.py`, SQLite databases, private model
+Do not attach `.env`, SQLite databases, private model
 URLs, or unredacted logs.
 
 ## Where to ask

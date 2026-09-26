@@ -26,6 +26,16 @@ WAN_NEGATIVE_EN = (
 # failure mode people actually hit.
 FACE_NEGATIVE = "deformed hands, extra fingers, fused fingers, distorted face, asymmetric eyes"
 IMAGE_NEGATIVE = "watermark, text overlay, jpeg artifacts"
+# Photoreal finish: pores and fabric, no beauty-filter / plastic / HDR. Applied
+# as a real negative, not as hidden quality tokens in the positive prompt.
+PHOTOREAL_NEGATIVE = (
+    "beauty filter, plastic skin, airbrushed, overly smooth skin, wax figure, "
+    "HDR, oversharpened, fake studio lighting, CGI, illustration"
+)
+TRANSPARENT_BG_INVARIANT = (
+    "isolated subject on a fully transparent background, no studio wall, "
+    "no floor, no backdrop, no horizon"
+)
 
 NEGATIVE_PRESETS = [
     {"id": "wan_zh", "label": "Wan official (Chinese) — best for video", "text": WAN_NEGATIVE_ZH},
@@ -270,35 +280,35 @@ def apply_camera(prompt: str, move: str) -> str:
 
 # Quality tier -> inference steps, per device group ("local"/"a100"/"video").
 QUALITY_STEPS = {
-    "local": {"Draft": 6, "Standard": 9, "High": 15},
-    "local_hq": {"Draft": 15, "Standard": 28, "High": 40},  # Z-Image base (CFG model)
+    "local": {"Draft": 6, "Standard": 9, "High": 15, "Ultra": 15},
+    "local_hq": {"Draft": 15, "Standard": 28, "High": 40, "Ultra": 40},  # Z-Image base (CFG model)
     # Distilled FLUX.2-klein-4B uses four steps and CFG 1 in the official
     # consumer-GPU recipe. More steps are not a quality tier for this checkpoint.
-    "local_klein": {"Draft": 4, "Standard": 4, "High": 4},
+    "local_klein": {"Draft": 4, "Standard": 4, "High": 4, "Ultra": 4},
     # Chroma's model card runs 40 steps at CFG 3. FLUX.1-dev's reference
     # quality setting is 50 steps at CFG 3.5; Standard stays at 28 for a
     # practical interactive run, while High is the documented quality target.
-    "local_chroma": {"Draft": 20, "Standard": 30, "High": 40},
-    "local_flux": {"Draft": 16, "Standard": 28, "High": 50},
+    "local_chroma": {"Draft": 20, "Standard": 30, "High": 40, "Ultra": 40},
+    "local_flux": {"Draft": 16, "Standard": 28, "High": 50, "Ultra": 50},
     # Qwen-Image-2512's own example is 50 steps with true CFG 4.0. The A100
     # can afford that final-quality pass, so High should mean the documented
     # recipe rather than an arbitrary near miss.
-    "a100": {"Draft": 20, "Standard": 30, "High": 50},
-    "a100_hidream": {"Draft": 28, "Standard": 40, "High": 50},
+    "a100": {"Draft": 20, "Standard": 30, "High": 50, "Ultra": 50},
+    "a100_hidream": {"Draft": 28, "Standard": 40, "High": 50, "Ultra": 50},
     # SDXL community checkpoints are typically published with 30 steps at CFG
     # 2.5-4.5. SDXL flattens out well before the generic a100 row's 45, so High
     # buys a little headroom, not 50%.
-    "a100_sdxl": {"Draft": 20, "Standard": 30, "High": 36},
+    "a100_sdxl": {"Draft": 20, "Standard": 30, "High": 36, "Ultra": 36},
     # Same architecture, same answer, wherever it runs.
-    "local_sdxl": {"Draft": 20, "Standard": 30, "High": 36},
+    "local_sdxl": {"Draft": 20, "Standard": 30, "High": 36, "Ultra": 36},
     # FLUX.2-klein is a flow-matching DiT in the Flux lineage: 28 is the
     # reference, and it keeps improving to ~40 unlike the distilled models.
-    "a100_flux2": {"Draft": 16, "Standard": 28, "High": 40},
+    "a100_flux2": {"Draft": 16, "Standard": 28, "High": 40, "Ultra": 40},
     # The locally configured custom slot follows its model's documented recipe.
-    "a100_flux": {"Draft": 16, "Standard": 28, "High": 50},
-    "video": {"Draft": 25, "Standard": 40, "High": 60},
+    "a100_flux": {"Draft": 16, "Standard": 28, "High": 50, "Ultra": 50},
+    "video": {"Draft": 25, "Standard": 40, "High": 60, "Ultra": 60},
 }
-QUALITY_TIERS = ["Draft", "Standard", "High", "Custom"]
+QUALITY_TIERS = ["Draft", "Standard", "High", "Ultra", "Custom"]
 
 
 def quality_steps(group: str, tier: str, fallback: int) -> int:
@@ -343,7 +353,8 @@ TUNING_HINTS = {
     "aspect": "Pick the framing; the quality tier sets the pixel budget. Custom unlocks exact W/H.",
     "aspect_input": "Match input keeps the source framing. Pick another ratio only when you "
                     "deliberately want a center crop.",
-    "quality": "Draft = fast preview · Standard = balanced · High = best · Custom = set steps yourself.",
+    "quality": "Draft / Lightning = interactive. High / Ultra = print. Ultra is a native ~2K "
+               "long-side bucket on the A100, not an ESRGAN upscale. Custom sets steps yourself.",
     "guidance_turbo": "Z-Image-Turbo is distilled for CFG 0. Negative prompts are ignored; "
                        "use the Quality model when you need true negative steering.",
     "guidance_zimage": "Z-Image base uses real CFG: 3–5 is the useful range and 4 is the balanced default.",
@@ -374,9 +385,16 @@ TUNING_HINTS = {
               "appended to the prompt in the cinematography wording the models were"
               "captioned with.",
     "fps": "Playback rate. 16–24 is natural; pair with frame count for duration.",
-    "finish": "What to run on the result after it is generated, on the local GPU. "
-              "faces = detail pass + GFPGAN restore · upscale = Real-ESRGAN ×4 "
-              "(slow, and quadruples the file) · custom exposes each step separately.",
+    "finish": "What to run after generation. photoreal = photography look, no GFPGAN "
+              "(plastic skin). faces = detail + GFPGAN · upscale = Real-ESRGAN ×4 "
+              "(not native 2K) · custom exposes each step. Lightning is the interactive default.",
+    "prompt_photo": "Describe the photograph: pores, fabric weave, natural light, real materials. "
+                    "Avoid beauty-filter adjectives. The Photoreal finish adds the matching negative.",
+    "input_fidelity": "High locks identity: SCHP protects the face and routes through masked "
+                      "inpaint so instruction edits cannot rewrite locked pixels. Standard is a "
+                      "full-frame restyle with no identity contract.",
+    "background": "Transparent requests a real alpha channel (prompt invariant + BiRefNet). "
+                  "It does not generate a studio wall and hope the matte deletes it.",
     "post_scale": "Real-ESRGAN upscale factor applied after generation. Output is "
                   "proportionally capped at a 4096 px long side for safe files.",
     "finish_steps": "Named processors run in order after the finishing preset: remove the "

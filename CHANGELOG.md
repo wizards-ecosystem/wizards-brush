@@ -6,7 +6,54 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- High-fidelity image edits that keep unmasked pixels as the photograph: a
+  Remote GPU `inpaint_remote` kind on the same Qwen-Image-Edit-2511 weights,
+  `input_fidelity=high` on edit paths (protect-face or a named SCHP region,
+  never a full-frame Plus restyle), and Refine on any gallery image — one
+  sentence, routed as an ordinary `inpaint_remote` or `image_edit` job, with a
+  wand click or a hair / clothes / mouth region.
+- Photoreal finishing (no GFPGAN), a native-transparent background option, and
+  an A100 Ultra bucket toward a 2K long side. Lightning stays the interactive
+  default; High is print.
+- Face identity via OpenCV SFace and YuNet (Apache-2.0), an unmasked-pixel
+  lock, and a named cutout profile (coverage and safe margin, not four
+  transparent corners). Portrait pack and Product cutout ship as Variant Set
+  recipes on first start.
+- Variant Set previews include an ETA. The remote lane can overlap the next
+  submit with local finishing. A restart completes a running job that already
+  has assets instead of cancelling it.
+- Local inpaint uses the selected family's InpaintPipeline (Klein included).
+- The Remote GPU worker is a package, `worker/`, deployed as a container image
+  (`make remote-gpu-config`, `make remote-gpu-image`). Config precedence is
+  environment, then the baked image config, then defaults; secrets are
+  environment only, so an image is publishable.
+- Each release publishes that image to
+  `ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu`, tagged with the worker
+  build id and attested.
+- Start GPU: with `REMOTE_GPU_PROVISIONER=runpod` and a Runpod API key, the app
+  rents a pod, points the Remote GPU lane at it and terminates it on Stop or a
+  clean exit. It shows the hourly rate before starting and the spend while
+  running, refuses a second pod, and after a crash names a pod still running at
+  startup. `RUNPOD_IMAGE` is optional; empty runs the published image matching
+  the checkout, after checking it exists. See `docs/runpod.md`.
+
+### Changed
+
+- The remote lane is labelled "Remote GPU" everywhere a person reads it. The
+  stored generator id `colab_a100` is unchanged.
+
+### Removed
+
+- The single-file `remote_gpu.py` worker, `make remote-gpu` and the notebook
+  path. Build or pull the container image instead.
+
+### Fixed
+
+- 502/530 from a flaky tunnel is retried only while Remote GPU `/health` is up.
+- The region wand maps a click onto the painted image pixels, including when
+  the lightbox is letterboxed or zoomed.
 
 ## [0.1.4] - 2026-09-18
 

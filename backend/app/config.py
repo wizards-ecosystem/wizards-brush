@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # Strongest single-A100 comparison that is both straightforward to deploy
     # and small enough to run at its published bf16 recipe.
     # HiDream uses its official custom Pixel-DiT runner rather than Diffusers;
-    # remote_gpu.py detects this dedicated slot and loads that runner explicitly.
+    # The worker detects this dedicated slot and loads that runner explicitly.
     a100_image_model_hidream: str = Field(
         default="HiDream-ai/HiDream-O1-Image", alias="A100_IMAGE_MODEL_HIDREAM")
     # Generic optional A100 image slot for an additional Diffusers model.
@@ -146,8 +146,8 @@ class Settings(BaseSettings):
     fbcache_threshold: float = Field(default=0.0, alias="FBCACHE_THRESHOLD")
     # Emit a live latent preview every N denoising steps (0 = off).
     preview_every: int = Field(default=2, alias="PREVIEW_EVERY")
-    # SageAttention backend on the remote GPU pipes. Shipped to the remote runner
-    # by `make remote-gpu`; local generation does not use it. Kept here (rather than
+    # SageAttention backend on the remote GPU pipes. Baked into the worker image
+    # by `make remote-gpu-config`; local generation does not use it. Kept here (rather than
     # env-only on the remote side) so one .env is the single source of truth —
     # it used to default to a different value there with no way to override.
     enable_sage_attention: bool = Field(default=False, alias="ENABLE_SAGE_ATTENTION")
@@ -177,6 +177,34 @@ class Settings(BaseSettings):
         default="change-me-to-anything", alias="REMOTE_GPU_SHARED_SECRET",
         validation_alias=AliasChoices("REMOTE_GPU_SHARED_SECRET", "COLAB_SHARED_SECRET"),
     )
+
+    # Who may create remote GPU hardware on your behalf. "manual" is the default
+    # and the historical behaviour: you run the worker and paste its URL, and the
+    # app cannot spend anything. Any other value opts in to provisioning, which
+    # is the only way this app ever creates a billable resource.
+    remote_gpu_provisioner: str = Field(default="manual", alias="REMOTE_GPU_PROVISIONER")
+
+    # ---- runpod provisioner (read only when it is selected) ----
+    # This key can create billable resources. It never leaves this machine and is
+    # never sent to the worker; only the shared secret goes over the wire.
+    runpod_api_key: str = Field(default="", alias="RUNPOD_API_KEY")
+    # Optional: a worker image of your own. Empty runs the image each release
+    # publishes to GHCR, tagged with this checkout's worker build id.
+    runpod_image: str = Field(default="", alias="RUNPOD_IMAGE")
+    runpod_gpu_type: str = Field(default="NVIDIA A100-SXM4-80GB", alias="RUNPOD_GPU_TYPE")
+    runpod_cloud: str = Field(default="SECURE", alias="RUNPOD_CLOUD")
+    runpod_container_disk_gb: int = Field(default=120, ge=10, le=4096,
+                                          alias="RUNPOD_CONTAINER_DISK_GB")
+    # Optional: weights persist across sessions instead of re-downloading, at the
+    # cost of pinning every pod to that volume's data centre.
+    runpod_network_volume_id: str = Field(default="", alias="RUNPOD_NETWORK_VOLUME_ID")
+    runpod_data_center_ids: str = Field(default="", alias="RUNPOD_DATA_CENTER_IDS")
+    runpod_worker_port: int = Field(default=8000, ge=1, le=65535, alias="RUNPOD_WORKER_PORT")
+    # Terminate rented hardware when the app shuts down cleanly. On by default:
+    # the common mistake is leaving a GPU running overnight, not losing a cached
+    # model. Turn it off to keep a pod, and its warm cache, across a restart -
+    # then nothing stops it but the Stop button.
+    remote_gpu_stop_on_exit: bool = Field(default=True, alias="REMOTE_GPU_STOP_ON_EXIT")
 
     # app
     # Optional bearer token for /api/* — empty disables auth (single-user LAN default).

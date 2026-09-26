@@ -263,3 +263,17 @@ def test_a_lane_restarts_when_its_event_loop_is_gone(client, no_queue):
     asyncio.run(second_life())
     assert ran == [job.id]
     assert db.get_job(job.id).status == "done"
+
+
+def test_release_device_unblocks_the_remote_lane_for_the_next_submit(client, no_queue):
+    lane = JobQueue("remote")
+    a, b = _mk("image_edit"), _mk("image_edit")
+    lane._pending[a.id] = (lambda *x: {}, "image_edit")
+    lane._pending[b.id] = (lambda *x: {}, "image_edit")
+    lane._current = a.id
+    lane._device_job = a.id
+    assert lane.next_pick() is None
+    lane.release_device(a.id)
+    picked = lane.next_pick()
+    assert picked is not None and picked["job_id"] == a.id
+

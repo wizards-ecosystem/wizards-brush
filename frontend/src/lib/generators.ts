@@ -12,13 +12,21 @@ export const GEN_TO_SPEC: Record<string, string> = {
   "local_flux:inpaint": "inpaint",
   colab_a100: "image_colab",
   colab_edit: "image_edit",
+  colab_inpaint: "inpaint_remote",
   "colab_wan:t2v": "t2v",
   "colab_wan:i2v": "i2v",
   long_video: "long_video",
 };
 
 /** Tool job kinds that run on the local GPU/CPU (no generator spec of their own). */
-export const LOCAL_TOOL_KINDS = new Set(["upscale", "face_restore", "interpolate", "detail", "matte"]);
+export const LOCAL_TOOL_KINDS = new Set([
+  "upscale",
+  "face_restore",
+  "interpolate",
+  "detail",
+  "matte",
+  "region_mask",
+]);
 
 /** Params keys that are server-side paths/blobs — never render or prefill them. */
 export const HIDE_KEYS = new Set([
@@ -37,12 +45,15 @@ export const HIDE_KEYS = new Set([
   "src_height",
   // Variant Set lineage: set by the set, never a form value.
   "variant",
+  "parent_asset_id",
 ]);
 
-export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "A100" {
+/** Which lane a job runs on. The remote lane is named for what it is, not for a
+ * card: it was "A100" until a run on an A40 proved that label was a guess. */
+export function laneOf(kind: string, specs: GeneratorSpec[]): "local GPU" | "Remote GPU" {
   const spec = specs.find((s) => s.id === kind);
-  if (spec) return spec.needs_remote ? "A100" : "local GPU";
-  return LOCAL_TOOL_KINDS.has(kind) ? "local GPU" : "A100";
+  if (spec) return spec.needs_remote ? "Remote GPU" : "local GPU";
+  return LOCAL_TOOL_KINDS.has(kind) ? "local GPU" : "Remote GPU";
 }
 
 /** Any job whose kind matches a generator spec can be re-run by id. */
@@ -68,7 +79,7 @@ export function prefillableParams(params: Record<string, any>): Record<string, a
 /** Largest side any generator will actually produce (the A100 lane caps at
  *  1664 and snaps to /16). Beyond this, stored dimensions describe a
  *  post-processed file rather than a generation request. */
-export const MAX_REUSE_SIDE = 1664;
+export const MAX_REUSE_SIDE = 2048;
 
 export function reuseValues(meta: Record<string, any>): Record<string, any> {
   const v: Record<string, any> = {};

@@ -123,3 +123,12 @@ def test_the_route_reports_per_lane_and_per_job(client, no_queue):
     lanes = r.json()["lanes"]
     assert {"local", "remote"} <= set(lanes)
     assert "confidence" in lanes["local"]
+
+
+def test_for_params_is_honest_without_a_job_row(client, monkeypatch):
+    monkeypatch.setattr(eta, "rate_for", lambda kind, samples=20: (None, 0))
+    assert eta.for_params("image_edit", {"width": 1024, "height": 1024, "steps": 30}).confidence == "unknown"
+    monkeypatch.setattr(eta, "rate_for", lambda kind, samples=20: (2.0, 5))
+    est = eta.for_params("image_edit", {"width": 1024, "height": 1024, "steps": 30})
+    assert est.confidence == "estimated" and est.seconds and est.seconds > 0
+

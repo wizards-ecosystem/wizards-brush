@@ -18,8 +18,8 @@ from ..loras import sanitize as sanitize_loras
 from ..modelprobe import family_of_model
 from ..models import JobKind
 from ..outpaint import DEFAULT_PCT, DIRECTIONS, MAX_PCT, MIN_PCT, OUTPAINT_STRENGTH
-from ..presets import QUALITY_STEPS, quality_steps
-from ..prompt_engine import count_variants, expand_all, resolve_negative
+from ..presets import QUALITY_STEPS, TRANSPARENT_BG_INVARIANT, quality_steps
+from ..prompt_engine import count_variants, expand_all, resolve_negative, with_photoreal_negative
 from ..queue import ProgressCb
 from ..utils.seeds import resolve_seed
 from .common import (
@@ -45,8 +45,8 @@ router = APIRouter(tags=["images"])
 
 # Kinds that take exactly one source image in `image_path`.
 _SINGLE_INPUT_KINDS = frozenset({
-    JobKind.img2img.value, JobKind.inpaint.value, JobKind.outpaint.value,
-    JobKind.control_local.value,
+    JobKind.img2img.value, JobKind.inpaint.value, JobKind.inpaint_remote.value,
+    JobKind.outpaint.value, JobKind.control_local.value,
 })
 
 # kind -> (device for sizing, step group, default guidance, default steps).
@@ -57,6 +57,7 @@ _PROFILE = {
     "outpaint": ("local", "local", 1.0, 9),
     "image_colab": ("a100", "a100", 4.0, 30),
     "image_edit": ("a100", "a100", 4.0, 30),
+    "inpaint_remote": ("a100", "a100", 4.0, 30),
 }
 
 
@@ -137,7 +138,7 @@ def common_params(p: dict, kind: str) -> dict:
              "guidance": 1.0, "auto_negative": False, "negative_prompt": ""}
     finish, post_detail, post_face, post_upscale = resolve_finish(p)
     quality = p.get("quality", "Standard")
-    tier = quality if quality in ("Draft", "Standard", "High") else "Standard"
+    tier = quality if quality in ("Draft", "Standard", "High", "Ultra") else "Standard"
     custom_steps = as_int(p.get("steps"), def_steps, 1, 100)
     steps = custom_steps if quality == "Custom" else quality_steps(group, quality, def_steps)
     # Explicit width/height only apply when the aspect picker is on "Custom" — otherwise
@@ -145,7 +146,8 @@ def common_params(p: dict, kind: str) -> dict:
     # Inpaint always returns the source canvas: an aspect picker would imply it
     # can change framing while simultaneously promising to preserve unmasked
     # pixels, which is impossible. Img2img may still deliberately crop.
-    aspect = "Match input" if kind == JobKind.inpaint.value else p.get("aspect", "1:1")
+    aspect = ("Match input" if kind in {JobKind.inpaint.value, JobKind.inpaint_remote.value}
+              else p.get("aspect", "1:1"))
     if aspect == "Custom":
         cw, ch = as_int(p.get("width"), 0, 0, 8192), as_int(p.get("height"), 0, 0, 8192)
         if not cw and not ch:
@@ -211,7 +213,9 @@ def common_params(p: dict, kind: str) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from None
     if finish_steps:
         result["finish_steps"] = finish_steps
-    if kind == JobKind.inpaint.value:
+    if finish == "photoreal":
+        result["negative_prompt"] = with_photoreal_negative(result["negative_prompt"])
+    if kind in {JobKind.inpaint.value, JobKind.inpaint_remote.value}:
         area = str(p.get("inpaint_area", "masked area"))
         result.update({
             "inpaint_area": area if area in {"masked area", "whole image"} else "masked area",
@@ -219,6 +223,29 @@ def common_params(p: dict, kind: str) -> dict:
             "mask_padding": as_int(p.get("mask_padding"), 64, 0, 512),
             "mask_blur": as_int(p.get("mask_blur"), 4, 0, 64),
         })
+    if kind in {JobKind.image_edit.value, JobKind.inpaint_remote.value, JobKind.image_colab.value}:
+        fidelity = str(p.get("input_fidelity", "standard")).lower()
+        result["input_fidelity"] = fidelity if fidelity in {"standard", "high"} else "standard"
+        background = str(p.get("background", "opaque")).lower()
+        result["background"] = background if background in {"opaque", "transparent"} else "opaque"
+        if result["background"] == "transparent":
+            chain = list(result.get("finish_steps") or [])
+            if not any(isinstance(step, dict) and step.get("processor") == "background_removal"
+                       for step in chain):
+                chain.append({"processor": "background_removal"})
+            try:
+                result["finish_steps"] = finishing.sanitize_steps(chain)
+            except finishing.FinishingError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from None
+    if kind in {JobKind.inpaint_remote.value, JobKind.image_edit.value}:
+        region = str(p.get("region") or "").strip().lower().replace(" ", "-")
+        if region:
+            result["region"] = region
+        pid = p.get("parent_asset_id")
+        if pid not in (None, "", 0, "0"):
+            result["parent_asset_id"] = as_int(pid, 0, 1, 2**31 - 1)
+        if p.get("face_identity_min") is not None:
+            result["face_identity_min"] = as_float(p.get("face_identity_min"), 0.32, 0.0, 1.0)
     return result
 
 
@@ -239,7 +266,7 @@ def attach_inputs(kind: str, params: dict, image_paths: Sequence[str] = (),
         return params
     if kind in _SINGLE_INPUT_KINDS:
         params["image_path"] = paths[0]
-    if kind == JobKind.inpaint.value:
+    if kind == JobKind.inpaint.value or kind == JobKind.inpaint_remote.value:
         params["mask_path"] = mask_path
     if kind in (JobKind.img2img.value, JobKind.inpaint.value):
         _size_uploaded_input(params, params["image_path"])
@@ -284,7 +311,7 @@ def _match_input_dimensions(params: dict, image: Image.Image, model: str) -> tup
     if params.get("aspect") != "Match input":
         return int(params.get("width") or 0), int(params.get("height") or 0)
     quality = str(params.get("quality", "Standard"))
-    tier = quality if quality in {"Draft", "Standard", "High"} else "Standard"
+    tier = quality if quality in {"Draft", "Standard", "High", "Ultra"} else "Standard"
     width, height = dims_for_ratio(
         image.width, image.height, tier=tier, device="local", family=family_of_model(model),
     )
@@ -565,6 +592,8 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
     seeds = [seed for seed, _prompt, _negative in pairs]
     prompts = [prompt for _seed, prompt, _negative in pairs]
     negatives = [negative for _seed, _prompt, negative in pairs]
+    if params.get("background") == "transparent":
+        prompts = [_prompt_for_remote(p, params) for p in prompts]
     cb(0.05, f"A100 generating {batch} image(s) …")
     from ..generators import variants
 
@@ -597,6 +626,9 @@ def _remote_image_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         "speed": bool(params.get("speed_mode", False)),
     }, progress_cb=lambda f, m, preview=None: cb(0.05 + 0.8 * f, m, preview=preview),
         job_id=job_id)
+    from ..queue import release_device
+
+    release_device(job_id)
 
     images_b64 = resp.get("images_b64") or [resp["image_b64"]]
     if not isinstance(images_b64, list) or not images_b64 or len(images_b64) > batch:
@@ -632,12 +664,56 @@ async def gen_remote(payload: str = Form(...)) -> dict:
 
 
 # ---- Remote GPU image editing (Qwen-Image-Edit, 1-3 input images) -----------
+_FACE_IDENTITY_MIN = 0.32
+_TRANSPARENT_INVARIANT = TRANSPARENT_BG_INVARIANT
+
+
+def _png_b64(img: Image.Image) -> str:
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _release_remote(job_id: int) -> None:
+    from ..queue import release_device
+
+    release_device(job_id)
+
+
+def _prompt_for_remote(prompt: str, params: dict) -> str:
+    text = (prompt or "").rstrip().rstrip(",")
+    if params.get("background") == "transparent" and _TRANSPARENT_INVARIANT not in text:
+        text = f"{text}, {_TRANSPARENT_INVARIANT}" if text else _TRANSPARENT_INVARIANT
+    return text
+
+
+def _high_fidelity_mask(image: Image.Image, params: dict) -> Image.Image:
+    from ..generators import parsing
+
+    region = str(params.get("region") or "").strip()
+    if region:
+        return parsing.mask_for(image, region)
+    return parsing.protect_face_mask(image)
+
+
+def _save_mask(mask: Image.Image) -> str:
+    from ..utils.io import save_image
+
+    return str(save_image(mask.convert("L"), "mask").path)
+
+
 def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
     import base64
 
     from ..remote_gpu_client import decode_remote_image, run_remote
 
-    paths = params.get("image_paths") or []
+    if str(params.get("input_fidelity") or "standard") == "high":
+        return _remote_inpaint_handler(job_id, params, cb, from_edit=True)
+
+    paths = params.get("image_paths") or ([params["image_path"]] if params.get("image_path") else [])
     if not paths:
         raise RuntimeError("Image Edit requires at least one input image.")
     images_b64 = []
@@ -645,6 +721,7 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         with open(p, "rb") as f:
             images_b64.append(base64.b64encode(f.read()).decode())
     seed, prompt, negative = item_seed_prompts(params, 0)
+    prompt = _prompt_for_remote(prompt, params)
     cb(0.05, "A100 editing …")
     resp = run_remote("/edit", {
         "prompt": prompt, "negative_prompt": negative,
@@ -653,6 +730,7 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
         "speed": bool(params.get("speed_mode", False)),
     }, progress_cb=lambda f, m, preview=None: cb(0.05 + 0.85 * f, m, preview=preview),
         job_id=job_id)
+    _release_remote(job_id)
     raw = decode_remote_image(resp["image_b64"])
     gen_w, gen_h = raw.size
     warnings: list[str] = []
@@ -660,9 +738,120 @@ def _remote_edit_handler(job_id: int, params: dict, cb: ProgressCb) -> dict:
     meta = image_meta(params, img, prompt=prompt, seed=seed, inputs=len(paths),
                       negative_prompt=negative,
                       width=gen_w, height=gen_h, post=post, warnings=warnings,
-                      model=settings.qwen_edit_model, remote=True)
+                      model=settings.qwen_edit_model, remote=True,
+                      input_fidelity=params.get("input_fidelity", "standard"),
+                      background=params.get("background", "opaque"))
     aid = persist_image(img, job_id=job_id, generator="colab_edit", meta=meta, tag="edit",
                          params=params)
+    return {"asset_ids": [aid]}
+
+
+def _remote_inpaint_handler(job_id: int, params: dict, cb: ProgressCb,
+                            *, from_edit: bool = False) -> dict:
+    from ..generators.base import dims_for_ratio
+    from ..inpaint import plan_inpaint
+    from ..modelprobe import family_of_model
+    from ..remote_gpu_client import decode_remote_image, run_remote
+
+    source_path = params.get("image_path") or (params.get("image_paths") or [None])[0]
+    if not source_path:
+        raise RuntimeError("Remote inpaint requires a source image.")
+    source = Image.open(source_path).convert("RGB")
+    mask_path = params.get("mask_path")
+    if mask_path:
+        mask = Image.open(mask_path).convert("L")
+    else:
+        if str(params.get("input_fidelity") or "standard") != "high" and not params.get("region"):
+            raise RuntimeError("Remote inpaint requires a mask.")
+        cb(0.04, "building identity mask …")
+        mask = _high_fidelity_mask(source, params)
+        mask_path = _save_mask(mask)
+        params["mask_path"] = mask_path
+    plan = plan_inpaint(
+        source, mask, regional=params.get("inpaint_area", "masked area") == "masked area",
+        padding=int(params.get("mask_padding", 64)),
+        grow=int(params.get("mask_grow", 4)),
+    )
+    quality = str(params.get("quality") or "Standard")
+    tier = quality if quality in {"Draft", "Standard", "High", "Ultra"} else "Standard"
+    family = family_of_model(settings.qwen_edit_model)
+    work_w, work_h = dims_for_ratio(
+        plan.input_image.width, plan.input_image.height, tier=tier, device="a100",
+        family=family,
+    )
+    seed, prompt, negative = item_seed_prompts(params, 0)
+    prompt = _prompt_for_remote(prompt, params)
+    warnings: list[str] = list(params.get("warnings") or [])
+    if from_edit:
+        warnings.append("High fidelity used masked inpaint rather than a full-frame restyle.")
+        extra = (params.get("image_paths") or [])[1:]
+        if extra:
+            warnings.append(
+                "High fidelity inpaint uses the first image as the identity lock; "
+                f"{len(extra)} extra reference(s) were not sent.")
+
+    def _once(current_seed: int, strength: float) -> Image.Image:
+        cb(0.08, "A100 inpainting …")
+        work = plan.input_image.resize((work_w, work_h), Image.Resampling.LANCZOS)
+        work_mask = plan.input_mask.resize((work_w, work_h), Image.Resampling.NEAREST)
+        resp = run_remote("/inpaint", {
+            "prompt": prompt, "negative_prompt": negative,
+            "steps": int(params.get("steps", 30)),
+            "guidance": float(params.get("guidance", 4.0)),
+            "seed": current_seed, "image_b64": _png_b64(work), "mask_b64": _png_b64(work_mask),
+            "strength": float(strength),
+            "padding_mask_crop": int(params.get("mask_padding", 64)) or None,
+            "speed": bool(params.get("speed_mode", False)),
+        }, progress_cb=lambda f, m, preview=None: cb(0.08 + 0.72 * f, m, preview=preview),
+            job_id=job_id)
+        generated = decode_remote_image(resp["image_b64"], max_side=max(work_w, work_h),
+                                        max_pixels=work_w * work_h)
+        return plan.composite(generated, blur=int(params.get("mask_blur", 4)))
+
+    strength = float(params.get("strength", 0.75))
+    img = _once(seed, strength)
+    gate = params.get("face_identity_min")
+    if gate is None and (from_edit or str(params.get("input_fidelity")) == "high"):
+        gate = _FACE_IDENTITY_MIN
+    if gate is not None:
+        try:
+            from ..generators import identity
+
+            score = identity.compare(source, img)
+        except Exception as error:  # noqa: BLE001 — a missing runtime must not fail the job
+            warnings.append(f"face identity skipped: {error}")
+            score = None
+        if score is not None and score < float(gate):
+            cb(0.82, "identity lock missed — retrying once …")
+            img = _once(seed + 1, min(1.0, strength + 0.1))
+            try:
+                score = identity.compare(source, img)
+            except Exception:  # noqa: BLE001
+                score = None
+        if score is not None:
+            params["face_identity"] = round(float(score), 4)
+            if score < float(gate):
+                warnings.append(
+                    f"face similarity {score:.2f} is below the {float(gate):.2f} lock")
+    _release_remote(job_id)
+
+    gen_w, gen_h = img.size
+    img, post = apply_image_post(img, params, cb, start=0.88, end=1.0, warnings=warnings)
+    meta = image_meta(
+        params, img, prompt=prompt, seed=seed, negative_prompt=negative,
+        width=gen_w, height=gen_h, post=post, warnings=warnings,
+        model=settings.qwen_edit_model, remote=True, mode="inpaint",
+        inpaint_area=params.get("inpaint_area"),
+        mask_grow=params.get("mask_grow"), mask_padding=params.get("mask_padding"),
+        mask_blur=params.get("mask_blur"), canvas_width=plan.source.width,
+        canvas_height=plan.source.height, mask_path=mask_path, source_path=source_path,
+        input_fidelity=params.get("input_fidelity", "standard"),
+        background=params.get("background", "opaque"),
+        face_identity=params.get("face_identity"),
+        parent_asset_id=params.get("parent_asset_id") or params.get("source_asset_id"),
+    )
+    aid = persist_image(img, job_id=job_id, generator="colab_inpaint", meta=meta,
+                        tag="inpaint", params=params)
     return {"asset_ids": [aid]}
 
 
@@ -676,6 +865,19 @@ async def gen_edit(payload: str = Form(...), image: UploadFile | None = None,
     if not params["image_paths"]:
         raise HTTPException(status_code=400, detail="input image required")
     return await submit(JobKind.image_edit.value, params, _remote_edit_handler)
+
+
+@router.post("/generate/image/inpaint-remote")
+async def gen_inpaint_remote(payload: str = Form(...), image: UploadFile | None = None,
+                             mask: UploadFile | None = None) -> dict:
+    params = common_params(parse_payload(payload), JobKind.inpaint_remote.value)
+    image_path = require_upload(await save_upload(image))
+    mask_file = await save_upload(mask)
+    mask_path = require_upload(mask_file, "mask image") if mask_file else None
+    if mask_path is None and not (params.get("region") or params.get("input_fidelity") == "high"):
+        raise HTTPException(status_code=400, detail="mask image required")
+    attach_inputs(JobKind.inpaint_remote.value, params, [image_path], mask_path)
+    return await submit(JobKind.inpaint_remote.value, params, _remote_inpaint_handler)
 
 
 # ---- local ControlNet (experimental; registry entry gated on ENABLE_CONTROLNET) ----
@@ -742,4 +944,5 @@ register_handler(JobKind.inpaint.value, _local_handler("inpaint"))
 register_handler(JobKind.outpaint.value, _outpaint_handler)
 register_handler(JobKind.image_colab.value, _remote_image_handler)
 register_handler(JobKind.image_edit.value, _remote_edit_handler)
+register_handler(JobKind.inpaint_remote.value, _remote_inpaint_handler)
 register_handler(JobKind.control_local.value, _control_handler)

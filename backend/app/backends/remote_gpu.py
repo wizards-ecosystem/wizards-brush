@@ -118,7 +118,7 @@ class RemoteGPUBackend(RemoteBackend):
     def put_resource(self, digest: str, data: bytes, name: str) -> None:
         raise NotImplementedError(
             "Uploading a resource to the Remote GPU session needs a receiving endpoint "
-            "in remote_gpu.py, which does not exist yet. Until it does, a job whose "
+            "in the worker, which does not exist yet. Until it does, a job whose "
             "inputs the session does not already hold is refused before it is "
             "queued rather than failing on the A100."
         )

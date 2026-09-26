@@ -4,6 +4,7 @@ import { laneOf } from "../lib/generators";
 import { useStore } from "../store/useStore";
 import { Icon } from "./icons";
 import { ProgressBar } from "./ProgressBar";
+import { RemoteGpuControl } from "./RemoteGpuControl";
 import { Button, StatusIndicator } from "./ui";
 
 /** Live compute telemetry presented as one workshop instrument strip. */
@@ -18,7 +19,7 @@ export function BackendPanel() {
   const remote = system?.remote_gpu;
   const running = Object.values(jobs).filter((job) => job.status === "running");
   const localJob = running.find((job) => laneOf(job.kind, specs) === "local GPU");
-  const remoteJob = running.find((job) => laneOf(job.kind, specs) === "A100");
+  const remoteJob = running.find((job) => laneOf(job.kind, specs) === "Remote GPU");
   const vramPct = gpu?.memory_total_mb
     ? Math.min(100, Math.round(((gpu.memory_used_mb || 0) / gpu.memory_total_mb) * 100))
     : 0;
@@ -147,6 +148,9 @@ export function BackendPanel() {
               </div>
             )}
           </div>
+          {/* Renders nothing unless this install is configured to rent hardware,
+              so the self-hosted default sees no trace of it. */}
+          <RemoteGpuControl />
         </section>
       </div>
     </div>

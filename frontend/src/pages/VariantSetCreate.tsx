@@ -692,6 +692,18 @@ export function VariantSetCreate() {
               ))}
               {draft.stages.length > 1 && <div>Total: {totalLabel}</div>}
             </div>
+            {preview?.eta?.label ? (
+              <div className="technical mt-2 text-[11px] text-muted" data-testid="variant-eta">
+                About {preview.eta.label}
+              </div>
+            ) : (
+              previewable &&
+              preview && (
+                <div className="technical mt-2 text-[11px] text-muted">
+                  Time estimate after a few comparable jobs
+                </div>
+              )
+            )}
             {overCap && (
               <div className="mt-2 text-xs text-danger">
                 Over the {cap}-generation limit for one set. Remove values or split the work.

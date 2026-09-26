@@ -94,7 +94,8 @@ def test_tracked_sources_exclude_the_retired_label():
 def test_remote_worker_has_no_dedicated_paired_model_slot_or_safety_bypass():
     from backend.app.generators import variants
 
-    remote = (ROOT / "remote_gpu.py").read_text(encoding="utf-8")
+    remote = "\n".join(path.read_text(encoding="utf-8")
+                       for path in sorted((ROOT / "worker").glob("*.py")))
     retired_fields = {
         "a100_image_model_private",
         "a100_image_lora_private",
@@ -143,8 +144,10 @@ def test_release_gate_and_ci_cover_the_renamed_remote_runner():
     assert ".DEFAULT_GOAL := help" in makefile
     assert "release-check: check doctor offline-check optional-check" in makefile
     assert "sbom-check" in makefile and "scripts/build_sbom.py" in makefile
-    assert "remote_gpu.py" in workflow
-    assert "colab.py" not in workflow
+    # CI must lint the worker: it is the code with no runtime coverage here, so
+    # static checks are the only gate between a refactor and a broken deploy.
+    assert "worker" in workflow
+    assert "colab.py" not in workflow and "remote_gpu.py" not in workflow
 
 
 def test_workflows_pin_actions_and_release_credentials_are_job_scoped():
@@ -165,6 +168,15 @@ def test_workflows_pin_actions_and_release_credentials_are_job_scoped():
     assert "release/*.cdx.json release/*.cdx.json.sha256" in release
     assert '--repo "$GITHUB_REPOSITORY"' in release
     assert "subject-path: release/*" in release
+
+    # The worker image goes public only after the approved release, and a
+    # published tag is a build id - never `latest`, never overwritten.
+    job = release[release.index("  worker-image:"):]
+    assert "needs: publish" in job and "push: true" in job
+    image = (ROOT / ".github" / "workflows" / "worker-image.yml").read_text(encoding="utf-8")
+    assert ":latest" not in image
+    assert "already published; leaving it alone" in image
+    assert 'cfg["hunyuan_video_model"] == ""' in image
 
 
 def test_public_defaults_are_local_only_and_license_conservative():
@@ -228,12 +240,19 @@ def test_bootstrap_and_native_installers_use_reviewed_immutable_inputs():
     bootstrap = (ROOT / "scripts" / "bootstrap-tools.sh").read_text(encoding="utf-8")
     versions = (ROOT / "scripts" / "tool-versions.env").read_text(encoding="utf-8")
     nunchaku = (ROOT / "scripts" / "install_nunchaku.sh").read_text(encoding="utf-8")
-    remote = (ROOT / "remote_gpu.py").read_text(encoding="utf-8")
+    # The worker installs nothing at runtime any more; its dependency closure is
+    # resolved once, at image build time, from the hashed lock.
+    dockerfile = (ROOT / "docker" / "remote-gpu" / "Dockerfile").read_text(encoding="utf-8")
+    worker = "\n".join(path.read_text(encoding="utf-8")
+                       for path in sorted((ROOT / "worker").glob("*.py")))
     assert "astral.sh/uv" not in bootstrap and "SHASUMS256.txt" not in bootstrap
     assert versions.count("UV_SHA256_") == 4 and versions.count("NODE_SHA256_") == 4
     assert "NUNCHAKU_WHEEL_SHA256" in nunchaku and "releases/latest" not in nunchaku
-    assert "releases/latest" not in remote
-    assert "cloudflared_sha256" in remote and '"--require-hashes"' in remote
+    assert "releases/latest" not in dockerfile and "releases/latest" not in worker
+    assert "--require-hashes" in dockerfile and "--only-binary=:all:" in dockerfile
+    # Nothing in the worker may fetch an executable at run time; that was the
+    # cloudflared download, and it left with the tunnel.
+    assert "curl" not in worker and "urlretrieve" not in worker
 
 
 def test_both_launchers_refuse_tokenless_non_loopback_binding():

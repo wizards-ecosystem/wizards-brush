@@ -48,7 +48,7 @@ jobs:
       - name: ruff
         # Version comes from uv.lock like everything else, so CI and `make lint`
         # cannot disagree. The rule set is pinned explicitly in pyproject.
-        run: source scripts/project-env.sh && uv run --no-sync ruff check backend tests scripts remote_gpu.py
+        run: source scripts/project-env.sh && uv run --no-sync ruff check backend worker tests scripts
       - name: mypy
         run: source scripts/project-env.sh && uv run --no-sync mypy
       - name: pytest

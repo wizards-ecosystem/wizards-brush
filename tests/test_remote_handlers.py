@@ -147,3 +147,46 @@ def test_a_remote_failure_propagates_instead_of_persisting_nothing_quietly(clien
                      "guidance": 4.0, "width": 512, "height": 512},
             lambda *a, **k: None)
     assert db.get_job(job.id).result.get("asset_ids") in (None, [])
+
+
+def test_high_fidelity_edit_calls_inpaint_not_plus(client, no_queue, monkeypatch):
+    from backend.app.config import settings
+    from backend.app.generators import identity, parsing
+    from backend.app.routers import images
+
+    settings.ensure_dirs()
+    src = settings.images_dir / "fid-src.png"
+    Image.new("RGB", (64, 48), (20, 30, 40)).save(src)
+
+    sent: list[str] = []
+
+    def fake_run_remote(path, payload, progress_cb=None, **kw):
+        sent.append(path)
+        if path == "/inpaint":
+            assert "mask_b64" in payload
+        return {"image_b64": _b64_png(64, 48, "orange")}
+
+    monkeypatch.setattr("backend.app.remote_gpu_client.run_remote", fake_run_remote)
+    monkeypatch.setattr(images, "apply_image_post", lambda img, params, cb, **kw: (img, []))
+    monkeypatch.setattr(identity, "_COMPARE", lambda a, b: 0.9)
+    monkeypatch.setattr(
+        parsing, "_PREDICT",
+        lambda kind, img: Image.new("L", img.size, parsing.ATR_INDEX["upper-clothes"]))
+
+    job = db.create_job("image_edit", {})
+    images._remote_edit_handler(
+        job.id,
+        {"prompt": "a terracotta knit", "input_fidelity": "high", "image_path": str(src),
+         "seed": 1, "steps": 4, "guidance": 1.0, "quality": "Draft", "strength": 0.75},
+        lambda *a, **k: None)
+    assert sent == ["/inpaint"]
+
+    sent.clear()
+    images._remote_edit_handler(
+        job.id,
+        {"prompt": "make it night", "input_fidelity": "standard",
+         "image_path": str(src), "image_paths": [str(src)],
+         "seed": 1, "steps": 4, "guidance": 4.0},
+        lambda *a, **k: None)
+    assert sent == ["/edit"]
+

@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -150,6 +150,32 @@ def preview(spec: RecipeSpec, *, limit: int = 100) -> dict[str, Any]:
                        for stage, found in collisions.items() for name, keys in found.items()],
         "warnings": warnings,
         "recipe": recipe.snapshot(),
+        "eta": _preview_eta(recipe, planned),
+    }
+
+
+def _preview_eta(recipe: Any, planned: Sequence[Any]) -> dict[str, Any]:
+    from .. import eta
+
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for item in planned:
+        kind = recipe.stages[item.stage].operation.kind
+        by_kind.setdefault(kind, []).append(item.request)
+    seconds = 0.0
+    known = False
+    confidence: str = "unknown"
+    for kind, requests in by_kind.items():
+        sample = requests[0] if requests else {}
+        est = eta.for_params(kind, sample)
+        if est.seconds is None:
+            continue
+        known = True
+        seconds += est.seconds * len(requests)
+        confidence = est.confidence
+    return {
+        "seconds": round(seconds, 1) if known else None,
+        "confidence": confidence if known else "unknown",
+        "label": eta.humanize(seconds) if known else "",
     }
 
 

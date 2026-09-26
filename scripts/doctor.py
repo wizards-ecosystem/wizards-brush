@@ -173,7 +173,6 @@ def main() -> None:
         private_files = (
             ROOT / ".env",
             settings.runtime_overrides_path,
-            ROOT / "remote_gpu_filled.py",
         )
         for private_file in private_files:
             if not private_file.exists():

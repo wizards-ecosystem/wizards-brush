@@ -228,7 +228,7 @@ def _validated_result(path: str, payload: dict[str, Any], raw: Any) -> dict[str,
                             for item in images)
         if encoded_total > _encoded_limit(MAX_REMOTE_IMAGE_BATCH_BYTES):
             raise RuntimeError("Remote GPU image batch exceeded the size limit")
-    elif path == "/edit":
+    elif path in {"/edit", "/inpaint"}:
         _check_encoded(raw.get("image_b64"), MAX_REMOTE_IMAGE_BYTES, "image")
     elif path in {"/t2v", "/i2v"}:
         _check_encoded(raw.get("video_b64"), MAX_REMOTE_VIDEO_BYTES, "video")
@@ -366,19 +366,46 @@ async def _check_health() -> dict:
 
 
 def local_build_id() -> str:
-    """Fingerprint of this repo's remote_gpu.py, matching what `make remote_gpu` injects.
+    """Fingerprint of this repo's worker package, matching what /health reports.
 
     Lets remote_gpu_health() tell whether the worker is running the current code.
-    A stale worker is invisible otherwise: a fix shipped locally looks live
-    while the remote GPU still executes the old build, and the only symptom is
-    behaviour that contradicts the source you are reading."""
+    A stale worker is invisible otherwise: a fix shipped locally looks live while
+    the remote GPU still executes the old build, and the only symptom is
+    behaviour that contradicts the source you are reading.
+
+    This must stay byte-identical to `worker.build_id()` - same files, same
+    order, same bytes. If the two ever disagree the app reports *every* worker as
+    stale, which is worse than not checking, because the warning stops meaning
+    anything. `tests/test_remote_worker.py` pins them together.
+    """
     import hashlib
 
-    src = ROOT / "remote_gpu.py"
+    package = ROOT / "worker"
     try:
-        return hashlib.sha256(src.read_bytes()).hexdigest()[:12]
+        digest = hashlib.sha256()
+        for path in sorted(package.glob("*.py")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()[:12]
     except OSError:
         return ""
+
+
+def _worker_alive(client: httpx.Client, url: str, secret: str) -> bool:
+    """True when /health answers and the worker thread is still there."""
+    try:
+        status, data = _sync_request(
+            client, "GET", f"{url}/health", limit=MAX_CONTROL_RESPONSE_BYTES,
+            headers={"X-Gen-Secret": secret}, timeout=CANCEL_TIMEOUT,
+        )
+        if status != 200:
+            return False
+        body = _json_object(data, "health")
+        if "worker_alive" in body:
+            return bool(body["worker_alive"])
+        return True
+    except Exception:  # noqa: BLE001 — a health probe failure means "not up"
+        return False
 
 
 def _redact(text: str, secret: str) -> str:
@@ -430,15 +457,20 @@ def run_remote(
                     if not isinstance(token, str) or not token or len(token) > _MAX_TOKEN_CHARS:
                         raise RuntimeError("Remote GPU returned an invalid job token")
                     return token
-                # 5xx / tunnel errors are worth retrying; 4xx (e.g. bad request) are not.
+                # 5xx / tunnel errors are worth retrying while the worker itself
+                # is still up; 4xx (e.g. bad request) are not. 502/530 from the
+                # tunnel in particular must not fail a job whose /health is fine.
                 if status < 500:
                     detail = data[:300].decode("utf-8", errors="replace")
                     raise RuntimeError(f"Remote GPU error {status}: {_redact(detail, secret)}")
+                if status in {502, 503, 504, 530} and not _worker_alive(c, url, secret):
+                    raise RuntimeError(
+                        f"Remote GPU error {status}: the worker is not answering /health")
                 last = RuntimeError(f"Remote GPU error {status}")
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last = RuntimeError(f"Remote GPU unreachable: {e}")
             if progress_cb:
-                progress_cb(0.02, f"connecting to A100 (retry {attempt + 1}/5) …")
+                progress_cb(0.02, f"connecting to the Remote GPU (retry {attempt + 1}/5) …")
             time.sleep(min(2 ** attempt, 10))
         raise last or RuntimeError("Remote GPU POST failed")
 
@@ -490,6 +522,9 @@ def run_remote(
                     # not the job failing — retry like a transport error. Only 4xx
                     # (bad/unknown token) fails fast.
                     if status_code >= 500:
+                        if status_code in {502, 503, 504, 530} and not _worker_alive(c, url, secret):
+                            raise RuntimeError(
+                                f"Remote GPU error {status_code}: the worker is not answering /health")
                         raise _PollHiccup(f"http {status_code}")
                     if status_code == 404:
                         raise RuntimeError(
@@ -506,7 +541,7 @@ def run_remote(
                     if miss > 10:
                         raise RuntimeError(f"Remote GPU connection lost: {e}") from e
                     if progress_cb:
-                        progress_cb(last_frac, "A100 link hiccup — retrying …")
+                        progress_cb(last_frac, "Remote GPU link hiccup — retrying …")
                     time.sleep(min(poll * miss, 15))
                     continue
                 now = time.monotonic()
@@ -524,14 +559,14 @@ def run_remote(
                 active = active or remote_progress > 0.0 or preview is not None
                 if progress_cb:
                     last_frac = max(0.1, remote_progress)
-                    progress_cb(last_frac, f"A100 {status}",
+                    progress_cb(last_frac, f"Remote GPU {status}",
                                 preview=_preview_bytes(preview))
                 if status == "done":
                     result = _validated_result(path, payload, d.get("result"))
                     _ack_remote()   # result is in our memory now — let the A100 drop it
                     return result
                 if status == "error":
-                    # The A100 reports a cancelled job as an error rather than
+                    # The worker reports a cancelled job as an error rather than
                     # handing back the partially-denoised image it was holding.
                     # Surface that as cancellation, not as a failure, so the
                     # queue marks the job canceled instead of showing the user

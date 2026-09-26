@@ -278,6 +278,38 @@ def _matte_handler(job_id: int, p: dict, cb: ProgressCb) -> dict:
     return {"asset_ids": [aid]}
 
 
+def _region_mask_handler(job_id: int, p: dict, cb: ProgressCb) -> dict:
+    from ..generators import parsing
+
+    if reason := parsing.unavailable_reason():
+        raise RuntimeError(reason)
+    if not Path(p["src_path"]).exists():
+        raise RuntimeError("source image file no longer exists")
+    with Image.open(p["src_path"]) as opened:
+        opened.load()
+        src = opened.convert("RGB")
+    region = str(p.get("region") or "").strip().lower().replace(" ", "-")
+    click_x, click_y = int(p.get("click_x", -1)), int(p.get("click_y", -1))
+    cb(0.2, "parsing regions …")
+    if click_x >= 0 and click_y >= 0:
+        region = parsing.region_at(src, click_x, click_y)
+    if not region:
+        raise RuntimeError("choose a region or click a point on the subject")
+    mask = parsing.mask_for(src, region, grow=int(p.get("grow", 4) or 4))
+    if mask.getbbox() is None:
+        raise RuntimeError(f"region {region!r} is empty on this image")
+    cb(0.9, "saving …")
+    details = {"region": region, "source_asset_id": p.get("source_asset_id"),
+               "model": parsing.SCHP_ID, "license": parsing.SCHP_LICENSE}
+    meta = derivative_meta(p.get("src_meta"), operations="region_mask", input_size=src.size,
+                           output_size=mask.size, details=details)
+    meta["mask"] = {"source": "schp", "region": region,
+                    "source_asset_id": p.get("source_asset_id")}
+    aid = persist_image(mask.convert("L"), job_id=job_id, generator="mask", meta=meta,
+                        tag="mask")
+    return {"asset_ids": [aid]}
+
+
 # ---- the tool catalogue -------------------------------------------------------
 def _source(a: Asset) -> dict[str, Any]:
     return {"src_path": a.path, "src_meta": a.meta, "source_asset_id": a.id,
@@ -330,6 +362,18 @@ def _matte_params(a: Asset, raw: dict[str, Any]) -> dict[str, Any]:
     return {**_source(a), "mode": mode if mode in MATTE_MODES else "cutout"}
 
 
+def _region_mask_params(a: Asset, raw: dict[str, Any]) -> dict[str, Any]:
+    from ..generators import parsing
+
+    region = str(raw.get("region") or "").strip().lower().replace(" ", "-")
+    if region and region not in parsing.REGIONS and region not in parsing.ATR_INDEX:
+        region = ""
+    return {**_source(a), "region": region,
+            "click_x": as_int(raw.get("click_x"), -1, -1, 16384),
+            "click_y": as_int(raw.get("click_y"), -1, -1, 16384),
+            "grow": as_int(raw.get("grow"), 4, 0, 32)}
+
+
 @dataclass(frozen=True)
 class Tool:
     kind: str
@@ -347,6 +391,12 @@ def _matte_unavailable() -> str | None:
     from ..generators import matting
 
     return matting.unavailable_reason()
+
+
+def _region_mask_unavailable() -> str | None:
+    from ..generators import parsing
+
+    return parsing.unavailable_reason()
 
 
 _SEED_CONTROL = {"name": "seed", "label": "Seed", "type": "number", "default": -1,
@@ -373,6 +423,19 @@ TOOLS: dict[str, Tool] = {t.kind: t for t in (
          ({"name": "mode", "label": "Output", "type": "select", "default": "cutout",
            "options": list(MATTE_MODES)},),
          _matte_params, _matte_handler, _matte_unavailable),
+    Tool("region_mask", "Region mask",
+         "SCHP / BiSeNet mask for hair, face, clothes, mouth or eyes.",
+         "image", "image",
+         ({"name": "region", "label": "Region", "type": "select", "default": "upper-clothes",
+           "options": ["hair", "face", "upper-clothes", "clothes", "mouth", "eyes",
+                       "subject_minus_face"]},
+          {"name": "click_x", "label": "Click X", "type": "number", "default": -1,
+           "min": -1, "max": 16384},
+          {"name": "click_y", "label": "Click Y", "type": "number", "default": -1,
+           "min": -1, "max": 16384},
+          {"name": "grow", "label": "Grow (px)", "type": "slider", "default": 4,
+           "min": 0, "max": 32}),
+         _region_mask_params, _region_mask_handler, _region_mask_unavailable),
     Tool("interpolate", "Interpolate", "Multiply a clip's frame rate.", "video", "video",
          ({"name": "factor", "label": "Factor", "type": "select", "default": 2,
            "options": [2, 4]},
@@ -447,6 +510,21 @@ async def tool_matte(req: MatteReq) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"mode must be one of {', '.join(MATTE_MODES)}")
     return await submit_tool(JobKind.matte.value, req.asset_id, {"mode": req.mode})
+
+
+class RegionMaskReq(BaseModel):
+    asset_id: int
+    region: str = "upper-clothes"
+    click_x: int = -1
+    click_y: int = -1
+    grow: int = 4
+
+
+@router.post("/tools/region-mask", responses=error_responses(400, 404, 503))
+async def tool_region_mask(req: RegionMaskReq) -> dict:
+    """Save an SCHP/BiSeNet region as a mask asset (white = change)."""
+    return await submit_tool(JobKind.region_mask.value, req.asset_id,
+                             req.model_dump(exclude={"asset_id"}))
 
 
 @router.post("/tools/enrich-all")

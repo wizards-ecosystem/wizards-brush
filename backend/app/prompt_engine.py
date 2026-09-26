@@ -16,7 +16,7 @@ from functools import reduce
 from pathlib import Path
 
 from .config import ROOT
-from .presets import FACE_NEGATIVE, IMAGE_NEGATIVE, WAN_NEGATIVE_ZH
+from .presets import FACE_NEGATIVE, IMAGE_NEGATIVE, PHOTOREAL_NEGATIVE, WAN_NEGATIVE_ZH
 
 _SEED_MAX = 2**32 - 1
 # Only treat braces containing a pipe as a wildcard group; leave plain "{x}" alone.
@@ -253,9 +253,17 @@ def resolve_negative(kind: str, negative: str, auto: bool = True) -> str:
         return ""
     if kind in ("t2v", "i2v", "long_video"):
         return WAN_NEGATIVE_ZH
-    if kind in ("img2img", "inpaint"):
+    if kind in ("img2img", "inpaint", "inpaint_remote"):
         return FACE_NEGATIVE
     return IMAGE_NEGATIVE
+
+
+def with_photoreal_negative(negative: str) -> str:
+    """Append the photoreal lock without duplicating it on rerun."""
+    text = (negative or "").strip()
+    if PHOTOREAL_NEGATIVE in text:
+        return text
+    return f"{text}, {PHOTOREAL_NEGATIVE}" if text else PHOTOREAL_NEGATIVE
 
 
 def seed_for(base_seed: int, index: int, mode: str = "increment") -> int:

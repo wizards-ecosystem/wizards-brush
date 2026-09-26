@@ -8,7 +8,7 @@ NOTICE
 THIRD_PARTY_NOTICES.md
 pyproject.toml
 uv.lock
-remote_gpu.py
+worker
 install.sh
 start.sh
 backend
@@ -16,6 +16,7 @@ docs/api.md
 docs/model-licenses.md
 docs/network-security.md
 docs/remote-gpu.md
+docs/runpod.md
 models/loras/README.md
 scripts/api_example.py
 scripts/bootstrap-tools.sh
@@ -23,7 +24,7 @@ scripts/check-host.sh
 scripts/doctor.py
 scripts/download_models.py
 scripts/install_nunchaku.sh
-scripts/make_remote_gpu.py
+scripts/make_remote_gpu_config.py
 scripts/migrate_local_state.py
 scripts/project-env.sh
 scripts/remote-gpu-requirements.in

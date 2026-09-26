@@ -9,7 +9,7 @@ Browser / scripts (docs/api.md)
   v
 FastAPI application
   |-- local lane  --> global GPU lock --> Diffusers + finishing tools
-  |-- remote lane --> authenticated HTTPS --> remote_gpu.py
+  |-- remote lane --> authenticated HTTPS --> worker/ (container)
   |-- SQLite      --> jobs, assets, presets, tags, collections
   `-- output/     --> media, thumbnails, uploads, runtime settings
 ```
@@ -23,7 +23,7 @@ FastAPI application
 - `backend/app/db.py` owns SQLite and append-only migrations under `backend/app/migrations/`.
 - `backend/app/routers/job_api.py` is the programmatic front door: `POST /api/jobs` for every generator and tool, `GET /api/jobs/kinds`, and long-poll waits (see below).
 - `backend/app/variant_sets/` runs Variant Sets: durable, reference-driven fan-out over the existing operations (see below).
-- `remote_gpu.py` is the complete operator-controlled worker. `make remote-gpu` injects the ignored local configuration into a generated runner.
+- `worker/` is the operator-controlled remote worker, deployed as a container image. `make remote-gpu-config` bakes the non-secret model config into it; secrets arrive as deploy-time environment.
 
 ## Data and trust boundaries
 
@@ -43,7 +43,7 @@ public HTTPS, long work uses submit-and-poll tokens, cancellation is propagated,
 and surfaced errors redact the configured secret. The operator owns provider,
 network, data handling, and model-license compliance.
 
-The public-tunnel worker authenticates and limits request bytes in pure ASGI
+The worker authenticates and limits request bytes in pure ASGI
 middleware before FastAPI parses JSON or base64 fields. Individual routes repeat
 the secret check as defense in depth, request models bound fields and collection
 sizes, and the in-memory queue has a finite capacity.

@@ -49,6 +49,7 @@ const PLAIN_TITLES: Record<string, string> = {
   image_colab: "New image",
   img2img: "Remix an image",
   inpaint: "Replace part of an image",
+  inpaint_remote: "Replace part of an image on the A100",
   outpaint: "Extend past the edges",
   image_edit: "Edit by instruction",
   control_local: "Copy a pose or composition",
@@ -85,7 +86,7 @@ function GeneratorLedger({ specs, remoteConnected }: { specs: GeneratorSpec[]; r
                   unavailable ? "text-warn" : spec.needs_remote ? "text-accent2" : "text-ok"
                 }`}
               >
-                {unavailable ? "offline" : spec.needs_remote ? "A100" : "local"}
+                {unavailable ? "offline" : spec.needs_remote ? "remote" : "local"}
               </span>
               <Icon
                 name="arrow-right"

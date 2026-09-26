@@ -63,6 +63,8 @@ OPERATIONS: dict[str, Operation] = {op.kind: op for op in (
               "Transforms the source; strength sets how far each variant departs."),
     Operation(JobKind.inpaint.value, 1, 1, "required",
               "Regenerates only a masked region; everything outside it is kept."),
+    Operation(JobKind.inpaint_remote.value, 1, 1, "required",
+              "Masked remote inpaint; unmasked pixels stay the source photograph."),
     Operation(JobKind.outpaint.value, 1, 1, "none",
               "Extends the canvas around the source."),
     Operation(JobKind.control_local.value, 1, 1, "none",

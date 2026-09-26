@@ -97,6 +97,10 @@ export function AssetModal({
   const [tags, setTags] = useState<string[]>(asset.tags || []);
   const [tagInput, setTagInput] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [refinePrompt, setRefinePrompt] = useState("");
+  const [wandRegion, setWandRegion] = useState("");
+  const [wandPick, setWandPick] = useState(false);
+  const [click, setClick] = useState<{ x: number; y: number } | null>(null);
 
   // Adjust-state-during-render (the React-docs pattern) instead of an effect:
   // navigating ‹/› swaps the asset prop, and its fav/rating/tags must replace
@@ -109,6 +113,10 @@ export function AssetModal({
     setGrade({ ...(asset.grade || {}) });
     setTags(asset.tags || []);
     setTagInput("");
+    setRefinePrompt("");
+    setWandRegion("");
+    setWandPick(false);
+    setClick(null);
   }
 
   const idx = list?.findIndex((a) => a.id === asset.id) ?? -1;
@@ -256,7 +264,39 @@ export function AssetModal({
       toast(`Rerun failed: ${e}`, "error");
     }
   };
-  const sendTo = (target: "img2img" | "i2v" | "inpaint") => {
+  const submitRefine = async () => {
+    const prompt = refinePrompt.trim();
+    if (!prompt) return;
+    markUsed(asset.id);
+    const params: Record<string, unknown> = { prompt };
+    if (wandRegion) params.region = wandRegion;
+    if (click) {
+      params.click_x = click.x;
+      params.click_y = click.y;
+    }
+    try {
+      const r = await api.createJob({ kind: "refine", params, inputs: { images: [asset.id] } });
+      toast(`Queued refine #${r.job_id}`, "success");
+      onClose();
+    } catch (e) {
+      toast(`Refine failed: ${e}`, "error");
+    }
+  };
+  const saveRegionMask = async () => {
+    markUsed(asset.id);
+    try {
+      const { job_id } = await api.tool("region-mask", {
+        asset_id: asset.id,
+        region: wandRegion || "upper-clothes",
+        ...(click ? { click_x: click.x, click_y: click.y } : {}),
+      });
+      toast(`Region mask queued (#${job_id})`, "success");
+      onClose();
+    } catch (e) {
+      toast(`Region mask failed: ${e}`, "error");
+    }
+  };
+  const sendTo = (target: "img2img" | "i2v" | "inpaint" | "inpaint_remote") => {
     markUsed(asset.id);
     navigate(`/g/${target}`, {
       state: {
@@ -294,7 +334,16 @@ export function AssetModal({
           {asset.kind === "video" ? (
             <VideoPlayer src={asset.url} fps={Number(meta.fps) || 20} />
           ) : (
-            <ZoomableImage src={asset.url} alt={meta.prompt || asset.filename} />
+            <ZoomableImage
+              src={asset.url}
+              alt={meta.prompt || asset.filename}
+              pickMode={wandPick}
+              onPick={(x, y) => {
+                setClick({ x, y });
+                setWandPick(false);
+                toast(`Picked ${x}, ${y}`, "info");
+              }}
+            />
           )}
           {list && idx > 0 && (
             <button
@@ -568,13 +617,76 @@ export function AssetModal({
             )}
             {asset.kind === "image" && (
               <div>
+                <div className="label">Refine</div>
+                <p className="mb-2 text-[11px] leading-relaxed text-muted">
+                  One sentence on this picture. A region change uses masked inpaint; a restyle keeps high
+                  fidelity. Each turn is a new job.
+                </p>
+                <textarea
+                  className="input min-h-16 text-xs"
+                  placeholder="closed-mouth smile, low nape ponytail, terracotta knit…"
+                  value={refinePrompt}
+                  maxLength={500}
+                  onChange={(e) => setRefinePrompt(e.target.value)}
+                />
+                <div className="mt-2">
+                  <div className="label mb-1">Region wand</div>
+                  <select
+                    className="input text-xs"
+                    aria-label="Region"
+                    value={wandRegion}
+                    onChange={(e) => setWandRegion(e.target.value)}
+                  >
+                    <option value="">From the sentence</option>
+                    <option value="upper-clothes">Upper clothes</option>
+                    <option value="clothes">Clothes</option>
+                    <option value="hair">Hair</option>
+                    <option value="face">Face</option>
+                    <option value="mouth">Mouth</option>
+                    <option value="eyes">Eyes</option>
+                    <option value="subject_minus_face">Subject except face</option>
+                  </select>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => setWandPick((on) => !on)}
+                      aria-pressed={wandPick}
+                      title="Click the picture to pick a region"
+                    >
+                      {wandPick
+                        ? "Click the image…"
+                        : click
+                          ? `Point ${click.x},${click.y}`
+                          : "Click a point"}
+                    </Button>
+                    <Button size="sm" onClick={saveRegionMask}>
+                      Save mask
+                    </Button>
+                  </div>
+                </div>
+                <Button
+                  className="mt-2 w-full"
+                  size="sm"
+                  variant="primary"
+                  disabled={!refinePrompt.trim()}
+                  onClick={submitRefine}
+                >
+                  Refine
+                </Button>
+              </div>
+            )}
+            {asset.kind === "image" && (
+              <div>
                 <div className="label">Send to</div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <Button size="sm" onClick={() => sendTo("img2img")}>
                     Img2Img
                   </Button>
                   <Button size="sm" onClick={() => sendTo("inpaint")}>
                     Inpaint
+                  </Button>
+                  <Button size="sm" onClick={() => sendTo("inpaint_remote")}>
+                    A100 inpaint
                   </Button>
                   <Button size="sm" onClick={() => sendTo("i2v")}>
                     Video

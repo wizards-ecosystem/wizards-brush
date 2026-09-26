@@ -233,8 +233,8 @@ def test_every_variant_has_a_step_tier_reaching_its_default():
     for v in variants.available():
         assert v.steps_group in QUALITY_STEPS, f"{v.name}: no {v.steps_group} step tier"
         tiers = QUALITY_STEPS[v.steps_group]
-        assert set(tiers) == {"Draft", "Standard", "High"}
-        assert tiers["Draft"] <= tiers["Standard"] <= tiers["High"]
+        assert set(tiers) == {"Draft", "Standard", "High", "Ultra"}
+        assert tiers["Draft"] <= tiers["Standard"] <= tiers["High"] <= tiers["Ultra"]
 
 
 def test_variant_names_resolve_and_are_stable():

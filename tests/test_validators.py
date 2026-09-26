@@ -158,6 +158,55 @@ def test_new_checks_plug_in_without_touching_storage(tmp_path, monkeypatch):
     assert seen["sources"] == (7,)
 
 
+def test_unmasked_pixels_must_match_the_source(tmp_path):
+    source = Image.new("RGB", (32, 32), (10, 20, 30))
+    src_path = tmp_path / "src.png"
+    source.save(src_path)
+    mask = Image.new("L", (32, 32), 0)
+    mask.paste(255, (8, 8, 16, 16))
+    mask_path = tmp_path / "mask.png"
+    mask.save(mask_path)
+    out = source.copy()
+    out.paste((200, 10, 10), (8, 8, 16, 16))
+    out_path = tmp_path / "out.png"
+    out.save(out_path)
+    meta = {"source_path": str(src_path), "mask_path": str(mask_path)}
+    verdict, _ = validators.run(out_path, {"unmasked_match": True}, meta=meta)
+    assert verdict == "passed"
+    out.putpixel((0, 0), (1, 2, 3))
+    out.save(out_path)
+    verdict, results = validators.run(out_path, {"unmasked_match": True}, meta=meta)
+    assert verdict == "failed"
+    assert _by_name(results)["unmasked_match"].status == "fail"
+
+
+def test_cutout_spec_is_coverage_and_margin_not_four_corners():
+    spec = validators.cutout_spec()
+    assert spec.alpha == "required"
+    assert spec.corners_transparent is False
+    assert spec.safe_margin == 16
+    assert spec.min_transparent_fraction and spec.max_transparent_fraction
+
+
+def test_face_identity_uses_the_injected_score(tmp_path, monkeypatch):
+    from backend.app.generators import identity
+
+    monkeypatch.setattr(identity, "_COMPARE", lambda a, b: 0.91)
+    src = tmp_path / "face-src.png"
+    out = tmp_path / "face-out.png"
+    Image.new("RGB", (32, 32), (40, 30, 20)).save(src)
+    Image.new("RGB", (32, 32), (41, 31, 21)).save(out)
+    verdict, results = validators.run(
+        out, {"face_identity_min": 0.32}, meta={"source_path": str(src)})
+    assert verdict == "passed"
+    assert _by_name(results)["face_identity"].details["score"] == 0.91
+    monkeypatch.setattr(identity, "_COMPARE", lambda a, b: 0.1)
+    verdict, results = validators.run(
+        out, {"face_identity_min": 0.32}, meta={"source_path": str(src)})
+    assert verdict == "failed"
+
+
+
 def test_file_always_runs_first_and_a_buggy_check_cannot_crash(tmp_path, monkeypatch):
     def boom(ctx):
         raise RuntimeError("bug")

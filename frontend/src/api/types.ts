@@ -669,6 +669,7 @@ export interface VariantPreview {
   items: VariantPreviewItem[];
   collisions: { stage: number; name: string; keys: string[] }[];
   warnings: string[];
+  eta?: { seconds: number | null; confidence: string; label: string };
 }
 
 export type VariantItemState =
@@ -741,4 +742,23 @@ export interface VariantSetDetail extends VariantSetSummary {
   /** The frozen recipe snapshot the set executes. */
   recipe?: VariantRecipeSpec;
   items: VariantItem[];
+}
+
+/** A rented Remote GPU session, as the lifecycle routes report it. */
+export interface RemoteSession {
+  provisioner: string;
+  label: string;
+  /** This install may rent hardware at all. False for the self-hosted default. */
+  can_provision: boolean;
+  running: boolean;
+  state: "off" | "starting" | "ready" | "stopping" | "error";
+  detail: string;
+  pod_id: string;
+  base_url: string;
+  gpu: string;
+  elapsed_s: number;
+  hourly_usd: number | null;
+  /** Compute only, and an estimate — the provider bills from its own clock. */
+  cost_estimate_usd: number | null;
+  worker_connected: boolean;
 }

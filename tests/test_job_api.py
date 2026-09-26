@@ -72,6 +72,13 @@ def test_kinds_describe_every_generator_and_tool(client):
     assert kinds["inpaint"]["inputs"]["mask"] == "required"
     assert kinds["interpolate"]["inputs"]["images"]["asset_kind"] == "video"
     assert kinds["matte"]["lane"] == "local"
+    assert kinds["refine"]["inputs"]["images"] == {"min": 1, "max": 1, "asset_kind": "image"}
+    assert kinds["refine"]["inputs"]["mask"] == "none"
+    assert "click_x" in kinds["refine"]["params"]["properties"]
+    if "inpaint_remote" in kinds:
+        assert kinds["inpaint_remote"]["inputs"]["mask"] == "required"
+        assert kinds["inpaint_remote"]["lane"] == "remote"
+    assert kinds["region_mask"]["category"] == "tool"
 
 
 def test_kinds_schema_is_the_registry(client):
@@ -173,7 +180,7 @@ def test_request_id_returns_the_original_submission(client, enqueued, source):
     ({"kind": "image_local", "params": {"promt": "typo"}},
      400, "'promt' is not a setting of image_local"),
     ({"kind": "image_local", "params": {"guidance": 99}}, 400, "guidance must be between"),
-    ({"kind": "image_local", "params": {"quality": "Ultra"}}, 400, "quality must be one of"),
+    ({"kind": "image_local", "params": {"quality": "Ludicrous"}}, 400, "quality must be one of"),
     ({"kind": "image_local", "params": {"batch": "four"}}, 400, "batch must be a number"),
     ({"kind": "image_local", "params": {"auto_negative": "yes"}}, 400, "true or false"),
     ({"kind": "image_local", "inputs": {"images": [1]}}, 400, "takes 0 input image(s); got 1"),
@@ -455,3 +462,43 @@ def test_openapi_documents_the_errors_each_route_can_answer(client):
     assert "404" in paths["/api/assets/{asset_id}/file"]["get"]["responses"]
     assert "503" in paths["/api/variant-sets"]["post"]["responses"]
     assert "409" in paths["/api/variant-sets/{set_id}"]["delete"]["responses"]
+
+
+def test_refine_ponytail_builds_a_hair_mask_not_a_full_frame(client, enqueued, source, monkeypatch):
+    from backend.app.generators import parsing
+
+    def predict(kind, img):
+        labels = Image.new("L", img.size, parsing.ATR_INDEX["upper-clothes"])
+        for y in range(max(1, img.height // 3)):
+            for x in range(img.width):
+                labels.putpixel((x, y), parsing.ATR_INDEX["hair"])
+        return labels
+
+    monkeypatch.setattr(parsing, "_PREDICT", predict)
+    r = _job(client, kind="refine", params={"prompt": "a low nape ponytail"},
+             inputs={"images": [source.id]})
+    assert r.status_code == 200, r.text
+    job = db.get_job(r.json()["job_id"])
+    assert job.kind in {"inpaint_remote", "image_edit"}
+    assert job.params.get("region") == "hair"
+    assert job.params.get("mask_path")
+    assert job.params.get("input_fidelity") == "high"
+    assert job.params.get("parent_asset_id") == source.id
+
+
+def test_refine_validates_like_its_target_kind(client, enqueued, source):
+    r = _job(client, kind="refine", params={"promt": "x"}, inputs={"images": [source.id]})
+    assert r.status_code == 400 and "promt" in r.json()["detail"]
+
+
+def test_transparent_background_requests_real_alpha(client, enqueued):
+    from backend.app.presets import TRANSPARENT_BG_INVARIANT
+    from backend.app.routers.images import _prompt_for_remote
+
+    params = _params(_job(client, kind="image_colab",
+                          params={"prompt": "a ceramic mug", "background": "transparent"}))
+    assert params["background"] == "transparent"
+    assert any(step.get("processor") == "background_removal" for step in params["finish_steps"])
+    text = _prompt_for_remote(params["prompt"], params)
+    assert TRANSPARENT_BG_INVARIANT in text
+

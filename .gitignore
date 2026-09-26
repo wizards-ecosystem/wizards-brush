@@ -29,6 +29,8 @@ frontend/.vite/
 # Generated Remote GPU runners carry real keys — never commit. Keep the old
 # name ignored as well so existing local deployments cannot leak during migration.
 remote_gpu_filled.py
+# Generated per-install from .env: non-secret, but not the repo's to pin.
+docker/remote-gpu/remote-gpu-config.json
 ecosystem_todo.md
 colab_filled.py
 # tsc incremental build state

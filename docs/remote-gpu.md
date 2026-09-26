@@ -2,9 +2,9 @@
 
 The Remote GPU lane connects a local installation of The Wizard's Brush to an
 authenticated GPU worker that you operate or are explicitly authorized to use.
-The worker is provider-neutral, has no provider SDK dependency, and runs as one
-Python file from either a shell or an interactive notebook. It is not a shared
-hosted service, and this repository does not provide GPU access.
+The worker is provider-neutral, has no provider SDK dependency, and ships as a
+container image (or runs as a Python package on a machine you own). It is not a
+shared hosted service, and this repository does not provide GPU access.
 
 ## Deployment boundary
 
@@ -13,60 +13,73 @@ to run the worker and expose its authenticated HTTPS endpoint. You are
 responsible for the account, hardware, network exposure, model licenses, and
 applicable law.
 
+## What the worker is
+
+A Python package, `worker/`, deployed as a container image. It speaks an
+authenticated HTTP protocol over HTTPS; where that HTTPS comes from is the host's
+business, not the worker's.
+
+[Running the worker on RunPod](runpod.md) is a worked example of renting the
+hardware. The image is provider-neutral and runs anywhere that can run a
+container with a GPU, including one you own.
+
 ## Before you start
 
 Provision a remote environment with:
 
 - An NVIDIA CUDA GPU. The default remote model profile is sized for an 80 GB
   class GPU; change model slots in `.env` for smaller hardware.
-- A CUDA-compatible PyTorch and torchvision installation. The generated worker
-  installs a complete hash-locked application dependency closure, but
-  intentionally leaves torch and numpy to the GPU runtime so it does not
-  replace a working CUDA build.
-- Python 3.12 on Linux x86-64, Git, and enough local ephemeral disk for the
-  models you enable. The worker refuses other Python/platform combinations
-  because its reviewed binary hashes would not describe their artifacts.
-  Managed runtimes can move to a newer default Python, so pin one that ships
-  3.12 and confirm it with `python --version` before starting the worker.
-- A public HTTPS route to the service. The built-in Cloudflare quick tunnel is a
-  convenience path for a machine you control; an operator-managed reverse proxy
-  or tunnel is also suitable if it forwards HTTPS to the worker.
+- A container runtime with GPU access. The image brings its own Python 3.12,
+  torch and hash-locked dependency closure; the host supplies only the driver.
+  (Running the package without Docker needs Python 3.12 on Linux x86-64 and a
+  CUDA torch of your own — see below.)
+- Enough local disk for the models you enable.
+- A public HTTPS route to the service: a provider's proxy (RunPod gives every
+  pod one), or a reverse proxy or tunnel you operate that forwards HTTPS to the
+  worker. The worker does not open one itself.
 
-Do not put model caches on a slow network-mounted drive. The worker is designed
-to cache on the runtime's local disk for the life of that runtime.
+Model caches, the HiDream checkout and every other download live under
+`REMOTE_GPU_ROOT`, which defaults to a directory beside the script. Set it to point at
+whatever storage should outlive the runtime. Prefer local disk: a slow network-mounted
+drive makes every model swap unpredictable.
 
 ## Configure and start
 
-In your local The Wizard's Brush checkout:
+Each release publishes the image to
+`ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu`, tagged with the worker's
+build id and built from the shipped defaults (HunyuanVideo left empty). If you
+have not changed `worker/`, run the tag matching your checkout — `python -c
+"from worker import build_id; print(build_id())"` prints it — and skip the
+build. To bake your own model slots, build it yourself in your local checkout:
 
 ```bash
-cp .env.example .env  # only if .env does not already exist
-openssl rand -hex 32  # use this output as REMOTE_GPU_SHARED_SECRET
-make remote-gpu
+cp .env.example .env        # only if .env does not already exist
+openssl rand -hex 32        # use this output as REMOTE_GPU_SHARED_SECRET
+make remote-gpu-config      # model slots + reviewed revision pins; no secrets
+make remote-gpu-image       # builds the image, tagged with the worker build id
 ```
 
-`make remote-gpu` writes `remote_gpu_filled.py`. It injects `HF_TOKEN`, the
-shared secret, selected model IDs, reviewed model revision pins, the complete
-hash-locked dependency set, and a build fingerprint. The tracked
-`remote_gpu.py` is only a template and refuses to run directly. The generated
-file is ignored and written with owner-only permissions because it contains
-secrets; copy it through a private channel and do not commit or attach it to an
-issue.
+Push the image somewhere the GPU host can pull from, then run it there with
+`REMOTE_GPU_SHARED_SECRET` and `HF_TOKEN` in its environment and the port
+published. **Secrets are never baked into the image** — that is what makes it
+publishable — so they arrive at deploy time.
 
-On the remote GPU machine:
+### Without Docker
+
+The package runs directly too, which is the path for a machine you own:
 
 ```bash
-python remote_gpu_filled.py
+pip install --require-hashes --only-binary=:all: --no-deps \
+    -r scripts/remote-gpu-requirements.lock
+REMOTE_GPU_SHARED_SECRET=... REMOTE_GPU_CONFIG_FILE=docker/remote-gpu/remote-gpu-config.json \
+    python -m worker
 ```
 
-In an interactive Python notebook, upload the same generated file and run:
+torch, torchvision and numpy are deliberately **not** in the lock: they come from
+your CUDA runtime, so the lock can never replace a working build. Python 3.12 on
+Linux x86-64 is required — the lock is a set of cp312 manylinux wheel hashes.
 
-```python
-%run remote_gpu_filled.py
-```
-
-The worker starts an authenticated FastAPI service and, by default, prints a
-temporary HTTPS tunnel URL. Copy that URL into **Settings → Remote GPU** in the
+The worker prints the address it is reachable at. Copy that into **Settings → Remote GPU** in the
 local app. Enter the same shared secret; the Settings API requires it again any
 time the URL host changes so a stale credential cannot be forwarded to a new
 authority. The app checks `/health`; its Diagnosis page reports the connected GPU,
@@ -83,13 +96,28 @@ running an older build.
   app only accepts public HTTPS URLs and sends the secret on every request.
 - Set `API_TOKEN` for the local app before exposing its own LAN
   listener beyond trusted devices.
-- Rebuild and restart the worker after changing `remote_gpu.py`; the build
-  fingerprint turns stale workers into a visible Diagnosis warning.
+- Rebuild and redeploy after changing anything in `worker/`. The build
+  fingerprint is computed from the package's own sources and reported by
+  `/health`, so a stale worker becomes a visible Diagnosis warning instead of
+  behaviour that quietly contradicts your checkout.
 - The worker authenticates before reading a request body, caps each request and
   typed field, and caps its in-memory queue. Keep route-level authentication in
   place even when another proxy also authenticates.
 
 ## Operational notes
+
+Three decisions that are settled, recorded so nobody re-opens them by accident:
+
+- **No idle watchdog.** One was built and verified on hardware (it terminated a
+  pod 62 s after the last authenticated request), then removed as
+  overengineering. Teardown is Start/Stop plus the clean-shutdown hook; the
+  mitigation for a forgotten pod is visibility, not automation.
+- **No notebook path in this repository.** The single-file worker and its
+  injector are gone. Running the package in a notebook would need a flattener
+  that concatenates `worker/*.py` and rewrites the relative imports.
+- **The `colab_a100` generator id keeps its name.** It is written into every
+  remote asset ever made; an alias would be a second name carried forever
+  against a field nobody reads. The labels say "Remote GPU" instead.
 
 Only one large image model is resident on the 80 GB profile at a time. Changing
 the image variant evicts the prior pipeline and can cause a reload or a first-use
@@ -106,8 +134,7 @@ The Remote GPU protocol submits a job, polls a short status endpoint, supports
 idempotent retries, and acknowledges completed results. This keeps long model
 loads and renders from being lost to short proxy request limits.
 
-The complete non-Torch Python dependency closure, cloudflared, the HiDream
-runner, and the project's default model repositories all use reviewed versions,
+The complete non-Torch Python dependency closure, the HiDream runner, and the project's default model repositories all use reviewed versions,
 hashes, or commit revisions. Optional SageAttention is never downloaded by the
 worker; enable it only after provisioning a reviewed build in the CUDA base
 environment. A custom model slot is an explicit operator-controlled trust

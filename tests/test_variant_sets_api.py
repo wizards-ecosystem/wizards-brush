@@ -57,7 +57,7 @@ def _create(client, recipe, **body):
     ({"axes": [{"name": "a", "values": ["x"]}, {"name": "A", "values": ["y"]}]}, "used twice"),
     ({"params": {"sampler": "euler"}}, "'sampler' is not a setting of this operation"),
     ({"params": {"seed": 5}}, "the set supplies it"),
-    ({"params": {"quality": "Ultra"}}, "quality must be one of"),
+    ({"params": {"quality": "Ludicrous"}}, "quality must be one of"),
     ({"params": {"guidance": "loud"}}, "guidance must be a number"),
     ({"params": {"guidance": 99}}, "between"),
     ({"naming": {"template": "{{a}}/../x"}}, "empty folder or file name"),
@@ -331,3 +331,21 @@ def test_item_params_do_not_reveal_where_the_app_lives(client, enqueued, source)
     paths = detail["params"]["image_paths"]
     assert paths and not any(p.startswith("/") for p in paths)
     assert str(ROOT) not in json.dumps(detail)
+
+
+def test_shipped_flagship_recipes_exist(client):
+    names = {r["name"] for r in client.get("/api/variant-recipes").json()}
+    assert "Portrait pack" in names
+    assert "Product cutout" in names
+
+
+def test_preview_eta_appears_after_comparable_history(client, source, monkeypatch):
+    from backend.app import eta
+
+    monkeypatch.setattr(eta, "for_params",
+                        lambda kind, params: eta.Estimate(12.0, "estimated"))
+    preview = client.post("/api/variant-sets/preview", json={"recipe": _edit(source.id)}).json()
+    assert preview["eta"]["seconds"] == 24.0
+    assert preview["eta"]["confidence"] == "estimated"
+    assert preview["eta"]["label"]
+

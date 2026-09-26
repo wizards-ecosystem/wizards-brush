@@ -69,6 +69,7 @@ SEARCH_ALIASES: dict[str, tuple[str, ...]] = {
     "image_colab": ("txt2img", "a100", "remote", "cloud"),
     "img2img": ("image to image", "variation", "remix"),
     "inpaint": ("mask", "fill", "remove object", "replace"),
+    "inpaint_remote": ("masked edit", "region", "wand", "fidelity", "identity lock"),
     "outpaint": ("extend", "expand", "uncrop", "zoom out"),
     "image_edit": ("edit", "instruct", "modify"),
     "control_local": ("controlnet", "canny", "depth", "pose", "scribble"),
@@ -96,6 +97,7 @@ def change_weight(param: str) -> int:
 # Reusable control fragments -------------------------------------------------
 _PROMPT = {"name": "prompt", "label": "Prompt", "type": "textarea", "default": "", "styles": True,
            "tier": "basic"}
+_PROMPT_PHOTO = {**_PROMPT, "hint_key": "prompt_photo"}
 _NEGATIVE = {"name": "negative_prompt", "label": "Negative prompt", "type": "textarea",
              "default": "", "preset_group": "negative", "hint_key": "negative_prompt"}
 _PROMPT_SYNTAX = {
@@ -248,6 +250,27 @@ _MASK_PADDING = {"name": "mask_padding", "label": "Context padding (px)", "type"
 _MASK_BLUR = {"name": "mask_blur", "label": "Blend edge (px)", "type": "slider",
               "default": 4, "min": 0, "max": 64, "step": 1,
               "section": "Advanced", "hint_key": "mask_blur"}
+_FIDELITY = {
+    "name": "input_fidelity", "label": "Input fidelity", "type": "segmented",
+    "default": "standard", "options": ["standard", "high"],
+    "option_labels": {"standard": "Standard", "high": "High (lock identity)"},
+    "hint_key": "input_fidelity", "tier": "basic",
+}
+_BACKGROUND = {
+    "name": "background", "label": "Background", "type": "segmented",
+    "default": "opaque", "options": ["opaque", "transparent"],
+    "hint_key": "background", "tier": "basic",
+}
+_REGION = {
+    "name": "region", "label": "Region", "type": "select", "default": "",
+    "options": ["", "hair", "face", "upper-clothes", "clothes", "mouth", "eyes",
+                "subject_minus_face"],
+    "option_labels": {"": "From prompt / mask", "hair": "Hair", "face": "Face",
+                      "upper-clothes": "Upper clothes", "clothes": "Clothes",
+                      "mouth": "Mouth", "eyes": "Eyes",
+                      "subject_minus_face": "Subject except face"},
+    "hint_key": "inpaint_area", "tier": "basic",
+}
 
 # Post-processing attached to generation jobs (auto-run after the result).
 #
@@ -257,7 +280,7 @@ _MASK_BLUR = {"name": "mask_blur", "label": "Blend edge (px)", "type": "slider",
 # expands a preset into them, "custom" falls through to whatever they are set to,
 # and a job saved before this control existed has no `finish` key at all and so
 # replays from its own flags exactly as it originally ran.
-FINISH_PRESETS = ["none", "faces", "upscale", "faces + upscale", "custom"]
+FINISH_PRESETS = ["none", "photoreal", "faces", "upscale", "faces + upscale", "custom"]
 _FINISH = {"name": "finish", "label": "Finishing", "type": "select", "default": "none",
            "options": FINISH_PRESETS, "hint_key": "finish", "tier": "basic"}
 _CUSTOM_FINISH = {"field": "finish", "equals": "custom"}
@@ -368,7 +391,7 @@ def _img_controls(
     aspect: dict | None = _ASPECT,
 ) -> list:
     main: list[dict] = [
-        _PROMPT, _NEGATIVE, _AUTO_NEG_IMAGE, _quality(),
+        (_PROMPT_PHOTO if group == "a100" else _PROMPT), _NEGATIVE, _AUTO_NEG_IMAGE, _quality(),
         *([aspect] if aspect else []), guidance, _SEED, _BATCH,
     ]
     if group == "local" and _local_loras_usable():
@@ -663,7 +686,8 @@ def _entries() -> list[dict]:
             "endpoint": "/api/generate/image/remote", "output": "image",
             "group": "a100", "device": "a100", "needs_image": False, "needs_remote": True,
             "controls": _img_controls("a100", guidance=_guid_remote_image(), steps=_STEPS_A100,
-                                      extra=[*_remote_model_picker(), *_image_speed("image")]),
+                                      extra=[*_remote_model_picker(), *_image_speed("image"),
+                                             _BACKGROUND]),
         },
         {
             "id": "img2img", "kind": "img2img", "title": "Img2Img (Local)",
@@ -712,11 +736,28 @@ def _entries() -> list[dict]:
             ],
             # No aspect/size controls — the edit output follows the input image.
             "controls": [
-                _PROMPT, _NEGATIVE, _AUTO_NEG_IMAGE, _quality(), _GUID_A100, _SEED,
+                _PROMPT_PHOTO, _NEGATIVE, _AUTO_NEG_IMAGE, _quality(), _GUID_A100, _SEED,
+                _FIDELITY, _BACKGROUND, _REGION,
                 *_image_speed("edit"),
                 *_POST, _PROMPT_SYNTAX, _STEPS_A100, _SEED_MODE,
             ],
         },
+        *([{
+            "id": "inpaint_remote", "kind": "inpaint_remote",
+            "title": "Inpaint (A100)",
+            "subtitle": f"{short_name(settings.qwen_edit_model)} · masked edit, unmasked pixels locked",
+            "endpoint": "/api/generate/image/inpaint-remote", "output": "image",
+            "group": "a100", "device": "a100", "needs_image": True, "needs_mask": True,
+            "needs_remote": True,
+            "image_inputs": [{"name": "image", "label": "Image", "required": True}],
+            "controls": [
+                _PROMPT_PHOTO, _NEGATIVE, _AUTO_NEG_IMAGE, _quality(), _GUID_A100, _SEED,
+                _STRENGTH, _FIDELITY, _BACKGROUND, _REGION, _INPAINT_AREA,
+                *_image_speed("edit"),
+                _MASK_GROW, _MASK_PADDING, _MASK_BLUR,
+                *_POST, _PROMPT_SYNTAX, _STEPS_A100, _SEED_MODE,
+            ],
+        }] if _remote_has("edit_inpaint", True) else []),
         {
             "id": "t2v", "kind": "t2v", "title": "Text → Video",
             "subtitle": f"{short_name(settings.video_model)} · Remote GPU",

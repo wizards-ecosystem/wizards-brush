@@ -3,7 +3,7 @@
 The default ``local`` profile downloads every enabled local checkpoint plus a
 small, general-purpose Z-Image art palette. The ``a100`` profile is useful when
 this checkout itself runs on the accelerator host; the optional Remote GPU
-downloads the same models and adapters lazily through ``remote_gpu.py``.
+downloads the same models and adapters lazily through the ``worker`` package.
 
 Examples:
     make models
