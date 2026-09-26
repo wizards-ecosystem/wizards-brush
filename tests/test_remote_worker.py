@@ -453,3 +453,22 @@ def test_falsy_config_values_still_win_over_the_default():
     ns["_FILE_CONFIG"] = {"preview_every": 0, "fbcache_threshold": 0.0}
     assert ns["cfg"]("preview_every", "2") == "0"
     assert float(ns["cfg"]("fbcache_threshold", "0.05")) == 0.0
+
+
+def test_hidream_is_advertised_only_where_it_can_run():
+    """The published image ships torch 2.8; HiDream-O1 needs 2.10. Advertising
+    the slot on the strength of config alone offered a model whose every job
+    failed in the first second (measured on an A100, 2026-09-26)."""
+    ns = _lift(PIPELINES_SRC, "torch_at_least")
+    at_least = ns["torch_at_least"]
+    assert not at_least("2.8.0+cu128", (2, 10))
+    assert at_least("2.10.0+cu130", (2, 10))
+    assert at_least("2.11.1", (2, 10))
+    assert not at_least("garbage", (2, 10))
+    assert "HIDREAM_MIN_TORCH = (2, 10)" in PIPELINES_SRC
+    assert "if pipelines.hidream_supported():" in API_SRC
+    assert 'features.append("image_hidream")' in API_SRC
+    assert "if config.IMAGE_MODEL_HIDREAM:\n        features.append" not in API_SRC
+    # Refuse before cloning third-party code that could never run here.
+    loader = PIPELINES_SRC[PIPELINES_SRC.index("def _load_hidream"):]
+    assert loader.index("torch_at_least(") < loader.index("_prepare_hidream()")
