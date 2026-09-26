@@ -169,6 +169,15 @@ def test_workflows_pin_actions_and_release_credentials_are_job_scoped():
     assert '--repo "$GITHUB_REPOSITORY"' in release
     assert "subject-path: release/*" in release
 
+    # The worker image goes public only after the approved release, and a
+    # published tag is a build id - never `latest`, never overwritten.
+    job = release[release.index("  worker-image:"):]
+    assert "needs: publish" in job and "push: true" in job
+    image = (ROOT / ".github" / "workflows" / "worker-image.yml").read_text(encoding="utf-8")
+    assert ":latest" not in image
+    assert "already published; leaving it alone" in image
+    assert 'cfg["hunyuan_video_model"] == ""' in image
+
 
 def test_public_defaults_are_local_only_and_license_conservative():
     assert Settings.model_fields["host"].default == "127.0.0.1"

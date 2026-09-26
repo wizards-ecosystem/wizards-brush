@@ -96,3 +96,15 @@ jobs:
           --repo "$GITHUB_REPOSITORY"
           --verify-tag --generate-notes
           --title "The Wizard's Brush $GITHUB_REF_NAME"
+
+  worker-image:
+    # After the approved publish, so nothing goes public before the release does.
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/worker-image.yml
+    with:
+      push: true

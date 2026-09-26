@@ -1,0 +1,126 @@
+name: worker-image
+
+# Builds the Remote GPU worker image and, for a release, publishes it to GHCR
+# tagged with `worker.build_id()`. The app runs that exact tag when RUNPOD_IMAGE
+# is empty, so a user needs a Runpod key, not Docker and a registry.
+#
+# The baked config is the shipped defaults (no .env exists here): model
+# repositories and revision pins, no weights, no secrets. Tags are immutable -
+# a build id that is already published is left alone, never overwritten.
+
+on:
+  workflow_call:
+    inputs:
+      push:
+        type: boolean
+        default: false
+  # Prove the image still builds whenever what goes into it changes. The worker
+  # has no runtime coverage in CI; this at least catches a broken build.
+  pull_request:
+    paths:
+      - "worker/**"
+      - "docker/remote-gpu/**"
+      - "scripts/remote-gpu-requirements.lock"
+      - "scripts/make_remote_gpu_config.py"
+      - ".github/workflows/worker-image.yml"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to GHCR (releases only; leave off to prove the build)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu
+      UV_CACHE_DIR: ${{ github.workspace }}/.runtime/cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.runtime/python
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.venv
+      TMPDIR: ${{ github.workspace }}/.runtime/tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: free runner disk for a ~12 GB image
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+      - name: bootstrap project-owned tools
+        run: bash scripts/bootstrap-tools.sh
+      - name: install project-owned Python
+        run: |
+          source scripts/project-env.sh
+          source scripts/tool-versions.env
+          uv python install "$PYTHON_VERSION"
+          uv sync --only-group test --frozen
+      - name: write the default worker config
+        run: |
+          test ! -e .env
+          make remote-gpu-config
+          # HunyuanVideo's licence argues against shipping it in anything
+          # distributed; the published image must leave that slot empty.
+          .venv/bin/python - <<'EOF'
+          import json
+          cfg = json.load(open("docker/remote-gpu/remote-gpu-config.json"))["config"]
+          assert cfg["hunyuan_video_model"] == "", cfg["hunyuan_video_model"]
+          EOF
+      - name: log in to GHCR
+        if: inputs.push
+        # Before the existence check too: a package that is still private would
+        # otherwise look absent and be rebuilt over its own tag.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: resolve the tag
+        id: tag
+        run: |
+          build=$(.venv/bin/python -c "from worker import build_id; print(build_id())")
+          test -n "$build"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.push }}" = "true" ] && docker manifest inspect "$IMAGE:$build" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE:$build is already published; leaving it alone"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: build
+        if: steps.tag.outputs.exists != 'true'
+        run: >-
+          docker build --platform=linux/amd64
+          -f docker/remote-gpu/Dockerfile
+          --label org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          --label org.opencontainers.image.revision=${{ github.sha }}
+          --label org.opencontainers.image.licenses=Apache-2.0
+          -t "$IMAGE:${{ steps.tag.outputs.build }}" .
+      - name: check the image reports the same build id
+        if: steps.tag.outputs.exists != 'true'
+        run: |
+          got=$(docker run --rm --entrypoint python "$IMAGE:${{ steps.tag.outputs.build }}" \
+                -c "from worker import build_id; print(build_id())")
+          test "$got" = "${{ steps.tag.outputs.build }}"
+      - name: push
+        id: push
+        if: inputs.push && steps.tag.outputs.exists != 'true'
+        run: |
+          docker push "$IMAGE:${{ steps.tag.outputs.build }}"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:${{ steps.tag.outputs.build }}")
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
+      - name: attest the image
+        if: inputs.push && steps.tag.outputs.exists != 'true' && github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
