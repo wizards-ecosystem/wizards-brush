@@ -269,3 +269,10 @@ on a file inside it. The retained decisions and evidence live in
   1024² takes ~20 s warm end-to-end; a cold pod is ~15 min, two-thirds of it re-downloading
   weights. `quality` sets the step count **and** the resolution and overrides an explicit
   `steps`, so a sweep over `steps` alone returns byte-identical images.
+- **Measured again 2026-09-26 on the published image:** Start → worker answering in 2 min 9 s
+  (the 11.9 GB pull), so the ~58 GB Qwen download is now most of a cold start. The same run
+  found **HiDream-O1 needs torch >= 2.10** while the image ships 2.8.0: the worker advertises
+  `image_hidream` only through `pipelines.hidream_supported()`, never on config alone.
+- **`build_id()` hashes `worker/*.py` only.** A change to the Dockerfile or the dependency lock
+  keeps the tag, and `worker-image.yml` never overwrites a published tag - so an image-only
+  change is not republished until something in `worker/` changes too.
