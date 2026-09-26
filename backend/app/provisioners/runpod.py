@@ -35,6 +35,18 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 NAME_PREFIX = "wizards-brush"
 MARKER_ENV = "WIZARDS_BRUSH_MANAGED"
 
+# Each release publishes the worker image here, tagged with `worker.build_id()`.
+# With RUNPOD_IMAGE unset the app runs the tag that matches its own worker
+# sources, so the pod and the checkout cannot disagree about the code.
+REGISTRY = "ghcr.io"
+PUBLISHED_REPO = "wizards-ecosystem/wizards-brush-remote-gpu"
+_MANIFEST_TYPES = ", ".join((
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+))
+
 
 class RunpodProvisioner:
     id = "runpod"
@@ -87,20 +99,62 @@ class RunpodProvisioner:
             raise ProvisionerError("Runpod returned an implausibly large response")
         return response.json()
 
+    def _image(self) -> tuple[str, bool]:
+        """The image to run, and whether it is the published default."""
+        custom = (settings.runpod_image or "").strip()
+        if custom:
+            return custom, False
+        from ..remote_gpu_client import local_build_id
+
+        build = local_build_id()
+        if not build:
+            raise ProvisionerError(
+                "Cannot tell which worker image to run: the worker/ sources are missing. "
+                "Set RUNPOD_IMAGE to an image you built. See docs/runpod.md."
+            )
+        return f"{REGISTRY}/{PUBLISHED_REPO}:{build}", True
+
+    def _check_published(self, image: str) -> None:
+        """Refuse before creating a pod that could never pull its image.
+
+        A pod whose image does not exist sits in "pulling" and bills until
+        someone stops it. The usual cause is a worker/ edited locally, which
+        changes the build id to one no release ever published.
+        """
+        tag = image.rsplit(":", 1)[1]
+        try:
+            with httpx.Client(timeout=TIMEOUT) as client:
+                token = client.get(f"https://{REGISTRY}/token",
+                                   params={"scope": f"repository:{PUBLISHED_REPO}:pull"})
+                bearer = (token.json().get("token", "")
+                          if token.status_code == 200 else "")
+                response = client.head(
+                    f"https://{REGISTRY}/v2/{PUBLISHED_REPO}/manifests/{tag}",
+                    headers={"Authorization": f"Bearer {bearer}", "Accept": _MANIFEST_TYPES},
+                )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProvisionerError(
+                f"Could not check that the worker image {image} is published ({exc}). "
+                "Nothing was created; try again."
+            ) from exc
+        if response.status_code != 200:
+            raise ProvisionerError(
+                f"No published worker image matches this checkout (build {tag}). That "
+                "usually means worker/ was changed locally. Nothing was created. Build and "
+                "push your own with `make remote-gpu-image` and set RUNPOD_IMAGE. "
+                "See docs/runpod.md."
+            )
+
     def _base_url(self, pod_id: str) -> str:
         return f"https://{pod_id}-{settings.runpod_worker_port}.proxy.runpod.net"
 
     # ---- protocol ---------------------------------------------------------
     def configured(self) -> bool:
-        return bool((settings.runpod_api_key or "").strip()
-                    and (settings.runpod_image or "").strip())
+        return bool((settings.runpod_api_key or "").strip())
 
     def start(self) -> Session:
-        if not (settings.runpod_image or "").strip():
-            raise ProvisionerError(
-                "RUNPOD_IMAGE is not set. Build and push the worker image "
-                "(`make remote-gpu-image`) and name it in .env. See docs/runpod.md."
-            )
+        self._key()
+        image, published = self._image()
         existing = self.adopt()
         if existing is not None:
             # Two pods is the expensive mistake: refuse rather than quietly
@@ -108,10 +162,12 @@ class RunpodProvisioner:
             raise ProvisionerError(
                 f"A Runpod session is already running ({existing.id}). Stop it first."
             )
+        if published:
+            self._check_published(image)
         port = settings.runpod_worker_port
         body: dict[str, Any] = {
             "name": f"{NAME_PREFIX}-{uuid.uuid4().hex[:8]}",
-            "image": settings.runpod_image.strip(),
+            "image": image,
             "cloud": (settings.runpod_cloud or "SECURE").strip().upper(),
             "gpu": {"id": settings.runpod_gpu_type.strip(), "count": 1},
             "disk": int(settings.runpod_container_disk_gb),

@@ -177,13 +177,52 @@ def test_auth_failures_say_which_one_it_is(runpod_env, monkeypatch, code, needle
         provisioners.get_provisioner().start()
 
 
-def test_missing_image_refuses_before_spending(runpod_env, monkeypatch):
+def _published_handler(manifest_status: int, seen: dict):
+    """GHCR answers the manifest check; Runpod answers the create."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ghcr.io":
+            seen.setdefault("ghcr", []).append(str(request.url))
+            if request.url.path == "/token":
+                return httpx.Response(200, json={"token": "anon"})
+            return httpx.Response(manifest_status)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "pod-abc"})
+    return handler
+
+
+def test_no_image_setting_runs_the_published_image_for_this_build(runpod_env, monkeypatch):
+    from backend.app.remote_gpu_client import local_build_id
+
     monkeypatch.setattr(settings, "runpod_image", "")
-    def handler(request):
-        raise AssertionError("must not reach the API without an image")
-    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    seen: dict = {}
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(_published_handler(200, seen)))
+    provisioner = provisioners.get_provisioner()
+    assert provisioner.configured()
+    provisioner.start()
+    build = local_build_id()
+    assert build
+    assert seen["body"]["image"] == f"ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu:{build}"
+    assert any(url.endswith(f"/manifests/{build}") for url in seen["ghcr"])
+
+
+def test_an_unpublished_build_refuses_before_spending(runpod_env, monkeypatch):
+    """An edited worker/ has a build id no release published: that pod could
+    never pull its image, and would bill while it tried."""
+    monkeypatch.setattr(settings, "runpod_image", "")
+    seen: dict = {}
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(_published_handler(404, seen)))
     with pytest.raises(ProvisionerError, match="RUNPOD_IMAGE"):
         provisioners.get_provisioner().start()
+    assert "body" not in seen
+
+
+def test_a_custom_image_skips_the_published_check(runpod_env, monkeypatch):
+    """A private registry would fail an anonymous check it has no need to pass."""
+    seen: dict = {}
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(_published_handler(404, seen)))
+    provisioners.get_provisioner().start()
+    assert "ghcr" not in seen
+    assert seen["body"]["image"] == "example.invalid/wb-worker:abc123"
 
 
 # ---- stop and adopt --------------------------------------------------------

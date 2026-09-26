@@ -188,7 +188,8 @@ class Settings(BaseSettings):
     # This key can create billable resources. It never leaves this machine and is
     # never sent to the worker; only the shared secret goes over the wire.
     runpod_api_key: str = Field(default="", alias="RUNPOD_API_KEY")
-    # The worker image to run. Build and push it with `make remote-gpu-image`.
+    # Optional: a worker image of your own. Empty runs the image each release
+    # publishes to GHCR, tagged with this checkout's worker build id.
     runpod_image: str = Field(default="", alias="RUNPOD_IMAGE")
     runpod_gpu_type: str = Field(default="NVIDIA A100-SXM4-80GB", alias="RUNPOD_GPU_TYPE")
     runpod_cloud: str = Field(default="SECURE", alias="RUNPOD_CLOUD")
