@@ -177,12 +177,14 @@ def test_auth_failures_say_which_one_it_is(runpod_env, monkeypatch, code, needle
         provisioners.get_provisioner().start()
 
 
-def _published_handler(manifest_status: int, seen: dict):
+def _published_handler(manifest_status: int, seen: dict, token_status: int = 200):
     """GHCR answers the manifest check; Runpod answers the create."""
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "ghcr.io":
             seen.setdefault("ghcr", []).append(str(request.url))
             if request.url.path == "/token":
+                if token_status != 200:
+                    return httpx.Response(token_status, json={"errors": []})
                 return httpx.Response(200, json={"token": "anon"})
             return httpx.Response(manifest_status)
         seen["body"] = json.loads(request.content)
@@ -213,6 +215,21 @@ def test_an_unpublished_build_refuses_before_spending(runpod_env, monkeypatch):
     monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(_published_handler(404, seen)))
     with pytest.raises(ProvisionerError, match="RUNPOD_IMAGE"):
         provisioners.get_provisioner().start()
+    assert "body" not in seen
+
+
+def test_a_private_or_missing_package_says_so_rather_than_retry(runpod_env, monkeypatch):
+    """GHCR refuses the anonymous token outright for a package that is private
+    or absent. That once surfaced as an illegal empty "Bearer " header and a
+    misleading "try again"; it is the same answer as a missing tag."""
+    monkeypatch.setattr(settings, "runpod_image", "")
+    seen: dict = {}
+    monkeypatch.setattr(runpod_mod.httpx, "Client",
+                        _transport(_published_handler(200, seen, token_status=401)))
+    with pytest.raises(ProvisionerError) as excinfo:
+        provisioners.get_provisioner().start()
+    assert "No public worker image" in str(excinfo.value)
+    assert "try again" not in str(excinfo.value)
     assert "body" not in seen
 
 

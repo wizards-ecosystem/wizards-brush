@@ -128,19 +128,22 @@ class RunpodProvisioner:
                                    params={"scope": f"repository:{PUBLISHED_REPO}:pull"})
                 bearer = (token.json().get("token", "")
                           if token.status_code == 200 else "")
-                response = client.head(
+                # No anonymous token is GHCR's answer for a package that does
+                # not exist or is not public: either way a pod could not pull it.
+                status = token.status_code if not bearer else client.head(
                     f"https://{REGISTRY}/v2/{PUBLISHED_REPO}/manifests/{tag}",
                     headers={"Authorization": f"Bearer {bearer}", "Accept": _MANIFEST_TYPES},
-                )
+                ).status_code
         except (httpx.HTTPError, ValueError) as exc:
             raise ProvisionerError(
                 f"Could not check that the worker image {image} is published ({exc}). "
                 "Nothing was created; try again."
             ) from exc
-        if response.status_code != 200:
+        if status != 200:
             raise ProvisionerError(
-                f"No published worker image matches this checkout (build {tag}). That "
-                "usually means worker/ was changed locally. Nothing was created. Build and "
+                f"No public worker image matches this checkout (build {tag}). That "
+                "usually means worker/ was changed locally, or the release's image has "
+                "not been made public yet. Nothing was created. Build and "
                 "push your own with `make remote-gpu-image` and set RUNPOD_IMAGE. "
                 "See docs/runpod.md."
             )
