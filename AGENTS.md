@@ -16,7 +16,7 @@
 - `make typecheck` - mypy (pydantic plugin; **includes `worker/`** - it is the most
   failure-prone code here and has no runtime coverage in CI, so the type checker is the
   only thing standing between a refactor and a broken GPU deploy)
-- frontend: `source scripts/project-env.sh && cd frontend && npm run lint && npm run test && npm run build`
+- frontend: `source scripts/project-env.sh && cd frontend && npm run lint && npm run format:check && npm run test && npm run build`
   (build runs strict `tsc -b`)
 - `make remote-gpu-config` / `make remote-gpu-image` - the container path: emit the
   **non-secret** half of the worker config (model slots, reviewed revisions, build id) and

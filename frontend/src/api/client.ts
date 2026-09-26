@@ -135,8 +135,7 @@ export const api = {
   system: () => get("/api/system").then((r) => j<SystemStatus>(r)),
   backends: () => get("/api/backends").then((r) => j<BackendReport>(r)),
   remoteSession: () => get("/api/remote-gpu/session").then((r) => j<RemoteSession>(r)),
-  startRemoteSession: () =>
-    postJson("/api/remote-gpu/session", {}).then((r) => j<RemoteSession>(r)),
+  startRemoteSession: () => postJson("/api/remote-gpu/session", {}).then((r) => j<RemoteSession>(r)),
   stopRemoteSession: () => del("/api/remote-gpu/session").then((r) => j<RemoteSession>(r)),
   models: () => get("/api/models").then((r) => j<GeneratorSpec[]>(r)),
   presets: () => get("/api/presets").then((r) => j<Presets>(r)),

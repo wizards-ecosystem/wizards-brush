@@ -45,8 +45,12 @@ describe("RemoteGpuControl", () => {
   it("keeps the running spend on screen", async () => {
     vi.spyOn(api, "remoteSession").mockResolvedValue(
       session({
-        running: true, state: "ready", worker_connected: true,
-        gpu: "NVIDIA A100-SXM4-80GB", elapsed_s: 1500, cost_estimate_usd: 0.58,
+        running: true,
+        state: "ready",
+        worker_connected: true,
+        gpu: "NVIDIA A100-SXM4-80GB",
+        elapsed_s: 1500,
+        cost_estimate_usd: 0.58,
       }),
     );
     render(<RemoteGpuControl />);

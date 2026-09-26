@@ -87,8 +87,7 @@ export function RemoteGpuControl() {
   };
 
   const minutes = Math.floor(session.elapsed_s / 60);
-  const cost =
-    session.cost_estimate_usd !== null ? `~$${session.cost_estimate_usd.toFixed(2)}` : null;
+  const cost = session.cost_estimate_usd !== null ? `~$${session.cost_estimate_usd.toFixed(2)}` : null;
   const rate = session.hourly_usd !== null ? `$${session.hourly_usd.toFixed(2)}/hr` : null;
 
   return (
@@ -124,11 +123,7 @@ export function RemoteGpuControl() {
           {cost ? ` · ${cost} so far` : ""}
         </div>
       ) : (
-        rate && (
-          <div className="mt-2 text-xs opacity-70">
-            Billed per second while running, about {rate}.
-          </div>
-        )
+        rate && <div className="mt-2 text-xs opacity-70">Billed per second while running, about {rate}.</div>
       )}
     </div>
   );

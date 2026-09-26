@@ -38,7 +38,13 @@ export function ProgressBar({ job, preview }: { job: Job; preview?: string }) {
               name={failed ? "alert" : done ? "check" : job.status === "running" ? "make" : "queue"}
               size={14}
               className={
-                failed ? "text-danger" : done ? "text-ok" : lane === "Remote GPU" ? "text-accent2" : "text-accent"
+                failed
+                  ? "text-danger"
+                  : done
+                    ? "text-ok"
+                    : lane === "Remote GPU"
+                      ? "text-accent2"
+                      : "text-accent"
               }
             />
             <span className="technical shrink-0 text-[9px] uppercase tracking-wide text-muted">{lane}</span>
