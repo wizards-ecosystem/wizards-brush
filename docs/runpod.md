@@ -189,6 +189,24 @@ So **click to first image is ~15 minutes cold**, and roughly two-thirds of it is
 re-downloading what the last session already had. That is what a network volume
 buys back, and the only thing it buys.
 
+## Measured, 2026-09-26: the published image
+
+Same card and rate, started from the app's **Start GPU** with `RUNPOD_IMAGE`
+empty, so the pod pulled the release's published image
+(`…/wizards-brush-remote-gpu:af61b4ac6657`) and reported that exact build.
+
+| Phase | Time |
+|---|---|
+| Start → worker answering (11.9 GB image pull + boot) | **2 min 9 s** |
+| First Qwen-Image job: ~58 GB download, load, 2 images at 50 steps, 768×1024 | 303 s |
+| Qwen Lightning, 2 images at 4 steps, 768×1024 | **11–13 s** |
+| Whole session, start to terminate | 9 min 35 s, **$0.25** |
+
+The image pull that took ~7 minutes on 2026-09-20 took about two once the
+redundant CUDA base was gone. The model download is now most of a cold start.
+The same run found that HiDream-O1 needs torch 2.10 while the image ships 2.8,
+so the worker no longer advertises that slot unless its torch can run it.
+
 Note `quality` sets the step count *and* the resolution on this lane, and it
 overrides an explicit `steps` in the job params. A sweep that varies `steps`
 alone returns byte-identical images.
@@ -336,6 +354,13 @@ tell you when the worker is behind your checkout.
 **Zero GPU pods on restart** ("not enough free GPUs on the host machine"). You stopped a
 pod and someone else rented the card; with no volume, the container disk is gone too. Either
 wait, or terminate and redeploy — and use a network volume so the data does not care.
+
+**HiDream is not in the model picker.** HiDream-O1's runner needs torch 2.10 or
+newer, and the published image ships 2.8.0 (cu128), so the worker leaves the
+slot out of `/health` and the app does not offer it. To use it, build your own
+image with a newer torch through the `TORCH_VERSION`, `TORCHVISION_VERSION` and
+`TORCH_INDEX_URL` build args, as in the Blackwell example. That combination has
+not been tested against the pinned dependency lock.
 
 **LTX-2 refuses with a 507.** Its checkpoints are 150–200 GB and `_load_ltx` checks free
 space before starting a download that cannot finish. Unlike a fixed-disk notebook, here

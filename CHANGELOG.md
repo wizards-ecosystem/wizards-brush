@@ -6,7 +6,13 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- The Remote GPU worker advertises HiDream-O1 only when its torch can run it
+  (2.10 or newer). The published image ships 2.8, so the app no longer offers
+  a model whose every job failed within a second.
+- Start GPU with a private or missing published image says there is no public
+  image for the build, instead of "could not check ... try again".
 
 ## [0.1.5] - 2026-09-26
 

@@ -429,7 +429,7 @@ def health(x_gen_secret: str | None = Header(default=None)):
         features.append("ltx")
     if config.IMAGE_MODEL_ALT:
         features.append("image_alt")
-    if config.IMAGE_MODEL_HIDREAM:
+    if pipelines.hidream_supported():
         features.append("image_hidream")
     loaded_models = []
     if pipelines._PIPES.get("image") is not None:

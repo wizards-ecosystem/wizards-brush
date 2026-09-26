@@ -190,8 +190,8 @@ def main() -> int:
         if "hidream" in configured and "image_hidream" not in features:
             configured.remove("hidream")
             print(
-                "note: configured HiDream A100 slot is not live; "
-                "run the regenerated Remote GPU runner first"
+                "note: the worker does not advertise HiDream (empty slot, or a "
+                "torch older than it needs); skipping it"
             )
         plan = [(variant, False) for variant in configured]
         if "speed_image" in features and "quality" in configured:
