@@ -1,0 +1,9 @@
+# The Wizard's Brush
+
+> A local image and video studio with local inference and an opt-in Remote GPU lane.
+
+## Documentation
+
+- [README](https://github.com/wizards-ecosystem/wizards-brush/blob/main/README.md)
+- [API guide](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/api.md)
+- [Working standards](https://github.com/wizards-ecosystem/wizards-brush/blob/main/AGENTS.md)
