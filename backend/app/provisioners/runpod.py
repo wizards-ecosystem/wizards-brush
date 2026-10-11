@@ -9,13 +9,14 @@ reaches the rest of the app, which only ever learns a base URL.
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from typing import Any
 
 import httpx
 
-from .. import log
+from .. import log, worker_config
 from ..config import settings
 from .base import ERROR, READY, STARTING, STOPPING, Provisioner, ProvisionerError, Session
 
@@ -168,14 +169,29 @@ class RunpodProvisioner:
         if published:
             self._check_published(image)
         port = settings.runpod_worker_port
+        gpu: dict[str, Any] = {"id": settings.runpod_gpu_type.strip(), "count": 1}
+        min_cuda = (settings.runpod_min_cuda or "").strip()
+        if min_cuda:
+            # Runpod wants major.minor; a bare major is a 422 after the request
+            # is already shaped, so refuse here, before anything is created.
+            if not re.fullmatch(r"\d+\.\d+", min_cuda):
+                raise ProvisionerError(
+                    f"RUNPOD_MIN_CUDA must look like 12.8, not {min_cuda!r}. Nothing was created."
+                )
+            gpu["minCudaVersion"] = min_cuda
         body: dict[str, Any] = {
             "name": f"{NAME_PREFIX}-{uuid.uuid4().hex[:8]}",
             "image": image,
             "cloud": (settings.runpod_cloud or "SECURE").strip().upper(),
-            "gpu": {"id": settings.runpod_gpu_type.strip(), "count": 1},
+            "gpu": gpu,
             "disk": int(settings.runpod_container_disk_gb),
             "ports": [f"{port}/http"],
             "env": {
+                # This install's model slots and knobs. The published image bakes
+                # the shipped defaults; the worker reads environment first, so
+                # one image serves every configuration and a `.env` that names
+                # an alternate model actually produces that model's picker.
+                **worker_config.deploy_env(),
                 # The worker authenticates every request with this; it is the
                 # only thing between a public proxy URL and a rented GPU.
                 "REMOTE_GPU_SHARED_SECRET": settings.remote_gpu_shared_secret or "",

@@ -24,25 +24,45 @@ config.HIDREAM_CODE = runtime.TOOLS / "hidream-o1"
 config.HIDREAM_CODE_REV = "2c2d29ff729e48f33e41f49edfdbd81d5ac103b4"
 
 
-# HiDream-O1's official runner needs a newer torch than the published image
-# ships. Advertising the slot anyway meant the UI offered a model whose every
-# job failed in the first second.
+# HiDream-O1's official runner is pinned to one commit and reaches into
+# transformers' internals, so it runs on a window of the stack, not a floor.
+# Advertising the slot outside that window meant the UI offered a model whose
+# every job failed in the first second - measured twice: torch 2.8 was too old
+# (2026-09-26), and transformers 5 removed the "default" rotary-embedding init
+# the runner looks up (`KeyError: 'default'`, 2026-10-11).
 HIDREAM_MIN_TORCH = (2, 10)
+HIDREAM_MAX_TRANSFORMERS = (4, 99)
+
+
+def _version_tuple(version: str) -> tuple[int, int] | None:
+    """Major and minor of a version string such as "2.8.0+cu128"; None if unreadable."""
+    try:
+        major, minor = (int(part) for part in version.split("+", 1)[0].split(".")[:2])
+    except ValueError:
+        return None
+    return major, minor
 
 
 def torch_at_least(version: str, minimum: tuple[int, int]) -> bool:
     """`version` is torch.__version__, e.g. "2.8.0+cu128"."""
-    try:
-        parts = tuple(int(part) for part in version.split("+", 1)[0].split(".")[:2])
-    except ValueError:
-        return False
-    return parts >= minimum
+    parts = _version_tuple(version)
+    return parts is not None and parts >= minimum
+
+
+def hidream_stack_ok(torch_version: str, transformers_version: str) -> bool:
+    """Whether the pinned HiDream runner can run on this torch and transformers."""
+    parts = _version_tuple(transformers_version)
+    return (torch_at_least(torch_version, HIDREAM_MIN_TORCH)
+            and parts is not None and parts <= HIDREAM_MAX_TRANSFORMERS)
 
 
 def hidream_supported() -> bool:
     """Whether this worker can actually serve the HiDream slot."""
-    return bool(config.IMAGE_MODEL_HIDREAM) and torch_at_least(torch.__version__,
-                                                               HIDREAM_MIN_TORCH)
+    if not config.IMAGE_MODEL_HIDREAM:
+        return False
+    import transformers
+
+    return hidream_stack_ok(str(torch.__version__), str(transformers.__version__))
 
 
 def _prepare_hidream() -> None:
@@ -129,6 +149,47 @@ def free_memory() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
+
+
+def vram() -> dict[str, float]:
+    """What the card holds right now, in GiB (torch's own unit). Zeros without CUDA.
+
+    `used` is the device's view - every process plus the CUDA context - while
+    `allocated` and `reserved` are this process's live tensors and its cached
+    pool. The gap between `used` and the weights that should be resident is the
+    number that explains an OOM, which is why /health reports it and every load
+    step logs it.
+    """
+    if not torch.cuda.is_available():
+        return {"total_gb": 0.0, "used_gb": 0.0, "allocated_gb": 0.0, "reserved_gb": 0.0}
+    free, total = torch.cuda.mem_get_info()
+    gib = 1024 ** 3
+    return {
+        "total_gb": round(total / gib, 1),
+        "used_gb": round((total - free) / gib, 1),
+        "allocated_gb": round(torch.cuda.memory_allocated() / gib, 1),
+        "reserved_gb": round(torch.cuda.memory_reserved() / gib, 1),
+    }
+
+
+def _report_vram(stage: str) -> None:
+    v = vram()
+    print(f"[remote-gpu] vram after {stage}: {v['allocated_gb']} GiB allocated, "
+          f"{v['reserved_gb']} GiB reserved, {v['used_gb']}/{v['total_gb']} GiB in use",
+          flush=True)
+
+
+def versions() -> dict[str, str]:
+    """The stack a job actually runs on, for /health and the logs."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    out: dict[str, str] = {"torch": str(torch.__version__)}
+    for name in ("diffusers", "transformers", "peft"):
+        try:
+            out[name] = version(name)
+        except PackageNotFoundError:
+            out[name] = ""
+    return out
 
 
 # ---- optional speedups (never fatal) ---------------------------------------
@@ -313,6 +374,14 @@ def _evict_all() -> None:
     _PIPES.update(image=None, image_variant=None, edit=None, edit_inpaint=None,
                   video=None, video_mode=None, video_engine=None)
     free_memory()
+    _report_vram("evict")
+    left = vram()["allocated_gb"]
+    if left > 1.0:
+        # Say so now, by name. Without this the symptom is an OOM on the NEXT
+        # model that is impossible to read back to its cause.
+        print(f"[remote-gpu] !! {left} GiB still allocated after evicting every pipeline: "
+              "something else holds a reference to the old model, and the next load "
+              "has that much less room.", flush=True)
 
 
 def _tune_scheduler(pipe):
@@ -398,10 +467,13 @@ def _load_hidream(model_id: str):
     # Fetch the pinned runner here rather than at startup: it is a git clone of
     # a third-party repository, and a worker whose HiDream slot is empty (or
     # which never serves that variant) has no business doing it at all.
-    # Refuse before the clone, not after it: the version never changes at run time.
-    if not torch_at_least(torch.__version__, HIDREAM_MIN_TORCH):
+    # Refuse before the clone, not after it: the versions never change at run time.
+    import transformers
+
+    if not hidream_stack_ok(str(torch.__version__), str(transformers.__version__)):
         raise RuntimeError(
-            f"HiDream-O1 requires torch >=2.10; this runtime has {torch.__version__}")
+            "HiDream-O1's pinned runner needs torch >= 2.10 and transformers < 5; this "
+            f"runtime has torch {torch.__version__} and transformers {transformers.__version__}")
     _prepare_hidream()
     if str(config.HIDREAM_CODE) not in sys.path:
         sys.path.insert(0, str(config.HIDREAM_CODE))
@@ -416,7 +488,7 @@ def _load_hidream(model_id: str):
         revision=config.model_revision(model_id))
     custom_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,      # transformers 5 name; `torch_dtype` is deprecated there
         device_map="cuda",
         token=config.HF_TOKEN or None,
         cache_dir=str(runtime.HF_CACHE),
@@ -482,6 +554,7 @@ def get_image_pipe(variant: str = "quality"):
         _PIPES["image"] = pipe
         _PIPES["image_variant"] = variant
         print(f"[remote-gpu] image pipeline ready ({variant}).")
+        _report_vram("image pipeline ready")
     return _PIPES["image"]
 
 
@@ -502,13 +575,13 @@ def get_edit_pipe():
             revision=config.model_revision(config.EDIT_MODEL),
         )
         pipe.to("cuda") if not config.OFFLOAD else pipe.enable_model_cpu_offload()
+        _report_vram("edit model on device")
         _PIPES["edit_speed"] = _try_lightning(pipe, config.EDIT_LIGHTNING_LORA, "edit")
+        _report_vram("edit lightning LoRA")
         _try_fbcache(pipe)
         _try_sage(pipe)
         _PIPES["edit"] = pipe
         print("[remote-gpu] edit pipeline ready.")
-    if _PIPES.get("edit_inpaint") is None:
-        _ensure_edit_inpaint(_PIPES["edit"])
     return _PIPES["edit"]
 
 
@@ -522,9 +595,20 @@ def _ensure_edit_inpaint(plus_pipe) -> None:
     """Share the loaded 2511 modules with the masked inpaint pipeline.
 
     Plus restyle and masked inpaint are the same checkpoint. Building a second
-    resident copy would evict the first. `from_pipe` (or a components copy) keeps
-    one transformer. False means this Diffusers build cannot inpaint; /inpaint
-    then 409s rather than silently calling Plus.
+    resident copy would evict the first, so the inpaint pipeline is constructed
+    from the Plus pipeline's own component objects - the same transformer, text
+    encoder and VAE, no new tensors.
+
+    Never `from_pipe` here. Measured on an A100, 2026-10-11: `from_pipe` without
+    an explicit dtype resolves one of float32 and finishes with
+    `new_pipeline.to(dtype=float32)`, which converts the SHARED bf16 modules in
+    place - a 54 GiB edit model on its way to 108 GiB. It ran out of memory
+    24 GiB in, every edit then failed in the text encoder, and nothing in the
+    error named the inpaint pipeline that caused it. Direct construction has no
+    cast to get wrong.
+
+    False means this Diffusers build cannot inpaint; /inpaint then 409s rather
+    than silently calling Plus.
     """
     if _PIPES.get("edit_inpaint") is not None:
         return
@@ -533,20 +617,31 @@ def _ensure_edit_inpaint(plus_pipe) -> None:
         _PIPES["edit_inpaint"] = False
         print("[remote-gpu] QwenImageEditInpaintPipeline is not in this Diffusers build.")
         return
+    import inspect
+
+    wanted = inspect.signature(cls.__init__).parameters
+    components = {name: module for name, module in plus_pipe.components.items() if name in wanted}
+    failure = ""
     try:
-        if hasattr(cls, "from_pipe"):
-            inpaint = cls.from_pipe(plus_pipe)
-        else:
-            inpaint = cls(**plus_pipe.components)
-        _PIPES["edit_inpaint"] = inpaint
+        _PIPES["edit_inpaint"] = cls(**components)
         print("[remote-gpu] edit inpaint pipeline ready (shared 2511 weights).")
     except Exception as exc:  # noqa: BLE001 — feature flag must not kill /edit
         _PIPES["edit_inpaint"] = False
-        print(f"[remote-gpu] edit inpaint unavailable: {exc}")
+        failure = str(exc)
+    if failure:
+        # Outside the except: while `exc` is alive its traceback pins every
+        # local of the failed constructor, and the memory stays allocated.
+        free_memory()
+        print(f"[remote-gpu] edit inpaint unavailable: {failure}")
+    _report_vram("edit inpaint pipeline")
 
 
 def get_edit_inpaint_pipe():
     get_edit_pipe()
+    if _PIPES.get("edit_inpaint") is None:
+        # Built on first use, not on edit load: an edit job pays nothing for a
+        # pipeline it does not call.
+        _ensure_edit_inpaint(_PIPES["edit"])
     pipe = _PIPES.get("edit_inpaint")
     if pipe in (None, False):
         raise HTTPException(
@@ -684,6 +779,7 @@ def get_video_pipe(mode: str, engine: str = "wan"):
     _try_sage(pipe)
     _PIPES.update(video=pipe, video_mode=mode, video_engine=engine)
     print("[remote-gpu] video pipeline ready.")
+    _report_vram("video pipeline ready")
     return pipe
 
 

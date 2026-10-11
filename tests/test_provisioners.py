@@ -113,17 +113,63 @@ def test_start_sends_the_worker_image_and_never_the_api_key(runpod_env, monkeypa
     assert seen["auth"] == "Bearer rpa_SECRETKEYVALUE"
     body = seen["body"]
     assert body["image"] == "example.invalid/wb-worker:abc123"
-    assert body["gpu"] == {"id": "NVIDIA A100-SXM4-80GB", "count": 1}
+    # The CUDA floor travels with the request: the image's torch is a cu128
+    # build, and a pod placed on an older host bills while every job fails.
+    assert body["gpu"] == {"id": "NVIDIA A100-SXM4-80GB", "count": 1, "minCudaVersion": "12.8"}
     assert body["ports"] == ["8000/http"]
     # The worker needs the shared secret to authenticate callers. It has no use
     # for the provisioning key, and a rented container is the last place to put
     # a credential that can create more rented containers.
     assert body["env"]["REMOTE_GPU_SHARED_SECRET"] == "a-real-shared-secret"
     assert "rpa_SECRETKEYVALUE" not in json.dumps(body)
+    # This install's model slots ride along, under the names the worker's cfg()
+    # reads from the environment. The published image bakes only the shipped
+    # defaults, so without these a .env naming an alternate model configured
+    # nothing the pod ever saw.
+    assert body["env"]["A100_IMAGE_MODEL"] == settings.a100_image_model
+    assert body["env"]["QWEN_EDIT_MODEL"] == settings.qwen_edit_model
+    assert body["env"]["A100_IMAGE_MODEL_ALT"] == settings.a100_image_model_alt
+    assert body["env"]["PREVIEW_EVERY"] == str(settings.preview_every)
+    assert "MODEL_REVISIONS" not in body["env"]          # a mapping; stays in the baked file
+    assert all(isinstance(v, str) for v in body["env"].values())
     assert session.id == "pod-abc" and session.hourly_usd == 1.39
     assert session.base_url == "https://pod-abc-8000.proxy.runpod.net"
     # Recorded before returning, so a crash here still leaves it stoppable.
     assert SessionStore().load().id == "pod-abc"
+
+
+@pytest.mark.parametrize("floor,expected", [
+    ("", None),                 # an image built for another CUDA line: no constraint
+    (" 13.0 ", "13.0"),
+])
+def test_cuda_floor_is_optional_and_trimmed(runpod_env, monkeypatch, floor, expected):
+    seen: dict = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"id": "pod-abc"})
+
+    monkeypatch.setattr(settings, "runpod_min_cuda", floor)
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    provisioners.get_provisioner().start()
+    assert seen["body"]["gpu"].get("minCudaVersion") == expected
+
+
+def test_a_malformed_cuda_floor_refuses_before_creating_anything(runpod_env, monkeypatch):
+    """Runpod wants major.minor and answers 422 otherwise - after the request is
+    shaped and a retry is one click away. Refuse here, naming the setting."""
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(201, json={"id": "pod-abc"})
+
+    monkeypatch.setattr(settings, "runpod_min_cuda", "12")
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    with pytest.raises(ProvisionerError, match="RUNPOD_MIN_CUDA"):
+        provisioners.get_provisioner().start()
+    assert calls["n"] == 0
+    assert SessionStore().load() is None
 
 
 def test_a_second_start_is_refused_instead_of_doubling_the_bill(runpod_env, monkeypatch):

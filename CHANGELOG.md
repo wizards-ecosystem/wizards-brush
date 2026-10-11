@@ -8,6 +8,47 @@ contributors know which user-facing changes need release notes.
 
 No changes yet.
 
+## [0.1.7] - 2026-10-11
+
+### Fixed
+
+- Remote image edits no longer fail with CUDA out of memory. The masked-inpaint
+  pipeline that shares the edit model's weights was built with
+  `DiffusionPipeline.from_pipe`, which casts the shared modules to float32 when
+  no dtype is given - a 54 GiB model on its way to 108 GiB, failing 24 GiB in
+  and taking every edit with it. It is now constructed from the loaded
+  components directly, and only when an inpaint job asks for it.
+- The worker's dependency closure is resolved from the app's own lock
+  (diffusers 0.40, transformers 5.16, torch 2.11) and a test keeps the two from
+  drifting again. The image ran diffusers 0.36, which does not know
+  Qwen-Image-Edit-2511's `zero_cond_t` flag, so edits ran without it.
+- A worker image is rebuilt when its dependency lock or Dockerfile changes, not
+  only when `worker/*.py` does: the build id now covers all three, and the image
+  carries them so it fingerprints itself from the same bytes as the checkout.
+- Start GPU passes this install's model slots and knobs to the pod as
+  environment, so a `.env` naming an alternate image model produces that
+  model's picker on the published image instead of configuring nothing.
+- Start GPU asks Runpod for a host whose CUDA driver can run the image's torch
+  (`RUNPOD_MIN_CUDA`, default 12.8).
+- The Diagnosis page no longer tells you to rebuild a single-file runner that
+  no longer exists; the remedy for a stale worker is a new pod.
+
+### Added
+
+- The Remote GPU worker accounts for its memory: every model load step logs
+  VRAM, an eviction that leaves memory behind says so, and `/health` reports
+  VRAM in use plus the torch/diffusers/transformers versions a job runs on. The
+  Diagnosis page shows VRAM in use for the remote lane.
+- `make remote-gpu-lock` re-resolves the worker's hashed dependency closure
+  against the app's pins.
+
+### Known limitation
+
+- HiDream-O1 stays out of the picker on the published image. Its torch floor
+  is met now, but its pinned runner fails on transformers 5 (`KeyError:
+  'default'` in its rotary-embedding setup, measured on an A100), so the
+  worker advertises the slot only on torch >= 2.10 **and** transformers < 5.
+
 ## [0.1.6] - 2026-09-26
 
 ### Fixed
@@ -226,6 +267,7 @@ No changes yet.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
 [0.1.5]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.5
 [0.1.4]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.4

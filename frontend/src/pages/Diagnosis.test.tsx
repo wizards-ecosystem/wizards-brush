@@ -33,6 +33,7 @@ const report = {
         reason: "",
         device: "RTX 4090",
         vram_gb: 24,
+        vram_used_gb: null,
         build: "",
         build_stale: false,
         queue_depth: 0,
@@ -92,6 +93,43 @@ describe("Diagnosis", () => {
     expect(screen.getByText("Partial download")).toBeInTheDocument();
     expect(screen.getByText("Not downloaded")).toBeInTheDocument();
     expect(screen.getByText(/Public models still work/)).toBeInTheDocument();
+  });
+
+  it("shows what a remote worker holds in VRAM, and how to replace a stale one", async () => {
+    mocks.backends.mockResolvedValue({
+      ...report,
+      backends: [
+        {
+          id: "remote_gpu",
+          label: "Remote GPU",
+          kind: "remote" as const,
+          health: {
+            connected: true,
+            reason: "",
+            device: "NVIDIA A100-SXM4-80GB",
+            vram_gb: 79.3,
+            vram_used_gb: 56.2,
+            build: "deadbeefcafe",
+            build_stale: true,
+            queue_depth: 0,
+            disk_free_gb: 117.1,
+            features: ["edit"],
+            models_loaded: [],
+          },
+          models: [],
+        },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <Diagnosis />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("56.2 / 79.3 GB in use")).toBeInTheDocument();
+    // The single-file runner is gone; the remedy is a new pod on the current image.
+    expect(screen.getByText(/Stop, then Start GPU/)).toBeInTheDocument();
+    expect(screen.queryByText(/remote_gpu_filled/)).not.toBeInTheDocument();
   });
 
   it("refreshes the live report on demand", async () => {

@@ -151,7 +151,21 @@ def test_remote_dependencies_are_complete_hash_locked_without_cuda_shadow_packag
     assert "--no-deps" in DOCKERFILE_SRC
     # torch and numpy come from the CUDA base image, never from the lock, so the
     # lock can never quietly replace a working CUDA build.
-    assert "diffusers==0.36.0" not in DOCKERFILE_SRC
+    assert "diffusers==" not in DOCKERFILE_SRC
+    # Both lanes run one diffusers/transformers: the lock is resolved against
+    # the app's own pins (scripts/lock_remote_gpu.py), so the worker cannot
+    # drift onto a release that ignores a model's config flag - which is how
+    # Qwen-Image-Edit-2511 ran for weeks without its `zero_cond_t`.
+    import re
+    import tomllib
+
+    uv_lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    app_versions = {p["name"]: p["version"] for p in uv_lock["package"]}
+    for name in ("diffusers", "transformers", "huggingface-hub", "peft", "accelerate", "safetensors"):
+        pinned = re.search(rf"^{re.escape(name)}==(\S+?) \\$", lock, re.MULTILINE)
+        assert pinned, f"{name} missing from the worker lock"
+        assert pinned.group(1) == app_versions[name], (
+            f"{name}: worker {pinned.group(1)} vs app {app_versions[name]}")
 
 
 
@@ -163,45 +177,115 @@ def test_the_app_and_the_worker_fingerprint_the_same_thing(tmp_path):
     anything. They must hash the same files, in the same order, byte for byte.
     """
     from backend.app.remote_gpu_client import local_build_id
+    from worker import build_inputs
 
     assert build_id() == local_build_id()
     assert build_id() == build_id()          # stable across calls
 
-    # And it must actually move when the source does.
+    # The inputs are everything that decides what an image does: the sources,
+    # then the dependency lock, then the Dockerfile. Hashing the sources alone
+    # let a torch or lock change keep a tag the release workflow then declined
+    # to rebuild, because it was "already published".
+    inputs = dict(build_inputs())
+    assert list(inputs) == [*sorted(p.name for p in WORKER.glob("*.py")), "requirements.lock", "Dockerfile"]
+    assert inputs["requirements.lock"] == REPO_ROOT / "scripts" / "remote-gpu-requirements.lock"
+    assert inputs["Dockerfile"] == DOCKERFILE
+
+    # And it must actually move when any input does.
     import hashlib
 
-    def fingerprint(files):
+    def fingerprint(inputs):
         digest = hashlib.sha256()
-        for path in sorted(files):
-            digest.update(path.name.encode())
+        for label, path in inputs:
+            digest.update(label.encode())
             digest.update(path.read_bytes())
         return digest.hexdigest()[:12]
 
-    real = sorted(WORKER.glob("*.py"))
+    real = build_inputs()
     assert fingerprint(real) == build_id()
-    edited = tmp_path / "api.py"
-    edited.write_text((WORKER / "api.py").read_text() + "\n# edit\n")
-    assert fingerprint([p for p in real if p.name != "api.py"] + [edited]) != build_id()
+    for label in ("api.py", "requirements.lock", "Dockerfile"):
+        edited = tmp_path / label
+        edited.write_text(inputs[label].read_text() + "\n# edit\n")
+        swapped = [(name, edited if name == label else path) for name, path in real]
+        assert fingerprint(swapped) != build_id()
+
+
+def test_the_image_carries_its_own_build_inputs():
+    """The container fingerprints itself from `/app/worker`, so the lock and the
+    Dockerfile must be copied into the package under the names `build_inputs()`
+    looks for - otherwise the image reports a different id than the checkout
+    that built it, and the staleness warning fires on every healthy worker."""
+    assert "COPY scripts/remote-gpu-requirements.lock /app/worker/requirements.lock" in DOCKERFILE_SRC
+    assert "COPY docker/remote-gpu/Dockerfile /app/worker/Dockerfile" in DOCKERFILE_SRC
+    assert "-r /app/worker/requirements.lock" in DOCKERFILE_SRC
+    # --no-deps installs whatever the lock says and nothing more; pip check is
+    # what turns a missing dependency into a failed build instead of an
+    # ImportError on a rented GPU.
+    assert "python -m pip check" in DOCKERFILE_SRC
+    assert "import worker.api, diffusers, transformers, peft" in DOCKERFILE_SRC
+
+
+def test_edit_inpaint_shares_modules_without_from_pipe():
+    """Measured on an A100, 2026-10-11: `DiffusionPipeline.from_pipe` without an
+    explicit dtype resolves float32 and casts the SHARED bf16 modules in place,
+    so the inpaint pipeline meant to reuse the 54 GiB edit model started
+    converting it to 108 GiB and every remote edit since the sharing landed
+    died of OOM in the text encoder. The inpaint pipeline is built from the Plus
+    pipeline's component objects, which cannot cast anything, and only when an
+    inpaint job asks for it."""
+    assert "from_pipe(" not in PIPELINES_SRC
+    assert "inspect.signature(cls.__init__).parameters" in PIPELINES_SRC
+    assert "_PIPES[\"edit_inpaint\"] = cls(**components)" in PIPELINES_SRC
+    # Lazily: get_edit_pipe() must not build it.
+    edit_pipe_src = PIPELINES_SRC.split("def get_edit_pipe():", 1)[1].split("\ndef ", 1)[0]
+    assert "_ensure_edit_inpaint" not in edit_pipe_src
+    inpaint_src = PIPELINES_SRC.split("def get_edit_inpaint_pipe():", 1)[1].split("\ndef ", 1)[0]
+    assert "_ensure_edit_inpaint(_PIPES[\"edit\"])" in inpaint_src
+
+
+def test_health_accounts_for_memory_and_names_its_stack():
+    """The edit-model OOM of 2026-10-11 took 77 GiB for 54 GiB of weights, and
+    nothing in /health or the logs could say where the rest was. Every load step
+    now reports VRAM, and /health carries the live numbers and the library
+    versions a job runs on, so a mismatch is a fact and not a hunt."""
+    for key in ('"vram_total_gb"', '"vram_used_gb"', '"vram_allocated_gb"', '"versions"'):
+        assert key in API_SRC
+    assert "def vram()" in PIPELINES_SRC and "def versions()" in PIPELINES_SRC
+    assert PIPELINES_SRC.count("_report_vram(") >= 5         # evict + each pipeline's load steps
+    assert "still allocated after evicting every pipeline" in PIPELINES_SRC
 
 
 def test_config_payload_covers_every_knob_remote_gpu_reads():
     """Any cfg(...) key the worker reads must be shipped by the config generator, or the two
     sides fall back to different defaults. That is how first-block cache ended up
-    permanently on remotely (local default 0.0, Remote GPU default 0.05)."""
-    source = API_SRC
-    read_keys = {
-        node.args[0].value
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        and node.func.id == "_cfg" and node.args
-        and isinstance(node.args[0], ast.Constant)
-    }
+    permanently on remotely (local default 0.0, Remote GPU default 0.05).
+
+    The reads live in worker/config.py as `cfg("key", default, legacy="old_key")`;
+    the payload may ship either name. This test once parsed api.py for a `_cfg`
+    that no longer existed there, found no reads, and passed on nothing.
+    """
+    reads: list[tuple[str, str]] = []
+    for node in ast.walk(ast.parse(CONFIG_SRC)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "cfg" and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            legacy = next((kw.value.value for kw in node.keywords
+                           if kw.arg == "legacy" and isinstance(kw.value, ast.Constant)), "")
+            reads.append((node.args[0].value, legacy))
+    assert len(reads) >= 12, "the worker's config reads were not found"
     # Against the real payload, not a hand-copied list — copying it is exactly
     # what went stale when the LTX engine was added.
     shipped = set(gen.remote_gpu_config())
-    assert read_keys <= shipped, (
-        f"the worker reads keys the config generator never ships: {read_keys - shipped}"
-    )
+    unshipped = [key for key, legacy in reads
+                 if key not in shipped and legacy not in shipped and key != "remote_gpu_offload"]
+    assert not unshipped, f"the worker reads keys the config generator never ships: {unshipped}"
+    # The provisioner sends the same payload to a pod as environment, under the
+    # upper-cased names cfg() looks up first. One mapping stays behind.
+    from backend.app import worker_config
+
+    env = worker_config.deploy_env()
+    assert set(env) == {k.upper() for k in shipped if k != "model_revisions"}
+    assert env["ENABLE_SAGE_ATTENTION"] in {"True", "False"}      # cfg() parses "true"/"false"
 
 
 # --- worker pure helpers -------------------------------------------------
@@ -363,9 +447,10 @@ def test_a_plain_host_advertises_no_address(monkeypatch, tmp_path):
 def test_config_only_mode_ships_no_secrets(tmp_path, monkeypatch):
     """An image has to be publishable. The baked config carries the reproducible
     half — model slots and reviewed revision pins — and nothing that authenticates."""
-    monkeypatch.setattr(gen.settings, "hf_token", "hf_SECRETVALUE", raising=False)
-    monkeypatch.setattr(gen.settings, "remote_gpu_shared_secret",
-                        "s3cr3tvalue", raising=False)
+    from backend.app.config import settings
+
+    monkeypatch.setattr(settings, "hf_token", "hf_SECRETVALUE", raising=False)
+    monkeypatch.setattr(settings, "remote_gpu_shared_secret", "s3cr3tvalue", raising=False)
     out = tmp_path / "remote-gpu-config.json"
     gen.write_config(out)
 
@@ -456,19 +541,29 @@ def test_falsy_config_values_still_win_over_the_default():
 
 
 def test_hidream_is_advertised_only_where_it_can_run():
-    """The published image ships torch 2.8; HiDream-O1 needs 2.10. Advertising
-    the slot on the strength of config alone offered a model whose every job
-    failed in the first second (measured on an A100, 2026-09-26)."""
-    ns = _lift(PIPELINES_SRC, "torch_at_least")
+    """HiDream-O1's pinned runner runs on a window of the stack. Advertising the
+    slot on the strength of config alone offered a model whose every job failed
+    in the first second - on torch 2.8 (measured 2026-09-26) and again on
+    transformers 5, where its rotary-embedding setup dies with
+    `KeyError: 'default'` (measured 2026-10-11)."""
+    ns = _lift(PIPELINES_SRC, "_version_tuple", "torch_at_least", "hidream_stack_ok")
+    ns["HIDREAM_MIN_TORCH"] = (2, 10)
+    ns["HIDREAM_MAX_TRANSFORMERS"] = (4, 99)
     at_least = ns["torch_at_least"]
     assert not at_least("2.8.0+cu128", (2, 10))
     assert at_least("2.10.0+cu130", (2, 10))
     assert at_least("2.11.1", (2, 10))
     assert not at_least("garbage", (2, 10))
+    stack_ok = ns["hidream_stack_ok"]
+    assert not stack_ok("2.8.0+cu128", "4.57.1")        # the 0.1.5 image
+    assert not stack_ok("2.11.0+cu128", "5.16.1")       # the 0.1.7 image
+    assert stack_ok("2.11.0+cu128", "4.57.6")           # the window the runner was written for
+    assert not stack_ok("2.11.0", "garbage")
     assert "HIDREAM_MIN_TORCH = (2, 10)" in PIPELINES_SRC
+    assert "HIDREAM_MAX_TRANSFORMERS = (4, 99)" in PIPELINES_SRC
     assert "if pipelines.hidream_supported():" in API_SRC
     assert 'features.append("image_hidream")' in API_SRC
     assert "if config.IMAGE_MODEL_HIDREAM:\n        features.append" not in API_SRC
     # Refuse before cloning third-party code that could never run here.
     loader = PIPELINES_SRC[PIPELINES_SRC.index("def _load_hidream"):]
-    assert loader.index("torch_at_least(") < loader.index("_prepare_hidream()")
+    assert loader.index("hidream_stack_ok(") < loader.index("_prepare_hidream()")

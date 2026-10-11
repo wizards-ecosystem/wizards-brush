@@ -39,11 +39,19 @@ function gb(value: number | null): string {
   return typeof value === "number" ? `${value.toFixed(value < 10 ? 1 : 0)} GB` : "Not reported";
 }
 
+/** "22.5 / 79.3 GB in use" when the backend accounts for its memory, else the total. */
+function vram(health: BackendInfo["health"]): string {
+  if (typeof health.vram_used_gb === "number" && typeof health.vram_gb === "number") {
+    return `${health.vram_used_gb.toFixed(1)} / ${health.vram_gb.toFixed(1)} GB in use`;
+  }
+  return gb(health.vram_gb);
+}
+
 function BackendCard({ backend }: { backend: BackendInfo }) {
   const localWithoutGpu = backend.kind === "local" && backend.health.vram_gb === 0;
   const usable = backend.health.connected && !localWithoutGpu;
   const trouble = backend.health.build_stale
-    ? "Remote worker code is older than this app. Rebuild remote_gpu_filled.py and restart the remote service before generating."
+    ? "The Remote GPU worker is an older build than this app. Start a new pod on the current image (Stop, then Start GPU) before generating."
     : localWithoutGpu
       ? "No CUDA GPU was detected. Local diffusion is unavailable; connect Remote GPU or check the NVIDIA driver."
       : !backend.health.connected
@@ -77,7 +85,7 @@ function BackendCard({ backend }: { backend: BackendInfo }) {
 
       <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
         <Metric label="Device" value={backend.health.device || "Not reported"} />
-        <Metric label="VRAM" value={gb(backend.health.vram_gb)} />
+        <Metric label="VRAM" value={vram(backend.health)} />
         <Metric label="Free disk" value={gb(backend.health.disk_free_gb)} />
         <Metric label="Queue" value={`${backend.health.queue_depth} waiting`} />
       </dl>

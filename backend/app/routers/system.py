@@ -85,7 +85,7 @@ async def get_backends() -> dict:
                 "id": b.id, "label": b.label, "kind": b.kind.value,
                 "health": {
                     "connected": h.connected, "reason": h.reason, "device": h.device,
-                    "vram_gb": h.vram_gb, "build": h.build,
+                    "vram_gb": h.vram_gb, "vram_used_gb": h.vram_used_gb, "build": h.build,
                     "build_stale": h.build_stale, "queue_depth": h.queue_depth,
                     "disk_free_gb": h.disk_free_gb,
                     "features": sorted(h.features),

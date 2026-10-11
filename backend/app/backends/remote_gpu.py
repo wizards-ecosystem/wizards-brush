@@ -45,6 +45,10 @@ class RemoteGPUBackend(RemoteBackend):
             build_stale=bool(raw.get("build_stale")),
             queue_depth=int(raw.get("queue_depth") or 0),
             disk_free_gb=_maybe_float(raw.get("disk_free_gb")),
+            # Reported by the worker since it learned to account for its own
+            # memory; an older worker simply leaves both unknown.
+            vram_gb=_maybe_float(raw.get("vram_total_gb")),
+            vram_used_gb=_maybe_float(raw.get("vram_used_gb")),
             features=frozenset(raw.get("features") or ()),
             models_loaded=tuple(raw.get("models_loaded") or ()),
             extra={k: v for k, v in raw.items()
