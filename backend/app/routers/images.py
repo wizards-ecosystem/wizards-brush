@@ -800,7 +800,10 @@ def _remote_inpaint_handler(job_id: int, params: dict, cb: ProgressCb,
             "guidance": float(params.get("guidance", 4.0)),
             "seed": current_seed, "image_b64": _png_b64(work), "mask_b64": _png_b64(work_mask),
             "strength": float(strength),
-            "padding_mask_crop": int(params.get("mask_padding", 64)) or None,
+            # plan_inpaint already owns the padded crop and lossless source overlay.
+            # Diffusers resizes its image but not the mask before its own overlay,
+            # so asking it to crop again can fail after rendering with a size mismatch.
+            "padding_mask_crop": None,
             "speed": bool(params.get("speed_mode", False)),
         }, progress_cb=lambda f, m, preview=None: cb(0.08 + 0.72 * f, m, preview=preview),
             job_id=job_id)
