@@ -21,33 +21,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend.app.config import settings
-from backend.app.model_sources import MODEL_REVISIONS
+from backend.app import worker_config
 
 
 def remote_gpu_config() -> dict:
-    """Everything the worker reads via `config.cfg()`, in one place.
-
-    Exposed rather than inlined so the test that checks the worker reads no key
-    this omits can compare against the real payload instead of a hand-copied
-    list - which is precisely what went stale when LTX was added.
-    """
-    return {
-        "a100_image_model": settings.a100_image_model,
-        "a100_image_model_hidream": settings.a100_image_model_hidream,
-        "a100_image_model_alt": settings.a100_image_model_alt,
-        "qwen_edit_model": settings.qwen_edit_model,
-        "video_model": settings.video_model,
-        "hunyuan_video_model": settings.hunyuan_video_model,
-        "ltx_video_model": settings.ltx_video_model,
-        "image_lightning_lora": settings.image_lightning_lora,
-        "edit_lightning_lora": settings.edit_lightning_lora,
-        "video_lightning_lora": settings.video_lightning_lora,
-        "preview_every": settings.preview_every,
-        "fbcache_threshold": settings.fbcache_threshold,
-        "enable_sage_attention": settings.enable_sage_attention,
-        "model_revisions": MODEL_REVISIONS,
-    }
+    """The payload the image bakes in. Shared with the Runpod provisioner, which
+    sends the same values to a pod as environment (`worker_config.deploy_env`)."""
+    return worker_config.payload()
 
 
 def write_config(path: pathlib.Path) -> None:

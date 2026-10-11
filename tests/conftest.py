@@ -53,6 +53,17 @@ os.environ["ENRICH_CAPTIONS"] = "false"
 os.environ["API_TOKEN"] = ""
 # Never authenticate against a developer's real tunnel from the test suite.
 os.environ["REMOTE_GPU_SHARED_SECRET"] = ""
+# The provisioning tests assert the shipped defaults - that nothing can spend
+# until a user opts in. A developer whose .env has Start GPU enabled turned
+# three of them red without touching the code. Same rule as above: set, not
+# removed, so .env cannot fill the gap.
+os.environ["REMOTE_GPU_PROVISIONER"] = "manual"
+os.environ["RUNPOD_API_KEY"] = ""
+os.environ["RUNPOD_IMAGE"] = ""
+os.environ["RUNPOD_GPU_TYPE"] = "NVIDIA A100-SXM4-80GB"
+os.environ["RUNPOD_MIN_CUDA"] = "12.8"
+os.environ["RUNPOD_NETWORK_VOLUME_ID"] = ""
+os.environ["RUNPOD_DATA_CENTER_IDS"] = ""
 
 import pytest
 

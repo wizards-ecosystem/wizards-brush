@@ -131,6 +131,47 @@ def free_memory() -> None:
         torch.cuda.ipc_collect()
 
 
+def vram() -> dict[str, float]:
+    """What the card holds right now, in GiB (torch's own unit). Zeros without CUDA.
+
+    `used` is the device's view - every process plus the CUDA context - while
+    `allocated` and `reserved` are this process's live tensors and its cached
+    pool. The gap between `used` and the weights that should be resident is the
+    number that explains an OOM, which is why /health reports it and every load
+    step logs it.
+    """
+    if not torch.cuda.is_available():
+        return {"total_gb": 0.0, "used_gb": 0.0, "allocated_gb": 0.0, "reserved_gb": 0.0}
+    free, total = torch.cuda.mem_get_info()
+    gib = 1024 ** 3
+    return {
+        "total_gb": round(total / gib, 1),
+        "used_gb": round((total - free) / gib, 1),
+        "allocated_gb": round(torch.cuda.memory_allocated() / gib, 1),
+        "reserved_gb": round(torch.cuda.memory_reserved() / gib, 1),
+    }
+
+
+def _report_vram(stage: str) -> None:
+    v = vram()
+    print(f"[remote-gpu] vram after {stage}: {v['allocated_gb']} GiB allocated, "
+          f"{v['reserved_gb']} GiB reserved, {v['used_gb']}/{v['total_gb']} GiB in use",
+          flush=True)
+
+
+def versions() -> dict[str, str]:
+    """The stack a job actually runs on, for /health and the logs."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    out: dict[str, str] = {"torch": str(torch.__version__)}
+    for name in ("diffusers", "transformers", "peft"):
+        try:
+            out[name] = version(name)
+        except PackageNotFoundError:
+            out[name] = ""
+    return out
+
+
 # ---- optional speedups (never fatal) ---------------------------------------
 def _try_fbcache(pipe) -> None:
     if config.FBCACHE_THRESHOLD <= 0:
@@ -313,6 +354,14 @@ def _evict_all() -> None:
     _PIPES.update(image=None, image_variant=None, edit=None, edit_inpaint=None,
                   video=None, video_mode=None, video_engine=None)
     free_memory()
+    _report_vram("evict")
+    left = vram()["allocated_gb"]
+    if left > 1.0:
+        # Say so now, by name. Without this the symptom is an OOM on the NEXT
+        # model that is impossible to read back to its cause.
+        print(f"[remote-gpu] !! {left} GiB still allocated after evicting every pipeline: "
+              "something else holds a reference to the old model, and the next load "
+              "has that much less room.", flush=True)
 
 
 def _tune_scheduler(pipe):
@@ -416,7 +465,7 @@ def _load_hidream(model_id: str):
         revision=config.model_revision(model_id))
     custom_model = Qwen3VLForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,      # transformers 5 name; `torch_dtype` is deprecated there
         device_map="cuda",
         token=config.HF_TOKEN or None,
         cache_dir=str(runtime.HF_CACHE),
@@ -482,6 +531,7 @@ def get_image_pipe(variant: str = "quality"):
         _PIPES["image"] = pipe
         _PIPES["image_variant"] = variant
         print(f"[remote-gpu] image pipeline ready ({variant}).")
+        _report_vram("image pipeline ready")
     return _PIPES["image"]
 
 
@@ -502,13 +552,16 @@ def get_edit_pipe():
             revision=config.model_revision(config.EDIT_MODEL),
         )
         pipe.to("cuda") if not config.OFFLOAD else pipe.enable_model_cpu_offload()
+        _report_vram("edit model on device")
         _PIPES["edit_speed"] = _try_lightning(pipe, config.EDIT_LIGHTNING_LORA, "edit")
+        _report_vram("edit lightning LoRA")
         _try_fbcache(pipe)
         _try_sage(pipe)
         _PIPES["edit"] = pipe
         print("[remote-gpu] edit pipeline ready.")
     if _PIPES.get("edit_inpaint") is None:
         _ensure_edit_inpaint(_PIPES["edit"])
+        _report_vram("edit inpaint pipeline")
     return _PIPES["edit"]
 
 
@@ -542,6 +595,7 @@ def _ensure_edit_inpaint(plus_pipe) -> None:
         print("[remote-gpu] edit inpaint pipeline ready (shared 2511 weights).")
     except Exception as exc:  # noqa: BLE001 — feature flag must not kill /edit
         _PIPES["edit_inpaint"] = False
+        free_memory()   # a failed from_pipe can leave half-built modules behind
         print(f"[remote-gpu] edit inpaint unavailable: {exc}")
 
 
@@ -684,6 +738,7 @@ def get_video_pipe(mode: str, engine: str = "wan"):
     _try_sage(pipe)
     _PIPES.update(video=pipe, video_mode=mode, video_engine=engine)
     print("[remote-gpu] video pipeline ready.")
+    _report_vram("video pipeline ready")
     return pipe
 
 

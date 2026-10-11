@@ -69,6 +69,18 @@ os.environ.update({
     "ONNX_HOME": str(MODELS / "onnx"),
 })
 
+# torch creates only the last directory of its JIT kernel cache and, when the
+# parent is missing - which the XDG default under a fresh REMOTE_GPU_ROOT always
+# is - warns "kernel cache directory could not be created" and compiles the
+# same kernels every process. Name the directory and create it.
+_KERNEL_CACHE = CACHE / "torch-kernels"
+_KERNEL_CACHE.mkdir(parents=True, exist_ok=True)
+os.environ["PYTORCH_KERNEL_CACHE_PATH"] = str(_KERNEL_CACHE)
+# One image model is ~54 GiB of an 80 GiB card, and every load/evict cycle
+# fragments what is left. Expandable segments let the allocator grow a mapping
+# instead of hunting for a contiguous block. An operator's own setting wins.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 def free_disk_gb(path: str | Path = ROOT) -> float:
     import shutil

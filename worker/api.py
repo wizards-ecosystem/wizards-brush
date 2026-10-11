@@ -406,6 +406,7 @@ class VideoReq(BaseModel):
 def health(x_gen_secret: str | None = Header(default=None)):
     _auth(x_gen_secret)
     name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+    _vram = pipelines.vram()
     worker_alive = bool(_WORKER["thread"] and _WORKER["thread"].is_alive())
     # `features` is the contract the backend gates its UI on, so it must describe
     # what this session can ACTUALLY do. Speed mode is listed only when a
@@ -461,6 +462,13 @@ def health(x_gen_secret: str | None = Header(default=None)):
         # partway and takes the resident pipeline with it.
         "disk_free_gb": round(runtime.free_disk_gb(), 1),
         "gpu": name,
+        # GiB, as torch counts them. `used` is the card's view (every process plus
+        # the CUDA context); `allocated` is this process's live tensors. The gap
+        # between used and the resident weights is what explains an OOM.
+        "vram_total_gb": _vram["total_gb"],
+        "vram_used_gb": _vram["used_gb"],
+        "vram_allocated_gb": _vram["allocated_gb"],
+        "versions": pipelines.versions(),
         "image_model": config.IMAGE_MODEL,
         "image_model_hidream": config.IMAGE_MODEL_HIDREAM,
         "image_model_alt": config.IMAGE_MODEL_ALT,
