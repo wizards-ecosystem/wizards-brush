@@ -559,9 +559,6 @@ def get_edit_pipe():
         _try_sage(pipe)
         _PIPES["edit"] = pipe
         print("[remote-gpu] edit pipeline ready.")
-    if _PIPES.get("edit_inpaint") is None:
-        _ensure_edit_inpaint(_PIPES["edit"])
-        _report_vram("edit inpaint pipeline")
     return _PIPES["edit"]
 
 
@@ -575,9 +572,20 @@ def _ensure_edit_inpaint(plus_pipe) -> None:
     """Share the loaded 2511 modules with the masked inpaint pipeline.
 
     Plus restyle and masked inpaint are the same checkpoint. Building a second
-    resident copy would evict the first. `from_pipe` (or a components copy) keeps
-    one transformer. False means this Diffusers build cannot inpaint; /inpaint
-    then 409s rather than silently calling Plus.
+    resident copy would evict the first, so the inpaint pipeline is constructed
+    from the Plus pipeline's own component objects - the same transformer, text
+    encoder and VAE, no new tensors.
+
+    Never `from_pipe` here. Measured on an A100, 2026-10-11: `from_pipe` without
+    an explicit dtype resolves one of float32 and finishes with
+    `new_pipeline.to(dtype=float32)`, which converts the SHARED bf16 modules in
+    place - a 54 GiB edit model on its way to 108 GiB. It ran out of memory
+    24 GiB in, every edit then failed in the text encoder, and nothing in the
+    error named the inpaint pipeline that caused it. Direct construction has no
+    cast to get wrong.
+
+    False means this Diffusers build cannot inpaint; /inpaint then 409s rather
+    than silently calling Plus.
     """
     if _PIPES.get("edit_inpaint") is not None:
         return
@@ -586,21 +594,31 @@ def _ensure_edit_inpaint(plus_pipe) -> None:
         _PIPES["edit_inpaint"] = False
         print("[remote-gpu] QwenImageEditInpaintPipeline is not in this Diffusers build.")
         return
+    import inspect
+
+    wanted = inspect.signature(cls.__init__).parameters
+    components = {name: module for name, module in plus_pipe.components.items() if name in wanted}
+    failure = ""
     try:
-        if hasattr(cls, "from_pipe"):
-            inpaint = cls.from_pipe(plus_pipe)
-        else:
-            inpaint = cls(**plus_pipe.components)
-        _PIPES["edit_inpaint"] = inpaint
+        _PIPES["edit_inpaint"] = cls(**components)
         print("[remote-gpu] edit inpaint pipeline ready (shared 2511 weights).")
     except Exception as exc:  # noqa: BLE001 — feature flag must not kill /edit
         _PIPES["edit_inpaint"] = False
-        free_memory()   # a failed from_pipe can leave half-built modules behind
-        print(f"[remote-gpu] edit inpaint unavailable: {exc}")
+        failure = str(exc)
+    if failure:
+        # Outside the except: while `exc` is alive its traceback pins every
+        # local of the failed constructor, and the memory stays allocated.
+        free_memory()
+        print(f"[remote-gpu] edit inpaint unavailable: {failure}")
+    _report_vram("edit inpaint pipeline")
 
 
 def get_edit_inpaint_pipe():
     get_edit_pipe()
+    if _PIPES.get("edit_inpaint") is None:
+        # Built on first use, not on edit load: an edit job pays nothing for a
+        # pipeline it does not call.
+        _ensure_edit_inpaint(_PIPES["edit"])
     pipe = _PIPES.get("edit_inpaint")
     if pipe in (None, False):
         raise HTTPException(

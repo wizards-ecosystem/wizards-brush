@@ -8,11 +8,16 @@ contributors know which user-facing changes need release notes.
 
 ### Fixed
 
-- Remote image edits no longer fail with CUDA out of memory. The worker image
-  ran diffusers 0.36, under which Qwen-Image-Edit-2511 took 77 GiB for 54 GiB
-  of weights and ignored the model's `zero_cond_t` flag; the worker's
-  dependency closure is now resolved from the app's own lock (diffusers 0.40,
-  transformers 5.16, torch 2.11), and a test keeps the two from drifting again.
+- Remote image edits no longer fail with CUDA out of memory. The masked-inpaint
+  pipeline that shares the edit model's weights was built with
+  `DiffusionPipeline.from_pipe`, which casts the shared modules to float32 when
+  no dtype is given - a 54 GiB model on its way to 108 GiB, failing 24 GiB in
+  and taking every edit with it. It is now constructed from the loaded
+  components directly, and only when an inpaint job asks for it.
+- The worker's dependency closure is resolved from the app's own lock
+  (diffusers 0.40, transformers 5.16, torch 2.11) and a test keeps the two from
+  drifting again. The image ran diffusers 0.36, which does not know
+  Qwen-Image-Edit-2511's `zero_cond_t` flag, so edits ran without it.
 - A worker image is rebuilt when its dependency lock or Dockerfile changes, not
   only when `worker/*.py` does: the build id now covers all three, and the image
   carries them so it fingerprints itself from the same bytes as the checkout.

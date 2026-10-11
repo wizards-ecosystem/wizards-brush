@@ -274,6 +274,15 @@ on a file inside it. The retained decisions and evidence live in
   found **HiDream-O1 needs torch >= 2.10** while the image then shipped 2.8.0: the worker
   advertises `image_hidream` only through `pipelines.hidream_supported()`, never on config
   alone. The image ships torch 2.11 (cu128) since 2026-10-11.
+- **Never `from_pipe` a resident pipeline.** Measured on an A100, 2026-10-11, with the
+  worker's new `vram after <stage>` log lines: evict 0.0 GiB → edit model on device 53.7 →
+  Lightning LoRA 54.5 → *inpaint pipeline 78.7 GiB and OOM*. `DiffusionPipeline.from_pipe`
+  resolves `dtype` to float32 when none is passed and ends with `new_pipeline.to(dtype=…)`,
+  which casts the **shared** bf16 modules in place. The inpaint pipeline that was meant to
+  reuse the 2511 weights was converting them to 108 GiB instead, and every remote edit from
+  2026-09-19 to 2026-10-11 died of it in the text encoder with nothing naming the cause.
+  `_ensure_edit_inpaint` now builds `cls(**components)` from the Plus pipeline's own objects,
+  lazily, and a test forbids `from_pipe(` in `worker/pipelines.py`.
 - **The worker's dependency closure is the app's.** `make remote-gpu-lock`
   (`scripts/lock_remote_gpu.py`) resolves `scripts/remote-gpu-requirements.{in,lock}` against
   `uv export` of `uv.lock`, so diffusers/transformers/peft are the versions the local lane

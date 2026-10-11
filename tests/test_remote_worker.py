@@ -225,6 +225,24 @@ def test_the_image_carries_its_own_build_inputs():
     assert "import worker.api, diffusers, transformers, peft" in DOCKERFILE_SRC
 
 
+def test_edit_inpaint_shares_modules_without_from_pipe():
+    """Measured on an A100, 2026-10-11: `DiffusionPipeline.from_pipe` without an
+    explicit dtype resolves float32 and casts the SHARED bf16 modules in place,
+    so the inpaint pipeline meant to reuse the 54 GiB edit model started
+    converting it to 108 GiB and every remote edit since the sharing landed
+    died of OOM in the text encoder. The inpaint pipeline is built from the Plus
+    pipeline's component objects, which cannot cast anything, and only when an
+    inpaint job asks for it."""
+    assert "from_pipe(" not in PIPELINES_SRC
+    assert "inspect.signature(cls.__init__).parameters" in PIPELINES_SRC
+    assert "_PIPES[\"edit_inpaint\"] = cls(**components)" in PIPELINES_SRC
+    # Lazily: get_edit_pipe() must not build it.
+    edit_pipe_src = PIPELINES_SRC.split("def get_edit_pipe():", 1)[1].split("\ndef ", 1)[0]
+    assert "_ensure_edit_inpaint" not in edit_pipe_src
+    inpaint_src = PIPELINES_SRC.split("def get_edit_inpaint_pipe():", 1)[1].split("\ndef ", 1)[0]
+    assert "_ensure_edit_inpaint(_PIPES[\"edit\"])" in inpaint_src
+
+
 def test_health_accounts_for_memory_and_names_its_stack():
     """The edit-model OOM of 2026-10-11 took 77 GiB for 54 GiB of weights, and
     nothing in /health or the logs could say where the rest was. Every load step

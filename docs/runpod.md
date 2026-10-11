@@ -376,9 +376,11 @@ Diagnosis page can tell you which torch a worker is actually running.
 
 **An edit fails with CUDA out of memory while text-to-image works.** Read the
 worker log: every load step prints `vram after <stage>` and an eviction that
-leaves memory behind says so by name. 54 GiB of weights taking 77 GiB is a
-library problem, not a resolution problem - changing the quality tier does not
-help - and the fix is a worker image on the current dependency lock.
+leaves memory behind says so by name. On an older worker build the line after
+`edit lightning LoRA` jumps from 54 GiB to the whole card: the masked-inpaint
+pipeline that shares the edit weights was built with `from_pipe`, which casts
+the shared modules to float32. Changing the quality tier does not help; a pod
+on the current image does.
 
 **LTX-2 refuses with a 507.** Its checkpoints are 150–200 GB and `_load_ltx` checks free
 space before starting a download that cannot finish. Unlike a fixed-disk notebook, here
