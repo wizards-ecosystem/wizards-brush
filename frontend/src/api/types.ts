@@ -193,7 +193,10 @@ export interface BackendHealth {
   connected: boolean;
   reason: string;
   device: string;
+  /** The card's total. */
   vram_gb: number | null;
+  /** What it holds right now; only a worker that accounts for its memory reports it. */
+  vram_used_gb: number | null;
   build: string;
   build_stale: boolean;
   queue_depth: number;
@@ -320,8 +323,10 @@ export interface SystemStatus {
     worker_alive?: boolean;
     queue_depth?: number;
     disk_free_gb?: number;
-    // True when the remote worker is running an older remote_gpu.py than this repo.
-    // Undefined for workers predating the build marker — unknown, not stale.
+    vram_total_gb?: number;
+    vram_used_gb?: number;
+    // True when the remote worker image is an older build than this checkout's
+    // worker. Undefined for workers predating the build marker — unknown, not stale.
     build_stale?: boolean;
     speed_loaded?: { image?: boolean; edit?: boolean; video?: boolean };
     image_model?: string;

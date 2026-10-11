@@ -271,8 +271,25 @@ on a file inside it. The retained decisions and evidence live in
   `steps`, so a sweep over `steps` alone returns byte-identical images.
 - **Measured again 2026-09-26 on the published image:** Start → worker answering in 2 min 9 s
   (the 11.9 GB pull), so the ~58 GB Qwen download is now most of a cold start. The same run
-  found **HiDream-O1 needs torch >= 2.10** while the image ships 2.8.0: the worker advertises
-  `image_hidream` only through `pipelines.hidream_supported()`, never on config alone.
-- **`build_id()` hashes `worker/*.py` only.** A change to the Dockerfile or the dependency lock
-  keeps the tag, and `worker-image.yml` never overwrites a published tag - so an image-only
-  change is not republished until something in `worker/` changes too.
+  found **HiDream-O1 needs torch >= 2.10** while the image then shipped 2.8.0: the worker
+  advertises `image_hidream` only through `pipelines.hidream_supported()`, never on config
+  alone. The image ships torch 2.11 (cu128) since 2026-10-11.
+- **The worker's dependency closure is the app's.** `make remote-gpu-lock`
+  (`scripts/lock_remote_gpu.py`) resolves `scripts/remote-gpu-requirements.{in,lock}` against
+  `uv export` of `uv.lock`, so diffusers/transformers/peft are the versions the local lane
+  already runs; a test pins the two. The worker sat on diffusers 0.36 for a month while the
+  app moved to 0.40 - a release that does not know Qwen-Image-Edit-2511's `zero_cond_t`
+  flag, so every remote edit ran without it. torch, numpy and the `nvidia-*` libraries stay
+  out of the lock (the Dockerfile's torch install owns them, and `pip check` in the build
+  fails on a conflict - which is how setuptools 84 vs torch's `<82` was caught).
+- **`build_id()` hashes `worker/*.py`, the dependency lock and the Dockerfile**
+  (`worker.build_inputs()`). The Dockerfile copies the latter two into `/app/worker` so an
+  image fingerprints itself from the same bytes as the checkout. `local_build_id()` *is*
+  `worker.build_id()`. Hashing the sources alone let a lock-only change keep its tag, which
+  `worker-image.yml` then declined to rebuild as "already published".
+- **A pod started from the app runs this install's model slots.** The published image bakes
+  the shipped defaults; `RunpodProvisioner.start()` adds `worker_config.deploy_env()` - the
+  same payload `make remote-gpu-config` bakes, upper-cased - to the pod's environment, which
+  the worker's `cfg()` reads before its baked file. Before this, `A100_IMAGE_MODEL_ALT` in a
+  `.env` configured nothing a pod ever saw, and the model picker it gates never appeared.
+  Revision pins exist only for the shipped defaults; a custom slot follows its repo's HEAD.

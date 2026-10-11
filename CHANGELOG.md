@@ -6,7 +6,34 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- Remote image edits no longer fail with CUDA out of memory. The worker image
+  ran diffusers 0.36, under which Qwen-Image-Edit-2511 took 77 GiB for 54 GiB
+  of weights and ignored the model's `zero_cond_t` flag; the worker's
+  dependency closure is now resolved from the app's own lock (diffusers 0.40,
+  transformers 5.16, torch 2.11), and a test keeps the two from drifting again.
+- A worker image is rebuilt when its dependency lock or Dockerfile changes, not
+  only when `worker/*.py` does: the build id now covers all three, and the image
+  carries them so it fingerprints itself from the same bytes as the checkout.
+- Start GPU passes this install's model slots and knobs to the pod as
+  environment, so a `.env` naming an alternate image model produces that
+  model's picker on the published image instead of configuring nothing.
+- Start GPU asks Runpod for a host whose CUDA driver can run the image's torch
+  (`RUNPOD_MIN_CUDA`, default 12.8).
+- The Diagnosis page no longer tells you to rebuild a single-file runner that
+  no longer exists; the remedy for a stale worker is a new pod.
+
+### Added
+
+- The Remote GPU worker accounts for its memory: every model load step logs
+  VRAM, an eviction that leaves memory behind says so, and `/health` reports
+  VRAM in use plus the torch/diffusers/transformers versions a job runs on. The
+  Diagnosis page shows VRAM in use for the remote lane.
+- `make remote-gpu-lock` re-resolves the worker's hashed dependency closure
+  against the app's pins.
+- HiDream-O1 is advertised again on the published image, whose torch now meets
+  its floor.
 
 ## [0.1.6] - 2026-09-26
 

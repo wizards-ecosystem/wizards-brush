@@ -208,10 +208,13 @@ export function Settings() {
             description="Connect the remote compute lane used by A100 image and video processes."
           >
             <p className="text-xs leading-relaxed text-muted">
-              Run <code className="technical text-accent">make remote-gpu</code>, then copy{" "}
-              <code className="technical text-accent">remote_gpu_filled.py</code> to GPU hardware you operate
-              and run it there. Enter its public HTTPS URL below. The shared secret from{" "}
-              <code className="technical">.env</code> is injected automatically. See the{" "}
+              Run the published worker image{" "}
+              <code className="technical text-accent">
+                ghcr.io/wizards-ecosystem/wizards-brush-remote-gpu
+              </code>{" "}
+              on GPU hardware you operate, or let Start GPU rent it for you. Enter its public HTTPS URL below.
+              The shared secret from <code className="technical">.env</code> is sent with every request. See
+              the{" "}
               <a
                 className="text-accent underline hover:text-ink"
                 href="https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/remote-gpu.md"

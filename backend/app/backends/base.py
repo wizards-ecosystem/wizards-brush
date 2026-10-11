@@ -54,7 +54,8 @@ class Health:
     build_stale: bool = False              # that build is older than ours
     queue_depth: int = 0
     disk_free_gb: float | None = None
-    vram_gb: float | None = None
+    vram_gb: float | None = None               # the card's total
+    vram_used_gb: float | None = None          # what it holds right now, when reported
     features: frozenset[str] = frozenset()
     models_loaded: tuple[str, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)

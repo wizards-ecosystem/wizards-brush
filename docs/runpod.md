@@ -235,6 +235,19 @@ A **Start GPU** control then appears in the workshop panel, showing the hourly
 rate before you press it and the running spend while it is up. Starting writes
 the pod's URL into settings for you; stopping terminates the pod and clears it.
 
+**Your model slots travel with the pod.** The published image bakes the shipped
+defaults, but the app hands your `.env`'s slots and knobs (`A100_IMAGE_MODEL`,
+`A100_IMAGE_MODEL_ALT`, `QWEN_EDIT_MODEL`, `VIDEO_MODEL`, the Lightning LoRAs,
+`PREVIEW_EVERY`, …) to the pod as environment, which the worker reads before its
+baked config. Naming an alternate image model in `.env` is therefore enough for
+the worker to advertise it and the picker to appear - no image of your own. The
+reviewed revision pins exist only for the shipped defaults; a slot you point at
+another repository follows that repository's current revision.
+
+The pod is placed on a host whose driver is at least `RUNPOD_MIN_CUDA` (default
+`12.8`, the published image's torch build). Leave it empty only for an image
+you built against another CUDA line.
+
 **Nothing provisions on its own.** There is no timer, no start-on-launch, and no
 "rent a GPU because a job was queued". The only thing that creates a pod is you
 pressing the button.
@@ -356,11 +369,16 @@ pod and someone else rented the card; with no volume, the container disk is gone
 wait, or terminate and redeploy — and use a network volume so the data does not care.
 
 **HiDream is not in the model picker.** HiDream-O1's runner needs torch 2.10 or
-newer, and the published image ships 2.8.0 (cu128), so the worker leaves the
-slot out of `/health` and the app does not offer it. To use it, build your own
-image with a newer torch through the `TORCH_VERSION`, `TORCHVISION_VERSION` and
-`TORCH_INDEX_URL` build args, as in the Blackwell example. That combination has
-not been tested against the pinned dependency lock.
+newer. The published image ships 2.11 (cu128) since 2026-10-11; a worker on an
+older image, or one you built with an older `TORCH_VERSION`, leaves the slot out
+of `/health` and the app does not offer it. `/health` reports `versions`, so the
+Diagnosis page can tell you which torch a worker is actually running.
+
+**An edit fails with CUDA out of memory while text-to-image works.** Read the
+worker log: every load step prints `vram after <stage>` and an eviction that
+leaves memory behind says so by name. 54 GiB of weights taking 77 GiB is a
+library problem, not a resolution problem - changing the quality tier does not
+help - and the fix is a worker image on the current dependency lock.
 
 **LTX-2 refuses with a 507.** Its checkpoints are 150–200 GB and `_load_ltx` checks free
 space before starting a download that cannot finish. Unlike a fixed-disk notebook, here

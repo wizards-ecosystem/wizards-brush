@@ -193,6 +193,11 @@ class Settings(BaseSettings):
     runpod_image: str = Field(default="", alias="RUNPOD_IMAGE")
     runpod_gpu_type: str = Field(default="NVIDIA A100-SXM4-80GB", alias="RUNPOD_GPU_TYPE")
     runpod_cloud: str = Field(default="SECURE", alias="RUNPOD_CLOUD")
+    # The host driver's CUDA floor. The published image's torch is a cu128 build,
+    # which an older host cannot run; without the floor a pod can land on one and
+    # bill while every job fails to import torch. Empty removes the constraint
+    # (for an image built against another CUDA line).
+    runpod_min_cuda: str = Field(default="12.8", alias="RUNPOD_MIN_CUDA")
     runpod_container_disk_gb: int = Field(default=120, ge=10, le=4096,
                                           alias="RUNPOD_CONTAINER_DISK_GB")
     # Optional: weights persist across sessions instead of re-downloading, at the
