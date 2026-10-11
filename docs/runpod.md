@@ -211,6 +211,27 @@ Note `quality` sets the step count *and* the resolution on this lane, and it
 overrides an explicit `steps` in the job params. A sweep that varies `steps`
 alone returns byte-identical images.
 
+## Measured, 2026-10-11: the 0.1.7 worker
+
+One A100-SXM4-80GB (Secure, $1.79/hr), fresh container disk, no HF token,
+driven over the worker protocol. Wall clock from submit to result, so each
+model's first job includes its download.
+
+| Job | Wall clock | What it includes |
+|---|---|---|
+| Wan 2.2 T2V, 25 frames, 480p, 25 steps | 170 s | ~22 GB download, load |
+| Qwen-Image-Edit-2511, one reference, 20 steps | **356 s** | ~58 GB download, load, Lightning LoRA fetch |
+| Qwen-Image-2512, 1024², 20 steps | 359 s | ~58 GB download, load |
+| Edit, two references, 20 steps | 183 s | model switch from image (cached on disk) |
+| Masked inpaint, 20 steps | **22 s** | shares the resident edit weights: no load at all |
+| Qwen Lightning, 4 steps, 1024² | 141 s | model switch back from edit |
+
+VRAM, from the worker's own `vram after <stage>` lines: evict **0.0 GiB** every
+time; Wan 22.5 GiB; the edit model 53.7 GiB on device and 54.5 GiB with its
+Lightning LoRA; Qwen-Image 54.6 GiB resident. Before the 0.1.7 fix the line
+after the edit LoRA read 78.7 GiB and the job died: that was the inpaint
+pipeline being `from_pipe`d, which casts the shared weights to float32.
+
 ## Letting the app do it for you
 
 Everything above is the manual path: you create the pod, you stop it. The app can
@@ -368,11 +389,15 @@ tell you when the worker is behind your checkout.
 pod and someone else rented the card; with no volume, the container disk is gone too. Either
 wait, or terminate and redeploy — and use a network volume so the data does not care.
 
-**HiDream is not in the model picker.** HiDream-O1's runner needs torch 2.10 or
-newer. The published image ships 2.11 (cu128) since 2026-10-11; a worker on an
-older image, or one you built with an older `TORCH_VERSION`, leaves the slot out
-of `/health` and the app does not offer it. `/health` reports `versions`, so the
-Diagnosis page can tell you which torch a worker is actually running.
+**HiDream is not in the model picker.** HiDream-O1's pinned runner runs on a
+window of the stack: torch 2.10 or newer *and* transformers 4. The published
+image meets the torch floor since 2026-10-11 but ships transformers 5, on which
+the runner fails in its rotary-embedding setup (`KeyError: 'default'`,
+measured on an A100), so the worker leaves the slot out of `/health` and the
+app does not offer it. `/health` reports `versions`, so the Diagnosis page can
+tell you what a worker is actually running. Offering HiDream again means
+re-pinning the runner to a commit that supports transformers 5 and testing it
+on a pod.
 
 **An edit fails with CUDA out of memory while text-to-image works.** Read the
 worker log: every load step prints `vram after <stage>` and an eviction that

@@ -6,6 +6,10 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+No changes yet.
+
+## [0.1.7] - 2026-10-11
+
 ### Fixed
 
 - Remote image edits no longer fail with CUDA out of memory. The masked-inpaint
@@ -37,8 +41,13 @@ contributors know which user-facing changes need release notes.
   Diagnosis page shows VRAM in use for the remote lane.
 - `make remote-gpu-lock` re-resolves the worker's hashed dependency closure
   against the app's pins.
-- HiDream-O1 is advertised again on the published image, whose torch now meets
-  its floor.
+
+### Known limitation
+
+- HiDream-O1 stays out of the picker on the published image. Its torch floor
+  is met now, but its pinned runner fails on transformers 5 (`KeyError:
+  'default'` in its rotary-embedding setup, measured on an A100), so the
+  worker advertises the slot only on torch >= 2.10 **and** transformers < 5.
 
 ## [0.1.6] - 2026-09-26
 
@@ -258,6 +267,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
 [0.1.5]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.5
 [0.1.4]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.4
