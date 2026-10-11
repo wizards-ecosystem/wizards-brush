@@ -273,7 +273,11 @@ on a file inside it. The retained decisions and evidence live in
   (the 11.9 GB pull), so the ~58 GB Qwen download is now most of a cold start. The same run
   found **HiDream-O1 needs torch >= 2.10** while the image then shipped 2.8.0: the worker
   advertises `image_hidream` only through `pipelines.hidream_supported()`, never on config
-  alone. The image ships torch 2.11 (cu128) since 2026-10-11.
+  alone. The image ships torch 2.11 (cu128) since 2026-10-11 - and that run found the
+  runner's **other** edge: on transformers 5 its pinned `qwen3_vl_transformers.py` dies
+  with `KeyError: 'default'` (`ROPE_INIT_FUNCTIONS`). `hidream_stack_ok()` is a window,
+  torch >= 2.10 and transformers < 5, so the published image does not offer the slot.
+  Moving the runner forward means re-pinning `HIDREAM_CODE_REV` and testing on a pod.
 - **Never `from_pipe` a resident pipeline.** Measured on an A100, 2026-10-11, with the
   worker's new `vram after <stage>` log lines: evict 0.0 GiB → edit model on device 53.7 →
   Lightning LoRA 54.5 → *inpaint pipeline 78.7 GiB and OOM*. `DiffusionPipeline.from_pipe`

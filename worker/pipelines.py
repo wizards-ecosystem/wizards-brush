@@ -24,25 +24,45 @@ config.HIDREAM_CODE = runtime.TOOLS / "hidream-o1"
 config.HIDREAM_CODE_REV = "2c2d29ff729e48f33e41f49edfdbd81d5ac103b4"
 
 
-# HiDream-O1's official runner needs a newer torch than the published image
-# ships. Advertising the slot anyway meant the UI offered a model whose every
-# job failed in the first second.
+# HiDream-O1's official runner is pinned to one commit and reaches into
+# transformers' internals, so it runs on a window of the stack, not a floor.
+# Advertising the slot outside that window meant the UI offered a model whose
+# every job failed in the first second - measured twice: torch 2.8 was too old
+# (2026-09-26), and transformers 5 removed the "default" rotary-embedding init
+# the runner looks up (`KeyError: 'default'`, 2026-10-11).
 HIDREAM_MIN_TORCH = (2, 10)
+HIDREAM_MAX_TRANSFORMERS = (4, 99)
+
+
+def _version_tuple(version: str) -> tuple[int, int] | None:
+    """Major and minor of a version string such as "2.8.0+cu128"; None if unreadable."""
+    try:
+        major, minor = (int(part) for part in version.split("+", 1)[0].split(".")[:2])
+    except ValueError:
+        return None
+    return major, minor
 
 
 def torch_at_least(version: str, minimum: tuple[int, int]) -> bool:
     """`version` is torch.__version__, e.g. "2.8.0+cu128"."""
-    try:
-        parts = tuple(int(part) for part in version.split("+", 1)[0].split(".")[:2])
-    except ValueError:
-        return False
-    return parts >= minimum
+    parts = _version_tuple(version)
+    return parts is not None and parts >= minimum
+
+
+def hidream_stack_ok(torch_version: str, transformers_version: str) -> bool:
+    """Whether the pinned HiDream runner can run on this torch and transformers."""
+    parts = _version_tuple(transformers_version)
+    return (torch_at_least(torch_version, HIDREAM_MIN_TORCH)
+            and parts is not None and parts <= HIDREAM_MAX_TRANSFORMERS)
 
 
 def hidream_supported() -> bool:
     """Whether this worker can actually serve the HiDream slot."""
-    return bool(config.IMAGE_MODEL_HIDREAM) and torch_at_least(torch.__version__,
-                                                               HIDREAM_MIN_TORCH)
+    if not config.IMAGE_MODEL_HIDREAM:
+        return False
+    import transformers
+
+    return hidream_stack_ok(str(torch.__version__), str(transformers.__version__))
 
 
 def _prepare_hidream() -> None:
@@ -447,10 +467,13 @@ def _load_hidream(model_id: str):
     # Fetch the pinned runner here rather than at startup: it is a git clone of
     # a third-party repository, and a worker whose HiDream slot is empty (or
     # which never serves that variant) has no business doing it at all.
-    # Refuse before the clone, not after it: the version never changes at run time.
-    if not torch_at_least(torch.__version__, HIDREAM_MIN_TORCH):
+    # Refuse before the clone, not after it: the versions never change at run time.
+    import transformers
+
+    if not hidream_stack_ok(str(torch.__version__), str(transformers.__version__)):
         raise RuntimeError(
-            f"HiDream-O1 requires torch >=2.10; this runtime has {torch.__version__}")
+            "HiDream-O1's pinned runner needs torch >= 2.10 and transformers < 5; this "
+            f"runtime has torch {torch.__version__} and transformers {transformers.__version__}")
     _prepare_hidream()
     if str(config.HIDREAM_CODE) not in sys.path:
         sys.path.insert(0, str(config.HIDREAM_CODE))
