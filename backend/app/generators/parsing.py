@@ -103,8 +103,11 @@ def _nchw(img: Image.Image, size: int, mean: tuple[float, float, float],
     arr = np.asarray(rgb, dtype=np.float32) / 255.0
     if bgr:
         arr = arr[:, :, ::-1]
-    arr = (arr - mean) / std
-    return np.transpose(arr, (2, 0, 1))[None]
+    # Python tuples promote float32 pixels to float64, which both ONNX graphs reject.
+    mean_arr = np.asarray(mean, dtype=np.float32)
+    std_arr = np.asarray(std, dtype=np.float32)
+    arr = (arr - mean_arr) / std_arr
+    return np.ascontiguousarray(np.transpose(arr, (2, 0, 1))[None], dtype=np.float32)
 
 
 def _labels_from_logits(logits, size: tuple[int, int]) -> Image.Image:

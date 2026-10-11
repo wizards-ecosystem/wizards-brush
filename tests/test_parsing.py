@@ -43,3 +43,59 @@ def test_click_maps_atr_class_onto_public_regions(monkeypatch):
     assert parsing.region_at(img, 24, 8) == "hair"
     assert parsing.region_at(img, 24, 32) == "upper-clothes"
     assert parsing.region_at(img, 8, 8) == "face"
+
+
+def test_predictors_send_float32_nchw_to_onnx():
+    """Real numeric regression in a child process; CI needs no imaging stack."""
+    import importlib.util
+    import subprocess
+    import sys
+    import textwrap
+
+    import pytest
+
+    if importlib.util.find_spec("numpy") is None:
+        pytest.skip("numeric preprocessing check needs the optional imaging environment")
+    code = textwrap.dedent('''
+        from types import SimpleNamespace
+        import numpy as np
+        from PIL import Image
+        from backend.app.generators import parsing
+
+        image = Image.new("RGB", (21, 35), (192, 96, 32))
+        parsing.unavailable_reason = lambda: None
+
+        class Session:
+            def __init__(self, kind):
+                self.kind = kind
+
+            def get_inputs(self):
+                return [SimpleNamespace(name="pixels")]
+
+            def run(self, output_names, inputs):
+                batch = inputs["pixels"]
+                assert batch.dtype == np.float32, f"ONNX expected float32, got {batch.dtype}"
+                assert batch.shape == (1, 3, 512, 512)
+                assert batch.flags.c_contiguous
+                assert np.isfinite(batch).all()
+                if self.kind == "schp":
+                    rgb = (32, 96, 192)
+                    mean, std = parsing.SCHP_MEAN, parsing.SCHP_STD
+                    channels = len(parsing.ATR_CLASSES)
+                else:
+                    rgb = (192, 96, 32)
+                    mean, std = parsing.BISENET_MEAN, parsing.BISENET_STD
+                    channels = len(parsing.FACE_CLASSES)
+                expected = [(value / 255.0 - m) / s for value, m, s in zip(rgb, mean, std)]
+                np.testing.assert_allclose(batch[0, :, 0, 0], expected, rtol=1e-6, atol=1e-6)
+                return [np.zeros((1, channels, 32, 32), dtype=np.float32)]
+
+        parsing._session = Session
+        for predict in (parsing.predict_atr, parsing.predict_face):
+            labels = predict(image)
+            assert labels.mode == "L"
+            assert labels.size == image.size
+            assert labels.getextrema() == (0, 0)
+    ''')
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
