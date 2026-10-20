@@ -129,6 +129,8 @@ export interface Job {
   /** Which local model this job needs. null = it never touches the pipeline. */
   model_key?: string | null;
   group_id?: string | null;
+  /** Who submitted the job: "ui", "mcp", or the API token's name. */
+  client?: string;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -272,6 +274,8 @@ export interface Asset {
   copies?: number;
   /** The file is gone from disk. A state to show, not an error to throw. */
   is_missing?: boolean;
+  /** Who submitted the job that produced this file. Empty for imports. */
+  client?: string;
 }
 
 export interface HumanGrade {
@@ -546,6 +550,8 @@ export interface JobCreate {
   params?: Record<string, unknown>;
   inputs?: { images?: number[]; mask?: number | null; last_frame?: number | null };
   request_id?: string;
+  /** Validate and return the params that would be queued, without creating a job. */
+  dry_run?: boolean;
 }
 
 export interface JobSubmission {

@@ -12,13 +12,48 @@ Pure: no torch, no database, no request objects.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NoReturn
 
+from .problems import close_suggestions
 from .prompt_engine import MAX_PROMPT_CHARS
 
 
 class ControlError(ValueError):
-    """A value a control does not accept; the message names the control."""
+    """A value a control does not accept; the message names the control.
+
+    `code`, `field`, `valid_options` and `suggestions` are the structured form
+    the jobs API and MCP tools return. `str(error)` stays the detail text.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        field: str | None = None,
+        code: str = "invalid_request",
+        valid_options: list[Any] | None = None,
+        suggestions: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.field = field
+        self.code = code
+        self.valid_options = list(valid_options) if valid_options else None
+        self.suggestions = [item for item in (suggestions or []) if item][:3]
+
+
+def _reject(
+    control: Mapping[str, Any],
+    message: str,
+    *,
+    code: str,
+    valid_options: list[Any] | None = None,
+    suggestions: list[str] | None = None,
+) -> NoReturn:
+    name = str(control.get("name") or "")
+    raise ControlError(
+        message, field=name or None, code=code,
+        valid_options=valid_options, suggestions=suggestions,
+    )
 
 
 def effective(control: Mapping[str, Any], params: Mapping[str, Any],
@@ -42,37 +77,59 @@ def check_value(control: Mapping[str, Any], value: Any) -> Any:
     """Validate one value against its control; returns it. Raises ControlError."""
     name, kind = control.get("name"), control.get("type")
     if kind in ("select", "segmented", "aspect"):
-        options = [str(o) for o in control.get("options") or []]
-        if str(value) not in options or isinstance(value, (dict, list)):
-            raise ControlError(f"{name} must be one of {', '.join(options)}")
+        options = list(control.get("options") or [])
+        labels = [str(option) for option in options]
+        if str(value) not in labels or isinstance(value, (dict, list)):
+            _reject(
+                control, f"{name} must be one of {', '.join(labels)}",
+                code="invalid_option", valid_options=options,
+                suggestions=close_suggestions(value, options),
+            )
         return value
     if kind in ("slider", "number"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ControlError(f"{name} must be a number")
+            _reject(control, f"{name} must be a number", code="invalid_type",
+                    suggestions=["Pass a number."])
         low, high = control.get("min"), control.get("max")
         if (low is not None and value < low) or (high is not None and value > high):
-            raise ControlError(f"{name} must be between {low} and {high}")
+            _reject(
+                control, f"{name} must be between {low} and {high}",
+                code="out_of_range",
+                suggestions=[f"Use a value between {low} and {high}."],
+            )
         return value
     if kind == "toggle":
         if not isinstance(value, bool):
-            raise ControlError(f"{name} must be true or false")
+            _reject(control, f"{name} must be true or false", code="invalid_type",
+                    suggestions=["Pass true or false."])
         return value
     if kind == "textarea":
         if not isinstance(value, str) or len(value) > MAX_PROMPT_CHARS:
-            raise ControlError(f"{name} must be text of at most {MAX_PROMPT_CHARS} characters")
+            _reject(
+                control, f"{name} must be text of at most {MAX_PROMPT_CHARS} characters",
+                code="invalid_type",
+                suggestions=[f"Pass text of at most {MAX_PROMPT_CHARS} characters."],
+            )
         return value
     if kind == "lora":
         # A path relative to LORA_DIR, or {"path", "weight"}; loras.sanitize()
         # resolves and bounds them at the route, as it does for the form.
         if not isinstance(value, list) or not all(isinstance(v, (str, Mapping)) for v in value):
-            raise ControlError(f"{name} must be a list of LoRA paths or "
-                               "{\"path\", \"weight\"} objects")
+            _reject(
+                control,
+                f"{name} must be a list of LoRA paths or {{\"path\", \"weight\"}} objects",
+                code="invalid_type",
+                suggestions=["Pass a list of LoRA paths or {\"path\", \"weight\"} objects."],
+            )
         return value
     if kind == "multiselect":
         options = [str(o) for o in control.get("options") or []]
         if (not isinstance(value, list) or not value
                 or any(str(v) not in options for v in value)):
-            raise ControlError(f"{name} must be a non-empty list of: {', '.join(options)}")
+            _reject(
+                control, f"{name} must be a non-empty list of: {', '.join(options)}",
+                code="invalid_option", valid_options=options,
+            )
         return list(dict.fromkeys(value))
     if kind == "finishing":
         from .finishing import FinishingError, sanitize_steps
@@ -80,8 +137,8 @@ def check_value(control: Mapping[str, Any], value: Any) -> Any:
         try:
             return sanitize_steps(value)
         except FinishingError as error:
-            raise ControlError(f"{name}: {error}") from None
-    raise ControlError(f"{name} cannot be set here")
+            _reject(control, f"{name}: {error}", code="invalid_option")
+    _reject(control, f"{name} cannot be set here", code="invalid_request")
 
 
 def check_params(params: Mapping[str, Any], controls: Mapping[str, Mapping[str, Any]], *,
@@ -95,8 +152,13 @@ def check_params(params: Mapping[str, Any], controls: Mapping[str, Mapping[str, 
     for name, value in params.items():
         control = controls.get(name)
         if control is None:
-            valid = ", ".join(sorted(controls)) or "none"
-            raise ControlError(f"'{name}' is not a setting of {subject} (valid: {valid})")
+            valid = sorted(controls)
+            shown = ", ".join(valid) or "none"
+            raise ControlError(
+                f"'{name}' is not a setting of {subject} (valid: {shown})",
+                field=str(name), code="unknown_setting", valid_options=valid,
+                suggestions=close_suggestions(name, valid),
+            )
         clean[name] = check_value(effective(control, params, controls), value)
     return clean
 

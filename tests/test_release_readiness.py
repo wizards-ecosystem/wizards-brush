@@ -54,6 +54,7 @@ _PUBLIC_DOCS = (
     "GOVERNANCE.md",
     "THIRD_PARTY_NOTICES.md",
     "docs/README.md",
+    "docs/agents.md",
     "docs/getting-started.md",
     "docs/user-guide.md",
     "docs/architecture.md",

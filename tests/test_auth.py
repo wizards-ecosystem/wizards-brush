@@ -24,6 +24,25 @@ def test_api_gated_with_token(client, token_on):
     assert client.get("/api/stats", headers={"X-API-Token": "tok123"}).status_code == 200
     # Header-only over HTTP: a ?token= query string would end up in access logs.
     assert client.get("/api/stats?token=tok123").status_code == 401
+    # Bearer is the header MCP clients send. A wrong one does not fall through
+    # to a browser cookie.
+    assert client.get("/api/stats", headers={"Authorization": "Bearer tok123"}).status_code == 200
+    assert client.get("/api/stats", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    client.cookies.set(
+        "wb_api_token", browser_session_token("tok123", "api"), path="/api",
+    )
+    assert client.get("/api/stats", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    client.cookies.clear()
+
+
+def test_mcp_endpoint_uses_the_same_token(client, token_on):
+    assert client.post("/api/mcp", json={}).status_code == 401
+    refused = client.post("/api/mcp", json={}, headers={"Authorization": "Bearer wrong"})
+    assert refused.status_code == 401
+    allowed = client.post(
+        "/api/mcp", json={}, headers={"Authorization": "Bearer tok123"},
+    )
+    assert allowed.status_code != 401
 
 
 def test_browser_session_uses_server_set_http_only_cookies(client, token_on):

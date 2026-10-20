@@ -199,6 +199,7 @@ def create_job_once(
     group_id: str | None = None,
     model_key: str | None = None,
     request_id: str | None = None,
+    client: str | None = None,
 ) -> tuple[Job, bool]:
     """Create a job, or return the row already owning ``request_id``.
 
@@ -207,8 +208,11 @@ def create_job_once(
     both callers into the same durable job identity.
     """
     with session() as s:
+        from .client_tag import current as current_client
+
         job = Job(kind=kind, params_json=json.dumps(stamp_params(params)), group_id=group_id,
-                  model_key=model_key, request_id=request_id)
+                  model_key=model_key, request_id=request_id,
+                  client=current_client() if client is None else client)
         s.add(job)
         try:
             s.commit()

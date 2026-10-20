@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import enrichment, log, notify
+from . import client_tag, enrichment, log, notify
+from .agent.mcp_server import exact_route as mcp_exact_route
+from .agent.mcp_server import http_app as mcp_http_app
+from .agent.mcp_server import open_sessions
 from .config import ROOT, settings
 from .db import (
     acquire_process_lock,
@@ -21,6 +24,7 @@ from .db import (
     sweep_orphan_files,
 )
 from .generators.base import setup_hf_env
+from .problems import RequestError, error_body
 from .queue import resume_queued, start_all
 from .routers import (
     assets,
@@ -161,11 +165,15 @@ async def lifespan(app: FastAPI):
     # what the last run left behind. A previous process may have been killed in a
     # way that ran no shutdown code at all.
     _adopt_remote_session()
-    try:
-        yield
-    finally:
-        _release_remote_session()
-        release_process_lock()
+    # The mounted MCP app's lifespan does not run, so its session manager has
+    # to be entered here. A manager can be entered once; open_sessions builds
+    # a new one for each process start, including each test module.
+    async with open_sessions():
+        try:
+            yield
+        finally:
+            _release_remote_session()
+            release_process_lock()
 
 
 def _adopt_remote_session() -> None:
@@ -235,6 +243,7 @@ of named axes: `POST /api/variant-sets`, then `GET /api/variant-sets/{id}/wait`.
 Every submission accepts a `request_id`; resubmitting it returns the original work
 instead of queuing it twice, so a client can retry blindly after a network error.
 The full guide with examples is `docs/api.md` in the repository.
+Agents use the same API through MCP at `/api/mcp`; see `docs/agents.md`.
 """
 
 _API_TAGS = [
@@ -249,6 +258,12 @@ _API_TAGS = [
 
 app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifespan,
               description=_API_DESCRIPTION, openapi_tags=_API_TAGS)
+
+
+@app.exception_handler(RequestError)
+async def request_error(_request, exc: RequestError):
+    """Job refusals keep `detail` as a string and add the fields an agent can fix."""
+    return JSONResponse(error_body(exc), status_code=exc.status_code)
 
 # CORS is deliberately NOT "*".
 #
@@ -275,6 +290,21 @@ def _token_ok(supplied: str) -> bool:
     return secrets.compare_digest(supplied or "", settings.api_token)
 
 
+def _presented_token(request) -> str | None:
+    """A token header when the caller sent one. None when both were left off.
+
+    A present header is checked on its own: a wrong `X-API-Token` or
+    `Authorization: Bearer` does not fall through to the browser cookie.
+    """
+    api_header = request.headers.get("x-api-token")
+    if api_header is not None:
+        return api_header
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip()
+    return None
+
+
 # Opt-in token auth (set API_TOKEN in .env). CLI callers use a header. Browsers
 # exchange that header once for server-set HttpOnly cookies: one scoped to /api
 # and one to /files for media elements. Reusable credentials stay out of URLs,
@@ -285,10 +315,10 @@ async def api_auth(request, call_next):
         clearing_browser_session = (
             request.method == "DELETE" and request.url.path == "/api/auth/session"
         )
-        api_header = request.headers.get("x-api-token")
+        presented = _presented_token(request)
         api_credential_ok = (
-            _token_ok(api_header)
-            if api_header is not None
+            _token_ok(presented)
+            if presented is not None
             else secrets.compare_digest(
                 request.cookies.get("wb_api_token") or "",
                 browser_session_token(settings.api_token, "api"),
@@ -307,6 +337,19 @@ async def api_auth(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def tag_client(request, call_next):
+    """Record UI vs token-named API on jobs created during this request.
+
+    MCP tools override this with ``mcp`` for the jobs they submit.
+    """
+    token = client_tag.bind_request(request)
+    try:
+        return await call_next(request)
+    finally:
+        client_tag.reset(token)
+
+
 app.add_middleware(BrowserSecurityMiddleware, settings=settings)
 
 # API routers (grid after images — it reuses images' registered handlers)
@@ -317,6 +360,12 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
+
+# Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route
+# matches /api/mcp, which a built SPA's catch-all would otherwise answer 405.
+# Both are registered before that catch-all.
+app.router.routes.append(mcp_exact_route)
+app.mount("/api/mcp", mcp_http_app)
 
 # Cache policy for generated media.
 #

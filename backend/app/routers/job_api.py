@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .. import controls, db
 from ..models import AssetKind, AssetRead, JobKind, JobRead, JobStatus
+from ..problems import RequestError, as_request_error, close_suggestions
 from ..queue import lane_for
 from . import images, tools, videos
 from .common import (
@@ -129,6 +130,9 @@ class JobCreate(BaseModel):
         default_factory=dict,
         description="Settings; see the kind's `params` schema. Omitted ones take their defaults.")
     inputs: JobInputs = Field(default_factory=JobInputs)
+    dry_run: bool = Field(
+        default=False,
+        description="Validate and return the params that would be queued, without creating a job.")
     request_id: str | None = Field(
         default=None,
         description="Idempotency key (16-128 of A-Z a-z 0-9 _ -). Resubmitting it returns "
@@ -141,6 +145,19 @@ class JobSubmission(BaseModel):
     group_id: str | None = None
     duplicate: bool = Field(
         default=False, description="True when request_id named an earlier submission.")
+
+
+class DryRunResult(BaseModel):
+    """A validated request that was not queued."""
+
+    dry_run: Literal[True] = True
+    kind: str
+    params: dict[str, Any]
+    would_queue: int = Field(description="How many jobs a real submit would create. 0 when "
+                                         "request_id already names one.")
+    duplicate: bool = False
+    job_id: int | None = None
+    job_ids: list[int] = Field(default_factory=list)
 
 
 class KindImages(BaseModel):
@@ -284,14 +301,23 @@ async def job_kinds() -> list[JobKindInfo]:
 def _asset(asset_id: int, kind: str, role: str):
     a = db.get_asset(asset_id)
     if a is None:
-        raise HTTPException(status_code=404,
-                            detail=f"{role}: asset {asset_id} does not exist or is in the trash")
+        raise RequestError(
+            404, f"{role}: asset {asset_id} does not exist or is in the trash",
+            code="not_found", field=role,
+            suggestions=["Import the image first, then pass its asset id."],
+        )
     if a.kind != kind:
-        raise HTTPException(status_code=400,
-                            detail=f"{role}: asset {asset_id} is a {a.kind}, not a {kind}")
+        raise RequestError(
+            400, f"{role}: asset {asset_id} is a {a.kind}, not a {kind}",
+            code="invalid_request", field=role,
+            suggestions=[f"Pass a {kind} asset id."],
+        )
     if not Path(a.path).exists():
-        raise HTTPException(status_code=409,
-                            detail=f"{role}: asset {asset_id}'s file is missing from disk")
+        raise RequestError(
+            409, f"{role}: asset {asset_id}'s file is missing from disk",
+            code="conflict", field=role,
+            suggestions=["Re-import the file; the library row points at nothing."],
+        )
     return a
 
 
@@ -300,30 +326,48 @@ def _resolve(kind: str, spec: Inputs, given: JobInputs) -> tuple[list[str], str 
     if not spec.min_images <= count <= spec.max_images:
         want = (f"{spec.min_images}" if spec.min_images == spec.max_images
                 else f"{spec.min_images}-{spec.max_images}")
-        raise HTTPException(status_code=400,
-                            detail=f"{kind} takes {want} input {spec.image_kind}(s); got {count}")
+        hint = (f"Pass {want} {spec.image_kind} asset id(s) in inputs.images."
+                if spec.min_images else "This kind takes no images; use generate, not edit.")
+        raise RequestError(
+            400, f"{kind} takes {want} input {spec.image_kind}(s); got {count}",
+            code="invalid_request", field="inputs.images",
+            suggestions=[hint],
+        )
     sources = [_asset(i, spec.image_kind, f"inputs.images[{n}]")
                for n, i in enumerate(given.images)]
     mask_path = None
     if given.mask is not None and spec.mask == "none":
-        raise HTTPException(status_code=400, detail=f"{kind} does not take a mask")
+        raise RequestError(
+            400, f"{kind} does not take a mask",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Omit inputs.mask for this kind."],
+        )
     if spec.mask == "required" and given.mask is None:
-        raise HTTPException(status_code=400,
-                            detail=f"{kind} needs inputs.mask: white = change, black = keep")
+        raise RequestError(
+            400, f"{kind} needs inputs.mask: white = change, black = keep",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Add inputs.mask: white marks what should change, same size as the image."],
+        )
     if given.mask is not None:
         mask = _asset(given.mask, AssetKind.image.value, "inputs.mask")
         src = sources[0]
         if (mask.width, mask.height) != (src.width, src.height):
-            raise HTTPException(
-                status_code=400,
-                detail=f"inputs.mask is {mask.width}x{mask.height} but the image is "
-                       f"{src.width}x{src.height}; a mask must match its image")
+            raise RequestError(
+                400,
+                f"inputs.mask is {mask.width}x{mask.height} but the image is "
+                f"{src.width}x{src.height}; a mask must match its image",
+                code="invalid_request", field="inputs.mask",
+                suggestions=["Use a mask the same width and height as the image."],
+            )
         mask_path = mask.path
     last_path = None
     if given.last_frame is not None:
         if not spec.last_frame:
-            raise HTTPException(status_code=400,
-                                detail=f"{kind} does not take a last frame here")
+            raise RequestError(
+                400, f"{kind} does not take a last frame here",
+                code="invalid_request", field="inputs.last_frame",
+                suggestions=["Omit inputs.last_frame for this kind."],
+            )
         last_path = _asset(given.last_frame, AssetKind.image.value, "inputs.last_frame").path
     return [a.path for a in sources], mask_path, last_path
 
@@ -335,7 +379,7 @@ def _submission(result: dict[str, Any], *, duplicate: bool) -> JobSubmission:
 
 
 @router.post("/jobs", responses=error_responses(400, 404, 409, 503))
-async def create_job(body: JobCreate) -> JobSubmission:
+async def create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     """Queue one generation or tool job from asset ids and JSON settings.
 
     Settings are validated strictly against the kind's schema: an unknown name or
@@ -345,23 +389,47 @@ async def create_job(body: JobCreate) -> JobSubmission:
 
     The request itself is judged before the server's state: a malformed request
     is a 400 even when the kind is unavailable here, because a 503 would tell the
-    client to retry something that can never succeed.
+    client to retry something that can never succeed. `dry_run` runs that same
+    check and returns the params that would be stored, without creating a job.
     """
+    try:
+        return await _create_job(body)
+    except HTTPException as exc:
+        raise as_request_error(exc) from None
+
+
+async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     catalogue = _catalogue()
     info = catalogue.get(body.kind)
     if info is None:
-        known = ", ".join(sorted(catalogue))
-        raise HTTPException(status_code=400,
-                            detail=f"unknown or unavailable kind '{body.kind}' (available: {known})")
+        known = sorted(catalogue)
+        raise RequestError(
+            400,
+            f"unknown or unavailable kind '{body.kind}' (available: {', '.join(known)})",
+            code="kind_unavailable", field="kind", valid_options=known,
+            suggestions=close_suggestions(body.kind, known),
+        )
     request_id = normalize_request_id(body.request_id)
     if request_id and (existing := db.job_for_request(request_id)) is not None:
-        return _submission(_submission_response(existing), duplicate=True)
+        submission = _submission(_submission_response(existing), duplicate=True)
+        if body.dry_run:
+            return DryRunResult(
+                kind=existing.kind, params=_dry(existing.kind, existing.params, 0).params,
+                would_queue=0, duplicate=True, job_id=submission.job_id,
+                job_ids=submission.job_ids,
+            )
+        return submission
 
     if body.kind in tools.TOOLS:
         tool = tools.TOOLS[body.kind]
         clean = _validated(body.kind, body.params, {str(c["name"]): c for c in tool.controls})
         _resolve(body.kind, inputs_for(body.kind), body.inputs)
         await _require_runnable(info)
+        source = db.get_asset(body.inputs.images[0])
+        assert source is not None  # _resolve already refused a missing id
+        built = tool.build(source, clean)
+        if body.dry_run:
+            return _dry(body.kind, built, 1)
         result = await tools.submit_tool(body.kind, body.inputs.images[0], clean,
                                          request_id=request_id)
         return _submission(result, duplicate=False)
@@ -384,6 +452,8 @@ async def create_job(body: JobCreate) -> JobSubmission:
         params = videos.build_params(body.kind, raw, paths, last_path)
     if body.kind in _MODEL_ACCESS:
         images.require_model_access(params)
+    if body.dry_run:
+        return _dry(body.kind, params, _would_queue(body.kind, params))
     handler = get_handler(body.kind)
     if handler is None:  # pragma: no cover — every catalogued kind registers one at import
         raise HTTPException(status_code=500, detail=f"no handler for {body.kind}")
@@ -394,9 +464,17 @@ async def create_job(body: JobCreate) -> JobSubmission:
 async def _require_runnable(info: JobKindInfo) -> None:
     """503 when the kind cannot run here now; remote kinds need a live worker."""
     if not info.available:
-        raise HTTPException(status_code=503, detail=info.unavailable_reason)
+        remote = info.lane == "remote" or "remote gpu" in (info.unavailable_reason or "").lower()
+        raise RequestError(
+            503, info.unavailable_reason or "unavailable",
+            code="remote_offline" if remote else "unavailable", field="kind",
+            suggestions=(["Start the Remote GPU worker, then retry."] if remote else []),
+        )
     if info.lane == "remote" and (blocker := remote_blocker(await remote_state())):
-        raise HTTPException(status_code=503, detail=blocker)
+        raise RequestError(
+            503, blocker, code="remote_offline", field="kind",
+            suggestions=["Start the Remote GPU worker, then retry."],
+        )
 
 
 def _validated(kind: str, params: dict[str, Any],
@@ -404,11 +482,28 @@ def _validated(kind: str, params: dict[str, Any],
     try:
         return controls.check_params(params, known, subject=kind)
     except controls.ControlError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from None
+        raise RequestError(
+            400, str(error), code=error.code, field=error.field,
+            valid_options=error.valid_options, suggestions=error.suggestions,
+        ) from None
+
+
+def _dry(kind: str, params: dict[str, Any], would_queue: int) -> DryRunResult:
+    from ..redaction import redact
+
+    return DryRunResult(kind=kind, params=redact(params), would_queue=would_queue)
+
+
+def _would_queue(kind: str, params: dict[str, Any]) -> int:
+    if kind not in _FANOUT or not params.get("combinatorial"):
+        return 1
+    from ..prompt_engine import count_variants
+
+    return max(1, count_variants(str(params.get("prompt") or "")))
 
 
 async def _create_refine(body: JobCreate, info: JobKindInfo,
-                         request_id: str | None) -> JobSubmission:
+                         request_id: str | None) -> JobSubmission | DryRunResult:
     """Facade: one sentence becomes an ordinary inpaint_remote or image_edit job."""
     from PIL import Image as PILImage
 
@@ -470,6 +565,8 @@ async def _create_refine(body: JobCreate, info: JobKindInfo,
         handler = get_handler(kind)
     if handler is None:
         raise HTTPException(status_code=500, detail=f"no handler for {kind}")
+    if body.dry_run:
+        return _dry(kind, params, 1)
     return _submission(await submit(kind, params, handler), duplicate=False)
 
 
@@ -492,12 +589,22 @@ async def wait_job(
     Always answers within `timeout` (60 s at most, so a proxy's idle limit is
     never the thing that ends the request). `settled: false` means wait again.
     """
+    try:
+        return await _wait_job(job_id, timeout)
+    except HTTPException as exc:
+        raise as_request_error(exc) from None
+
+
+async def _wait_job(job_id: int, timeout: float) -> JobWait:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
         job = db.get_job(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
+            raise RequestError(
+                404, "job not found", code="not_found", field="job_id",
+                suggestions=["Check the job id, or submit the job again."],
+            )
         if job.status in TERMINAL or loop.time() >= deadline:
             return _view(job)
         await asyncio.sleep(min(_POLL_SECONDS, max(0.0, deadline - loop.time())))

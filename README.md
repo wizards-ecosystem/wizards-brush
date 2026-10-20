@@ -148,7 +148,8 @@ can actually use them.
 The interface is one client of the same API a script can use. Any generation or
 variant set can be copied as a runnable request, and the
 [API guide](docs/api.md) covers the whole programmatic loop with a working
-example client in `scripts/api_example.py`.
+example client in `scripts/api_example.py`. An agent uses the same loop over
+MCP; [Agents](docs/agents.md) covers Cursor and Claude Desktop.
 
 ## Local and remote compute
 

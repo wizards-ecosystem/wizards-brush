@@ -165,6 +165,9 @@ class Job(SQLModel, table=True):
     # reclaim paid A100 work instead of abandoning it in the remote queue.
     remote_client_id: str | None = Field(default=None, index=True)
     remote_token: str | None = Field(default=None, index=True)
+    # Who submitted this job: "ui", "mcp", or the API token's name ("api" when
+    # the token is unnamed). Empty on rows written before the column existed.
+    client: str = ""
     # Human-readable guidance for a failure, kept apart from `error` so the UI
     # can lead with what to do and put the traceback behind a disclosure.
     tip: str = ""
@@ -485,6 +488,7 @@ class JobRead(BaseModel):
     priority: int = 0
     group_id: str | None = None
     model_key: str | None = None
+    client: str = ""
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -498,6 +502,7 @@ class JobRead(BaseModel):
             message=redact_text(j.message or ""), params=redact(j.params),
             result=redact(j.result), error=redact_text(j.error or ""), tip=j.tip or "",
             priority=j.priority or 0, group_id=j.group_id, model_key=j.model_key,
+            client=j.client or "",
             created_at=j.created_at, started_at=j.started_at, finished_at=j.finished_at,
         )
 
@@ -527,6 +532,9 @@ class AssetRead(BaseModel):
     # unique. Supplied per page by db.duplicate_counts, not computed per tile.
     copies: int = 1
     is_missing: bool = False
+    # Who submitted the job that produced this file. Empty for imports and for
+    # files saved before client tagging.
+    client: str = ""
 
     @classmethod
     def of(cls, a: Asset, copies: int = 1) -> AssetRead:
@@ -541,6 +549,7 @@ class AssetRead(BaseModel):
             caption=a.caption or "", deleted_at=a.deleted_at,
             used_count=int(a.used_count or 0), last_used_at=a.last_used_at,
             copies=copies, is_missing=bool(a.is_missing),
+            client=str(a.meta.get("client") or ""),
         )
 
 

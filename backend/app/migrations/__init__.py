@@ -42,6 +42,7 @@ from . import (
     m0006_job_remote_identity,
     m0007_job_request_id,
     m0008_variant_sets,
+    m0009_job_client,
 )
 
 logger = log.get("migrate")
@@ -58,6 +59,7 @@ MIGRATIONS: list[tuple[str, Migration]] = [
     ("0006_job_remote_identity", m0006_job_remote_identity.run),
     ("0007_job_request_id", m0007_job_request_id.run),
     ("0008_variant_sets", m0008_variant_sets.run),
+    ("0009_job_client", m0009_job_client.run),
 ]
 
 

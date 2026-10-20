@@ -69,7 +69,8 @@ because their licence is non-commercial. See
 
 Python packages are downloaded into each user's project-local environment and
 are not redistributed in the source or standalone archive. They retain their
-own licenses and are inventoried in `uv.lock`. Some installed CUDA runtime
+own licenses and are inventoried in `uv.lock`. The MCP Python SDK (`mcp`,
+MIT) is one of those packages: it is installed, not bundled. Some installed CUDA runtime
 packages and the NVIDIA driver are proprietary and remain under NVIDIA terms.
 Model and adapter terms are catalogued separately in
 [docs/model-licenses.md](docs/model-licenses.md).

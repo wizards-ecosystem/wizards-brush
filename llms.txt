@@ -6,4 +6,5 @@
 
 - [README](https://github.com/wizards-ecosystem/wizards-brush/blob/main/README.md)
 - [API guide](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/api.md)
+- [Agents](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/agents.md)
 - [Working standards](https://github.com/wizards-ecosystem/wizards-brush/blob/main/AGENTS.md)

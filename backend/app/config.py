@@ -218,6 +218,9 @@ class Settings(BaseSettings):
     # this app can run without a token, so browser origins must be explicit.
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     api_token: str = Field(default="", alias="API_TOKEN")
+    # Name recorded on jobs submitted with the API token (not the browser UI,
+    # and not MCP). Empty means those jobs are tagged "api".
+    api_token_name: str = Field(default="", alias="API_TOKEN_NAME")
     # File export privacy. Reproducibility metadata and the standardized AI
     # provenance declaration are separate choices because their audiences and
     # disclosure consequences differ.
