@@ -52,6 +52,24 @@ A failed job is announced once, when it fails; reloading the page does not
 announce it again. The jobs of a variant set are summarised by their set
 instead: one notice when the set settles, with its counts.
 
+## Saved recipes
+
+**Recipes** in the navigation is a saved generation or edit: the settings you
+have now, plus the few fields a later run should ask for. It is not a variant
+set. The **Save as recipe** button on a variant set still saves that set's
+axes and template; the button on a generator saves this kind of recipe.
+
+Open a generator, set it up, and choose **Save as recipe**. Check the fields
+the next run may change. Everything else stays as it was when you saved. A
+recipe with nothing checked runs as a one-step setup.
+
+The image on the form is not stored. For an edit, leave **Source images**
+checked, or pick an image that is already in the gallery.
+
+**Run recipe** queues a normal job. **Check** confirms the form without
+queueing. Ctrl / ⌘ + Enter runs. **Delete recipe** removes the definition;
+jobs already queued stay in the queue.
+
 ## Variant sets
 
 A variant set takes approved source material, varies it along named axes, and
@@ -65,7 +83,8 @@ parameter study of one prompt; "variant" here is unrelated to the model picker.
 - A **recipe** is a reusable definition: the operation, axes, templates,
   settings, finishing, validation and output names. Save one from the editor
   with **Save as recipe**, and start new sets from it under **Saved recipes ->
-  Use**. Editing a recipe never changes a set already made from it.
+  Use**. Editing a recipe never changes a set already made from it. This is
+  not the **Recipes** page, which runs one saved generation or edit.
 - A **set** is one execution: a frozen snapshot of the recipe plus one item per
   combination, each with its own state, job, output and validation.
 - On a set's page, **Duplicate as new set** opens its recipe in the editor to

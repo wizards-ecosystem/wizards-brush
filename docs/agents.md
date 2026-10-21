@@ -52,6 +52,10 @@ then any Host that presents the token is accepted. See
 | `get_job` | The job and any outputs already saved. |
 | `wait_job` | Wait until the job settles, or up to 60 seconds. |
 | `search_library` | Gallery search. |
+| `list_recipes` | Saved recipes. Each entry includes `input_schema`. |
+| `get_recipe` | One recipe by id, slug, or name, including frozen params. |
+| `save_recipe` | Save a kind's settings. `expose` names the fields a later run may change. |
+| `run_recipe` | Run one. `inputs` must match that recipe's `input_schema`. |
 
 Call `list_kinds`, then `describe_kind`, before choosing settings. Unknown
 names and out-of-range values are refused. Do not invent settings.
@@ -83,12 +87,35 @@ does not import the images a second time.
 
 ### Checking a request
 
-`dry_run: true` on `generate` or `edit` validates the request and returns the
-params that would be stored, including `would_queue`. It does not create a
-job, an asset, or a mask file. The same flag exists on `POST /api/jobs`, and
-both paths share one validator. A dry run does not need the Remote GPU to be
-connected. Submitting that remote kind for real is still 503 until the worker
-answers.
+`dry_run: true` on `generate`, `edit` or `run_recipe` validates the request and
+returns the params that would be stored, including `would_queue`. It does not
+create a job, an asset, or a mask file. The same flag exists on `POST /api/jobs`
+and `POST /api/recipes/{key}/run`, and the paths share one validator. A dry run
+does not need the Remote GPU to be connected. Submitting that remote kind for
+real is still 503 until the worker answers. A local GPU kind is still refused
+when this machine cannot run one, because that probe runs before the dry run.
+
+### Saved recipes
+
+A saved recipe is a named setup: one job kind, its settings frozen, and a
+short list of fields a later run may change. `list_recipes` and `get_recipe`
+return `input_schema`, the JSON Schema `run_recipe`'s `inputs` must match.
+The same schema drives the Recipes page. Tool definitions stay fixed; the
+exact fields travel with the recipe, so saving one does not add a tool.
+
+`save_recipe` takes `name`, `kind`, `params`, `expose`, and optional
+`description`, `inputs` (frozen gallery asset ids), `slug` and
+`field_descriptions`. The result is the saved recipe, including
+`input_schema`. Its `client` is `mcp`.
+
+`run_recipe` accepts only the exposed fields. An unknown key is
+`unknown_setting`, and `valid_options` lists those fields, not every setting
+of the kind. Omit a key to keep its saved default. A real run waits, like
+`generate`. The outcome adds `recipe_id`, `recipe_slug` and `recipe_name`.
+The job itself is ordinary: its client is `mcp`, and its params do not carry
+the recipe id, so a later rerun still validates.
+
+`brush://recipes` and `brush://recipes/{key}` return the same documents.
 
 ### Errors
 

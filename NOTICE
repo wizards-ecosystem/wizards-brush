@@ -43,6 +43,12 @@ InvokeAI: https://github.com/invoke-ai/InvokeAI
     `backend/util/vae_working_memory.py`: predicting VAE decode cost from output
     area so tiling becomes a decision rather than an unconditional default.
 
+    backend/app/recipes.py follows the idea of an InvokeAI workflow form and of
+    calling a saved workflow by id: a named setup with a few fields pinned into
+    a simple panel, then run without the rest of the graph. No InvokeAI source
+    was copied. The table, compiler, HTTP routes, MCP tools and React form are
+    independent.
+
 SwarmUI: https://github.com/mcmonkeyprojects/SwarmUI
     Copyright (c) 2024-2025 Alex "mcmonkey" Goodwin. Licensed under the MIT License.
 

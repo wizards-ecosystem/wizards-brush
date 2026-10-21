@@ -567,6 +567,74 @@ export interface JobWait {
   assets: Asset[];
 }
 
+/** One field a saved recipe lets a run change. The same object builds the form and `input_schema`. */
+export interface RecipeField {
+  name: string;
+  type: string;
+  label: string;
+  description: string;
+  default: unknown;
+  constraints: {
+    min?: number;
+    max?: number;
+    step?: number;
+    options?: unknown[];
+    min_items?: number;
+    max_items?: number;
+    asset_kind?: string;
+    required?: boolean;
+  };
+}
+
+export interface RecipeInputs {
+  images: number[];
+  mask: number | null;
+  last_frame: number | null;
+}
+
+export interface SavedRecipeSummary {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  kind: string;
+  fields: RecipeField[];
+  input_schema: Record<string, unknown>;
+  client: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavedRecipe extends SavedRecipeSummary {
+  params: Record<string, unknown>;
+  inputs: RecipeInputs;
+}
+
+export interface RecipeWrite {
+  name: string;
+  description?: string;
+  kind: string;
+  params?: Record<string, unknown>;
+  inputs?: Partial<RecipeInputs>;
+  expose?: string[];
+  slug?: string;
+  field_descriptions?: Record<string, string>;
+}
+
+export interface RecipeRun {
+  recipe_id: number;
+  slug: string;
+  name: string;
+  kind: string;
+  dry_run: boolean;
+  params?: Record<string, unknown> | null;
+  would_queue?: number | null;
+  duplicate: boolean;
+  job_id: number | null;
+  job_ids: number[];
+  group_id?: string | null;
+}
+
 export interface JobKindInfo {
   kind: string;
   title: string;

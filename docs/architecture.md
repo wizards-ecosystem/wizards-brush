@@ -93,6 +93,11 @@ implementation:
 - `POST /api/assets/import` brings images in (alpha kept, metadata stripped)
   and `GET /api/assets/{id}/file` serves bytes under the API's header
   authentication, which `/files` (cookie-only when a token is set) cannot.
+- `backend/app/recipes.py` compiles a saved generation recipe: one kind, its
+  settings frozen at save time, and the exposed fields as one JSON Schema.
+  `POST /api/recipes/{key}/run` checks a run against that schema and calls
+  `create_job`, so the result is an ordinary job. The MCP tools read the same
+  compiler. This is not a Variant Set recipe.
 
 `scripts/api_example.py` is a complete client, and the test suite runs it
 through the real queue.

@@ -13,6 +13,7 @@ import { Diagnosis } from "./pages/Diagnosis";
 import { Tools } from "./pages/Tools";
 import { VariantSetCreate } from "./pages/VariantSetCreate";
 import { VariantSetDetail } from "./pages/VariantSetDetail";
+import { Recipes } from "./pages/Recipes";
 import { VariantSets } from "./pages/VariantSets";
 import { useStore } from "./store/useStore";
 
@@ -32,6 +33,8 @@ export default function App() {
         <Route path="/trash" element={<Trash />} />
         <Route path="/queue" element={<Queue />} />
         <Route path="/grid/:groupId" element={<GridView />} />
+        <Route path="/recipes" element={<Recipes />} />
+        <Route path="/recipes/:key" element={<Recipes />} />
         <Route path="/variants" element={<VariantSets />} />
         <Route path="/variants/new" element={<VariantSetCreate />} />
         <Route path="/variants/:id" element={<VariantSetDetail />} />

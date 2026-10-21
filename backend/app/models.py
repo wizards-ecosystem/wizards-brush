@@ -338,6 +338,49 @@ def _json_or(raw: str | None, fallback: Any) -> Any:
     return value if isinstance(value, type(fallback)) else fallback
 
 
+class Recipe(SQLModel, table=True):
+    """A named generation or edit setup with a narrow input schema.
+
+    `params_json` is the frozen settings of one job kind. `fields_json` is the
+    subset a later run may override, each with the type, default, constraints
+    and description captured when the recipe was saved. `inputs_json` is the
+    frozen gallery inputs (`images`, `mask`, `last_frame`). Running a recipe
+    merges a caller's values onto this snapshot and submits an ordinary job.
+
+    This is not a Variant Set recipe. Those live on `variantrecipe` and fan out
+    across axes. Ids are never reused: a saved link or an agent transcript may
+    name this id after the row is gone, and it must not come back as a
+    different setup.
+    """
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    slug: str = Field(index=True, unique=True)
+    description: str = ""
+    kind: str = ""
+    params_json: str = "{}"
+    fields_json: str = "[]"
+    inputs_json: str = "{}"
+    # Who saved it: "ui", "mcp", or the API token's name. Provenance, not a
+    # permission. Empty on a row written before the column existed.
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now, index=True)
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return _json_or(self.params_json, {})
+
+    @property
+    def fields(self) -> list[dict[str, Any]]:
+        return [item for item in _json_or(self.fields_json, []) if isinstance(item, dict)]
+
+    @property
+    def inputs(self) -> dict[str, Any]:
+        return _json_or(self.inputs_json, {})
+
+
 class VariantRecipe(SQLModel, table=True):
     """A reusable Variant Set definition: configuration only.
 

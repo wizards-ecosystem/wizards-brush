@@ -129,6 +129,10 @@
   its answer is older than 15 s): unavailable in `/kinds`, 503 on submit, a preview
   warning and a refused Variant Set create. The suite treats the worker as connected
   (conftest `_remote_gpu_answers`); request `remote_gpu_offline` to test the opposite
+- `backend/app/recipes.py` + `routers/recipes.py` - a saved generation recipe
+  (table `recipe`, migration `0010_recipes`): frozen kind settings plus the
+  exposed fields as one JSON Schema. `POST /api/recipes/{key}/run` validates
+  that schema and calls `create_job`. Not a Variant Set recipe (`variantrecipe`)
 - `backend/app/controls.py` - registry controls as a validation contract and JSON Schema,
   shared by the job API and Variant Set recipes. A new control `type` must be handled here
   and rendered by `DynamicControls` (`tests/test_registry.py` `VALID_TYPES`)

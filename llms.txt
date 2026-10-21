@@ -13,6 +13,8 @@
 
 Drive the same jobs through MCP at `/api/mcp`, or through the OpenAI image API
 at `/api/openai/v1` (`GET /models`, `POST /images/generations`, `POST /images/edits`).
+Saved recipes (`/api/recipes`, MCP `list_recipes` / `get_recipe` / `save_recipe` /
+`run_recipe`) rerun a named setup from the fields in its `input_schema`.
 Model ids are friendly names such as `brush-fast` and `brush-quality`, and also
 raw ids such as `local/klein` and `remote/quality`. `GET /models` lists the
 friendly ids. Setup, the field mapping, and both error shapes are in

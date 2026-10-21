@@ -202,3 +202,77 @@ def raise_http(exc: HTTPException) -> None:
     from ..problems import as_request_error
 
     raise as_request_error(exc) from None
+
+
+def _recipe_routes():
+    from ..routers import recipes as recipe_routes
+
+    return recipe_routes
+
+
+def _validation_error(exc: Any) -> RequestError:
+    """A Pydantic body error, in the same shape as a refused setting."""
+    errors: list[Any] = list(exc.errors()) if hasattr(exc, "errors") else []
+    first = errors[0] if errors else {}
+    loc = ".".join(str(part) for part in first.get("loc") or () if part != "body")
+    message = str(first.get("msg") or "invalid recipe")
+    return RequestError(
+        400, message, code="invalid_request", field=loc or None,
+        suggestions=["Check the field types against the tool schema."],
+    )
+
+
+async def recipe_rows() -> list[dict[str, Any]]:
+    """Summaries, each with the JSON Schema a run's inputs must match."""
+    rows = await _recipe_routes().list_recipes()
+    return [row.model_dump(mode="json") for row in rows]
+
+
+async def recipe_detail(key: str) -> dict[str, Any]:
+    """One recipe, including frozen params and `input_schema`."""
+    return (await _recipe_routes().read_recipe(key)).model_dump(mode="json")
+
+
+async def save_recipe(
+    *,
+    name: str,
+    kind: str,
+    params: dict[str, Any] | None = None,
+    expose: list[str] | None = None,
+    description: str = "",
+    inputs: dict[str, Any] | None = None,
+    slug: str | None = None,
+    field_descriptions: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Save a recipe through the same compiler the HTTP route uses."""
+    from pydantic import ValidationError
+
+    routes = _recipe_routes()
+    try:
+        body = routes.RecipeWrite(
+            name=name, kind=kind, description=description,
+            params=params or {}, expose=list(expose or []),
+            inputs=routes.RecipeInputs.model_validate(inputs or {}),
+            slug=slug, field_descriptions=field_descriptions or {},
+        )
+    except ValidationError as exc:
+        raise _validation_error(exc) from None
+    return (await routes.create_recipe(body)).model_dump(mode="json")
+
+
+async def run_recipe(
+    key: str,
+    inputs: dict[str, Any] | None = None,
+    *,
+    dry_run: bool = False,
+    request_id: str | None = None,
+):
+    """Merge `inputs` onto the recipe and submit the job. Returns `RecipeRun`."""
+    from pydantic import ValidationError
+
+    routes = _recipe_routes()
+    try:
+        body = routes.RecipeRunBody(inputs=inputs or {}, dry_run=dry_run, request_id=request_id)
+    except ValidationError as exc:
+        raise _validation_error(exc) from None
+    return await routes.run_recipe(key, body)
