@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { RecipeField, SavedRecipe } from "../api/types";
 import { initialRecipeInputs, recipeFieldRequired, recipeInputMissing } from "../lib/recipes";
 import { GalleryPicker } from "./GalleryPicker";
@@ -17,6 +17,7 @@ export function RecipeForm({
   onRun: (inputs: Values, dryRun: boolean) => Promise<void> | void;
 }) {
   const formId = useId();
+  const formRef = useRef<HTMLFormElement>(null);
   const [values, setValues] = useState<Values>(() => initialRecipeInputs(recipe.fields));
   const [error, setError] = useState("");
   const [picking, setPicking] = useState<string | null>(null);
@@ -36,20 +37,23 @@ export function RecipeForm({
   };
 
   useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        event.preventDefault();
-        submit(false);
-      }
+      if (busy || picking) return;
+      if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
+      event.preventDefault();
+      submit(false);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    form.addEventListener("keydown", onKey);
+    return () => form.removeEventListener("keydown", onKey);
     // submit closes over the latest values; the effect rebinds with them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values, recipe.fields, onRun]);
+  }, [busy, picking, values, recipe.fields, onRun]);
 
   return (
     <form
+      ref={formRef}
       aria-label={`Run ${recipe.name}`}
       className="space-y-5"
       onSubmit={(event) => {
@@ -137,6 +141,7 @@ function Field({
   const id = `${formId}-${field.name}`;
   const hintId = field.description ? `${id}-hint` : undefined;
   const required = recipeFieldRequired(field);
+  const typed = useRef<HTMLInputElement>(null);
 
   if (field.type === "textarea") {
     return (
@@ -163,16 +168,27 @@ function Field({
 
   if (field.type === "toggle") {
     return (
-      <label className="flex cursor-pointer items-center justify-between gap-3 border-y border-edge py-2.5">
-        <span className="text-sm">{field.label}</span>
-        <input
-          id={id}
-          type="checkbox"
-          className="size-4 accent-accent"
-          checked={value === true}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-      </label>
+      <div>
+        <label
+          className="flex cursor-pointer items-center justify-between gap-3 border-y border-edge py-2.5"
+          htmlFor={id}
+        >
+          <span className="text-sm">{field.label}</span>
+          <input
+            id={id}
+            type="checkbox"
+            className="size-4 accent-accent"
+            checked={value === true}
+            aria-describedby={hintId}
+            onChange={(event) => onChange(event.target.checked)}
+          />
+        </label>
+        {field.description && (
+          <p id={hintId} className="mt-1 text-[11px] text-muted">
+            {field.description}
+          </p>
+        )}
+      </div>
     );
   }
 
@@ -241,31 +257,52 @@ function Field({
     const options = (field.constraints.options ?? []).map((option) => String(option));
     const selected = Array.isArray(value) ? value.map((item) => String(item)) : [];
     return (
-      <fieldset>
-        <legend className="label">{field.label}</legend>
-        <div className="space-y-1">
-          {options.map((option) => (
-            <label key={option} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={selected.includes(option)}
-                onChange={(event) => {
-                  const next = event.target.checked
-                    ? [...selected, option]
-                    : selected.filter((item) => item !== option);
-                  onChange(next);
-                }}
-              />
-              {option}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <div>
+        <fieldset aria-describedby={hintId}>
+          <legend className="label">{field.label}</legend>
+          <div className="space-y-1">
+            {options.map((option) => (
+              <label key={option} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option)}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...selected, option]
+                      : selected.filter((item) => item !== option);
+                    onChange(next);
+                  }}
+                />
+                {option}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        {field.description && (
+          <p id={hintId} className="mt-1 text-[11px] text-muted">
+            {field.description}
+          </p>
+        )}
+      </div>
     );
   }
 
   if (field.type === "images" || field.type === "asset") {
     const ids = field.type === "images" ? (Array.isArray(value) ? value : []) : value == null ? [] : [value];
+    const addTyped = () => {
+      const input = typed.current;
+      if (!input) return;
+      const parsed = Number(input.value);
+      if (!Number.isInteger(parsed) || parsed < 1) return;
+      if (field.type === "images") {
+        const max = field.constraints.max_items ?? 1;
+        const current = Array.isArray(value) ? (value as number[]) : [];
+        onChange([...current, parsed].slice(0, max));
+      } else {
+        onChange(parsed);
+      }
+      input.value = "";
+    };
     return (
       <div>
         <label className="label" htmlFor={id}>
@@ -275,6 +312,7 @@ function Field({
         <div className="flex gap-2">
           <input
             id={id}
+            ref={typed}
             className="input"
             inputMode="numeric"
             placeholder="Asset id"
@@ -282,18 +320,12 @@ function Field({
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
               event.preventDefault();
-              const parsed = Number((event.target as HTMLInputElement).value);
-              if (!Number.isInteger(parsed) || parsed < 1) return;
-              if (field.type === "images") {
-                const max = field.constraints.max_items ?? 1;
-                const current = Array.isArray(value) ? (value as number[]) : [];
-                onChange([...current, parsed].slice(0, max));
-              } else {
-                onChange(parsed);
-              }
-              (event.target as HTMLInputElement).value = "";
+              addTyped();
             }}
           />
+          <Button type="button" onClick={addTyped}>
+            Add
+          </Button>
           <Button type="button" onClick={onPick}>
             Gallery
           </Button>
@@ -341,6 +373,7 @@ function Field({
         onBlur={(event) => {
           try {
             onChange(JSON.parse(event.target.value));
+            event.target.removeAttribute("aria-invalid");
           } catch {
             event.target.setAttribute("aria-invalid", "true");
           }

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SavedRecipe } from "../api/types";
@@ -86,5 +86,82 @@ describe("RecipeForm", () => {
     expect(screen.getByRole("list", { name: "Source images assets" })).toHaveTextContent("#12");
     await user.click(screen.getByRole("button", { name: "Run recipe" }));
     expect(onRun).toHaveBeenCalledWith({ images: [12] }, false);
+  });
+
+  it("adds an asset id from the Add button", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    render(<RecipeForm recipe={withImages} onRun={onRun} />);
+    await user.type(screen.getByLabelText(/Source images/), "12");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("list", { name: "Source images assets" })).toHaveTextContent("#12");
+    await user.click(screen.getByRole("button", { name: "Run recipe" }));
+    expect(onRun).toHaveBeenCalledWith({ images: [12] }, false);
+  });
+
+  it("ignores ctrl+enter while busy, while a dialog is open, and from outside the form", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    const { rerender } = render(<RecipeForm recipe={recipe} busy onRun={onRun} />);
+    await user.click(screen.getByLabelText("Prompt"));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    expect(onRun).not.toHaveBeenCalled();
+
+    rerender(<RecipeForm recipe={withImages} onRun={onRun} />);
+    await user.click(screen.getByRole("button", { name: "Gallery" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("describes toggles and multiselects and clears an invalid JSON value", async () => {
+    const user = userEvent.setup();
+    const described: SavedRecipe = {
+      ...recipe,
+      fields: [
+        {
+          name: "auto_negative",
+          type: "toggle",
+          label: "Auto negative",
+          description: "Add the usual negative.",
+          default: false,
+          constraints: {},
+        },
+        {
+          name: "styles",
+          type: "multiselect",
+          label: "Styles",
+          description: "Pick at least one.",
+          default: ["photo"],
+          constraints: { options: ["photo", "paint"] },
+        },
+        {
+          name: "loras",
+          type: "lora",
+          label: "LoRAs",
+          description: "",
+          default: [],
+          constraints: {},
+        },
+      ],
+    };
+    render(<RecipeForm recipe={described} onRun={vi.fn()} />);
+    expect(screen.getByLabelText("Auto negative")).toHaveAttribute(
+      "aria-describedby",
+      expect.stringMatching(/hint$/),
+    );
+    expect(screen.getByText("Add the usual negative.")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Styles" })).toHaveAttribute("aria-describedby");
+    expect(screen.getByText("Pick at least one.")).toBeInTheDocument();
+
+    const json = screen.getByLabelText(/LoRAs/);
+    fireEvent.change(json, { target: { value: "{" } });
+    fireEvent.blur(json);
+    expect(json).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(json, { target: { value: "[]" } });
+    fireEvent.blur(json);
+    expect(json).not.toHaveAttribute("aria-invalid");
+    await user.click(screen.getByRole("button", { name: "Run recipe" }));
   });
 });

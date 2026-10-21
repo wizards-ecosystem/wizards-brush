@@ -61,14 +61,17 @@ axes and template; the button on a generator saves this kind of recipe.
 
 Open a generator, set it up, and choose **Save as recipe**. Check the fields
 the next run may change. Everything else stays as it was when you saved. A
-recipe with nothing checked runs as a one-step setup.
+guidance value left at the model's default follows a different model if you
+expose the model and pick another one later. A guidance value you set
+yourself stays. A recipe with nothing checked runs as a one-step setup.
 
 The image on the form is not stored. For an edit, leave **Source images**
 checked, or pick an image that is already in the gallery.
 
 **Run recipe** queues a normal job. **Check** confirms the form without
-queueing. Ctrl / ⌘ + Enter runs. **Delete recipe** removes the definition;
-jobs already queued stay in the queue.
+queueing. Ctrl / ⌘ + Enter runs while the form is focused, and does nothing
+while the form is busy or a gallery dialog is open. **Delete recipe** removes
+the definition; jobs already queued stay in the queue.
 
 ## Variant sets
 

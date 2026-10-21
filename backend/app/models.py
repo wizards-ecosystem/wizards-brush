@@ -344,8 +344,10 @@ class Recipe(SQLModel, table=True):
     `params_json` is the frozen settings of one job kind. `fields_json` is the
     subset a later run may override, each with the type, default, constraints
     and description captured when the recipe was saved. `inputs_json` is the
-    frozen gallery inputs (`images`, `mask`, `last_frame`). Running a recipe
-    merges a caller's values onto this snapshot and submits an ordinary job.
+    frozen gallery inputs (`images`, `mask`, `last_frame`). `defaulted_json`
+    names settings that were left at the kind's default, so a run can recompute
+    them when their source changes. Running a recipe merges a caller's values
+    onto this snapshot and submits an ordinary job.
 
     This is not a Variant Set recipe. Those live on `variantrecipe` and fan out
     across axes. Ids are never reused: a saved link or an agent transcript may
@@ -362,6 +364,9 @@ class Recipe(SQLModel, table=True):
     params_json: str = "{}"
     fields_json: str = "[]"
     inputs_json: str = "{}"
+    # Setting names filled from the kind's defaults (or sent equal to them).
+    # A run recomputes these when the field they follow changes.
+    defaulted_json: str = "[]"
     # Who saved it: "ui", "mcp", or the API token's name. Provenance, not a
     # permission. Empty on a row written before the column existed.
     client: str = ""
@@ -379,6 +384,10 @@ class Recipe(SQLModel, table=True):
     @property
     def inputs(self) -> dict[str, Any]:
         return _json_or(self.inputs_json, {})
+
+    @property
+    def defaulted(self) -> list[str]:
+        return [item for item in _json_or(self.defaulted_json, []) if isinstance(item, str)]
 
 
 class VariantRecipe(SQLModel, table=True):

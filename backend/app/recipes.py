@@ -25,8 +25,13 @@ _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _MAX_FIELDS = 32
 _MAX_DESCRIPTION = 400
 _MAX_PARAMS_CHARS = 100_000
+# SQLite stores integers as signed 64-bit. Eighteen digits always fit;
+# a longer digit string (or a non-ASCII digit) must not be passed to int().
+_MAX_ID_DIGITS = 18
+_MAX_ASSET_ID = 10**_MAX_ID_DIGITS - 1
 _CONSTRAINT_KEYS = ("min", "max", "step", "options")
 _INPUT_NAMES = ("images", "mask", "last_frame")
+_MISSING = object()
 
 
 def clean_name(name: str) -> str:
@@ -37,6 +42,12 @@ def clean_name(name: str) -> str:
             400, "name must be 1-80 characters and cannot contain a slash",
             code="invalid_request", field="name",
             suggestions=["Use a short name without slashes, or pass slug."],
+        )
+    if _digits_only(text):
+        raise RequestError(
+            400, "name cannot be only digits; a number is looked up as an id",
+            code="invalid_request", field="name",
+            suggestions=["Use a name with a letter, like Ceramic cup."],
         )
     return text
 
@@ -51,16 +62,23 @@ def slugify(name: str) -> str:
             code="invalid_request", field="name",
             suggestions=["Use a name with letters or digits, or pass slug."],
         )
+    if _digits_only(text):
+        raise RequestError(
+            400, "name needs a letter so its slug is not only digits",
+            code="invalid_request", field="name",
+            suggestions=["Use a name with a letter. A number is looked up as an id."],
+        )
     return text
 
 
 def check_slug(slug: str) -> str:
     text = slug.strip().lower()
-    if not _SLUG.fullmatch(text) or len(text) > 64:
+    if not _SLUG.fullmatch(text) or len(text) > 64 or _digits_only(text):
         raise RequestError(
-            400, "slug must be 1-64 characters of lowercase letters, digits and hyphens",
+            400, "slug must be 1-64 characters of lowercase letters, digits and hyphens, "
+                 "and cannot be only digits",
             code="invalid_request", field="slug",
-            suggestions=["Use a slug like ceramic-cup."],
+            suggestions=["Use a slug like ceramic-cup. A number is looked up as an id."],
         )
     return text
 
@@ -86,7 +104,10 @@ def compile_recipe(
     """Frozen params, frozen inputs, and the exposed-field snapshot.
 
     Params are filled with the kind's defaults so a later default change does
-    not silently retune a saved setup. Exposed names must be settings of the
+    not silently retune a saved setup while its source stays the same. A value
+    the author omitted, or sent equal to the resolved default, is listed in
+    `defaulted`. A run recomputes those when the field they depend on changes
+    (`guidance` follows `model_variant`). Exposed names must be settings of the
     kind, or an input role it accepts (`images`, `mask`, `last_frame`).
     """
     if not isinstance(params, Mapping):
@@ -99,7 +120,7 @@ def compile_recipe(
         clean = controls.check_params(dict(params), known, subject=kind)
     except controls.ControlError as error:
         raise _control_error(error) from None
-    filled = _fill_defaults(known, clean)
+    filled, defaulted = _fill_defaults(known, clean)
     try:
         filled = controls.check_params(filled, known, subject=kind)
     except controls.ControlError as error:
@@ -109,7 +130,10 @@ def compile_recipe(
     frozen_inputs = _frozen_inputs(inputs)
     fields = _fields(kind, known, spec, filled, frozen_inputs, expose, descriptions or {})
     _check_frozen_shape(kind, spec, frozen_inputs, {item["name"] for item in fields})
-    return {"kind": kind, "params": filled, "inputs": frozen_inputs, "fields": fields}
+    return {
+        "kind": kind, "params": filled, "inputs": frozen_inputs, "fields": fields,
+        "defaulted": defaulted,
+    }
 
 
 def validate_assets(kind: str, inputs: Mapping[str, Any]) -> None:
@@ -118,16 +142,16 @@ def validate_assets(kind: str, inputs: Mapping[str, Any]) -> None:
     An exposed image with an empty default is checked later, on the run.
     """
     _known, spec = kind_contract(kind)
-    images = [int(item) for item in inputs.get("images") or []]
+    images = _coerce_ids(list(inputs.get("images") or []), "inputs.images")
     rows = [
         require_input_asset(asset_id, spec.image_kind, f"inputs.images[{index}]")
         for index, asset_id in enumerate(images)
     ]
-    mask_id = inputs.get("mask")
-    last_id = inputs.get("last_frame")
-    mask = None if mask_id is None else require_input_asset(int(mask_id), "image", "inputs.mask")
+    mask_id = _coerce_optional_id(inputs.get("mask"), "inputs.mask")
+    last_id = _coerce_optional_id(inputs.get("last_frame"), "inputs.last_frame")
+    mask = None if mask_id is None else require_input_asset(mask_id, "image", "inputs.mask")
     if last_id is not None:
-        require_input_asset(int(last_id), "image", "inputs.last_frame")
+        require_input_asset(last_id, "image", "inputs.last_frame")
     if rows and mask is not None and (mask.width, mask.height) != (rows[0].width, rows[0].height):
         raise RequestError(
             400,
@@ -153,12 +177,19 @@ def schema_for_fields(fields: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def merge_run(
+    kind: str,
     params: Mapping[str, Any],
     frozen_inputs: Mapping[str, Any],
     fields: Sequence[Mapping[str, Any]],
     provided: Mapping[str, Any],
+    defaulted: Sequence[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Overlay `provided` onto the frozen setup. Unknown keys are refused."""
+    """Overlay `provided` onto the frozen setup. Unknown keys are refused.
+
+    Setting values are checked against the live kind after the merge, not
+    against the limits snapshotted onto the fields. Input roles keep the saved
+    counts. Defaulted params are recomputed when the field they follow changed.
+    """
     if not isinstance(provided, Mapping):
         raise RequestError(
             400, "inputs must be an object", code="invalid_type", field="inputs",
@@ -192,15 +223,21 @@ def merge_run(
 
     merged = dict(params)
     job_inputs = {
-        "images": [int(item) for item in frozen_inputs.get("images") or []],
-        "mask": frozen_inputs.get("mask"),
-        "last_frame": frozen_inputs.get("last_frame"),
+        "images": _coerce_ids(list(frozen_inputs.get("images") or []), "inputs.images"),
+        "mask": _coerce_optional_id(frozen_inputs.get("mask"), "inputs.mask"),
+        "last_frame": _coerce_optional_id(frozen_inputs.get("last_frame"), "inputs.last_frame"),
     }
     for name, value in clean.items():
         if name in _INPUT_NAMES:
             job_inputs[name] = value
         else:
             merged[name] = value
+    _recompute_defaulted(kind, params, merged, defaulted or (), set(clean))
+    known, _spec = kind_contract(kind)
+    try:
+        merged = controls.check_params(merged, known, subject=kind)
+    except controls.ControlError as error:
+        raise _control_error(error) from None
     return merged, job_inputs
 
 
@@ -231,25 +268,105 @@ def public_recipe(row: Any, *, summary: bool = False) -> dict[str, Any]:
     return data
 
 
-def _fill_defaults(known: Mapping[str, Mapping[str, Any]], clean: Mapping[str, Any]) -> dict[str, Any]:
-    filled: dict[str, Any] = {}
+def _digits_only(text: str) -> bool:
+    return text.isascii() and text.isdigit()
+
+
+def _same(left: Any, right: Any) -> bool:
+    """Equal for recipe defaults. 0 and 0.0 are the same guidance."""
+    if left == right:
+        return True
+    numeric = (int, float)
+    if isinstance(left, bool) or isinstance(right, bool):
+        return False
+    if isinstance(left, numeric) and isinstance(right, numeric):
+        return float(left) == float(right)
+    return False
+
+
+def _mapped_default(
+    control: Mapping[str, Any],
+    context: Mapping[str, Any],
+    known: Mapping[str, Mapping[str, Any]],
+) -> Any:
+    """The value this control takes when the author did not choose one."""
+    chosen: Any = control.get("default") if "default" in control else _MISSING
+    rule = control.get("defaults_by")
+    if not isinstance(rule, Mapping):
+        return chosen
+    dep = str(rule.get("field") or "")
+    dep_value = context.get(dep, (known.get(dep) or {}).get("default"))
+    mapped = (rule.get("map") or {}).get(str(dep_value))
+    if mapped is not None:
+        return mapped
+    return chosen
+
+
+def _fill_defaults(
+    known: Mapping[str, Mapping[str, Any]], clean: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Frozen params, and the names whose value came from a default.
+
+    A sent value equal to the resolved default counts as defaulted. The form
+    always ships guidance, including the value `defaults_by` just computed, so
+    equality is what lets a model change move CFG.
+    """
+    context: dict[str, Any] = {}
     for name, control in known.items():
+        if "default" in control:
+            context[name] = control.get("default")
+    for name, control in known.items():
+        if name in clean:
+            continue
+        resolved = _mapped_default(control, context, known)
+        if resolved is not _MISSING:
+            context[name] = resolved
+    context.update(clean)
+
+    filled: dict[str, Any] = {}
+    defaulted: list[str] = []
+    for name, control in known.items():
+        resolved = _mapped_default(control, context, known)
         if name in clean:
             filled[name] = clean[name]
-        elif "default" in control:
-            filled[name] = control.get("default")
-    for name, control in known.items():
-        if name in clean:
+            if resolved is not _MISSING and _same(clean[name], resolved):
+                defaulted.append(name)
+            continue
+        if resolved is _MISSING:
+            continue
+        filled[name] = resolved
+        defaulted.append(name)
+    return filled, defaulted
+
+
+def _recompute_defaulted(
+    kind: str,
+    frozen: Mapping[str, Any],
+    merged: dict[str, Any],
+    defaulted: Sequence[str],
+    caller_keys: set[str],
+) -> None:
+    """Move defaulted params whose source changed onto the live default."""
+    known, _spec = kind_contract(kind)
+    for name in defaulted:
+        if name in caller_keys:
+            continue
+        control = known.get(name)
+        if control is None:
             continue
         rule = control.get("defaults_by")
         if not isinstance(rule, Mapping):
             continue
         dep = str(rule.get("field") or "")
-        dep_value = filled.get(dep, (known.get(dep) or {}).get("default"))
-        mapped = (rule.get("map") or {}).get(str(dep_value))
+        if not dep:
+            continue
+        frozen_dep = frozen.get(dep, (known.get(dep) or {}).get("default"))
+        live_dep = merged.get(dep, frozen_dep)
+        if str(live_dep) == str(frozen_dep):
+            continue
+        mapped = (rule.get("map") or {}).get(str(live_dep))
         if mapped is not None:
-            filled[name] = mapped
-    return filled
+            merged[name] = mapped
 
 
 def _reject_huge(params: Mapping[str, Any]) -> None:
@@ -269,26 +386,44 @@ def _reject_huge(params: Mapping[str, Any]) -> None:
 
 def _frozen_inputs(inputs: Mapping[str, Any]) -> dict[str, Any]:
     images = inputs.get("images") or []
-    bad_ids = (
-        not isinstance(images, list)
-        or any(isinstance(item, bool) or not isinstance(item, int) for item in images)
-    )
-    if bad_ids:
+    if not isinstance(images, list):
         raise RequestError(
             400, "inputs.images must be a list of asset ids",
             code="invalid_type", field="inputs.images",
             suggestions=["Pass gallery asset ids, not paths or URLs."],
         )
-    mask = inputs.get("mask")
-    last = inputs.get("last_frame")
-    for label, value in (("inputs.mask", mask), ("inputs.last_frame", last)):
-        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
-            raise RequestError(
-                400, f"{label} must be an asset id",
-                code="invalid_type", field=label,
-                suggestions=["Pass a gallery asset id."],
-            )
-    return {"images": [int(item) for item in images], "mask": mask, "last_frame": last}
+    return {
+        "images": _coerce_ids(images, "inputs.images"),
+        "mask": _coerce_optional_id(inputs.get("mask"), "inputs.mask"),
+        "last_frame": _coerce_optional_id(inputs.get("last_frame"), "inputs.last_frame"),
+    }
+
+
+def _coerce_optional_id(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    return _coerce_id(value, field)
+
+
+def _coerce_id(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > _MAX_ASSET_ID:
+        raise RequestError(
+            400, f"{field} must be an asset id of at most {_MAX_ID_DIGITS} digits",
+            code="invalid_request", field=field,
+            suggestions=["Pass a gallery asset id."],
+        )
+    return int(value)
+
+
+def _coerce_ids(values: list[Any], field: str) -> list[int]:
+    bad = any(isinstance(item, bool) or not isinstance(item, int) for item in values)
+    if bad:
+        raise RequestError(
+            400, f"{field} must be a list of asset ids",
+            code="invalid_type", field=field,
+            suggestions=["Pass gallery asset ids, not paths or URLs."],
+        )
+    return [_coerce_id(item, field) for item in values]
 
 
 def _fields(
@@ -526,7 +661,9 @@ def _check_field(field: Mapping[str, Any], value: Any) -> Any:
         return _check_images(field, value)
     if kind == "asset":
         return _check_asset(field, value)
-    return controls.check_value(_control_view(field), value)
+    # Settings are judged against the live kind once the merge is complete.
+    # The snapshot on the field is what the published schema shows.
+    return value
 
 
 def _check_images(field: Mapping[str, Any], value: Any) -> list[int]:
@@ -550,12 +687,7 @@ def _check_images(field: Mapping[str, Any], value: Any) -> list[int]:
             code="invalid_request", field=name,
             suggestions=[f"Pass {low if low == high else f'{low}-{high}'} gallery asset id(s)."],
         )
-    if any(item < 1 for item in value):
-        raise RequestError(
-            400, f"{name} asset ids must be positive",
-            code="invalid_request", field=name,
-        )
-    return [int(item) for item in value]
+    return _coerce_ids(value, name)
 
 
 def _check_asset(field: Mapping[str, Any], value: Any) -> int | None:
@@ -568,12 +700,7 @@ def _check_asset(field: Mapping[str, Any], value: Any) -> int | None:
                 suggestions=["Pass a gallery asset id."],
             )
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise RequestError(
-            400, f"{name} must be an asset id", code="invalid_type", field=name,
-            suggestions=["Pass a positive gallery asset id."],
-        )
-    return int(value)
+    return _coerce_id(value, name)
 
 
 def _control_error(error: controls.ControlError) -> RequestError:

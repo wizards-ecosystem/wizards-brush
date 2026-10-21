@@ -110,10 +110,15 @@ exact fields travel with the recipe, so saving one does not add a tool.
 
 `run_recipe` accepts only the exposed fields. An unknown key is
 `unknown_setting`, and `valid_options` lists those fields, not every setting
-of the kind. Omit a key to keep its saved default. A real run waits, like
-`generate`. The outcome adds `recipe_id`, `recipe_slug` and `recipe_name`.
-The job itself is ordinary: its client is `mcp`, and its params do not carry
-the recipe id, so a later rerun still validates.
+of the kind. Omit a key to keep its saved default. A setting left at the
+kind's default is recomputed when the run changes the field it follows, so
+guidance left at the model's default moves with `model_variant`. Setting
+values are checked against the live kind: the published schema is a snapshot
+for discovery, and a sibling change can allow a value that snapshot's range
+would have refused. A real run waits, like `generate`. The outcome adds
+`recipe_id`, `recipe_slug` and `recipe_name`. The job itself is ordinary:
+its client is `mcp`, and its params do not carry the recipe id, so a later
+rerun still validates.
 
 `brush://recipes` and `brush://recipes/{key}` return the same documents.
 

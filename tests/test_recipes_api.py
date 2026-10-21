@@ -40,6 +40,18 @@ def _name(label: str) -> str:
     return f"{label} {uuid.uuid4().hex[:8]}"
 
 
+def _table_counts() -> tuple[int, int]:
+    from sqlmodel import select
+
+    from backend.app.db import session
+    from backend.app.models import Asset, Job
+
+    with session() as handle:
+        jobs = len(list(handle.exec(select(Job.id))))
+        assets = len(list(handle.exec(select(Asset.id))))
+    return jobs, assets
+
+
 def _save(client, **body):
     response = client.post("/api/recipes", json=body)
     assert response.status_code == 200, response.text
@@ -62,6 +74,7 @@ def test_save_run_and_dry_run_keep_frozen_settings(client, enqueued):
     assert saved["input_schema"]["additionalProperties"] is False
     assert list(saved["input_schema"]["properties"]) == ["prompt"]
     before = len(enqueued)
+    jobs_before, assets_before = _table_counts()
 
     dry = client.post(f"/api/recipes/{saved['slug']}/run", json={
         "inputs": {"prompt": "a blue cup"}, "dry_run": True,
@@ -75,6 +88,7 @@ def test_save_run_and_dry_run_keep_frozen_settings(client, enqueued):
     assert body["params"]["prompt"] == "a blue cup"
     assert body["recipe_id"] == saved["id"]
     assert len(enqueued) == before
+    assert _table_counts() == (jobs_before, assets_before)
 
     ran = client.post(f"/api/recipes/{saved['name']}/run", json={
         "inputs": {"prompt": "a blue cup"},
@@ -231,19 +245,93 @@ def test_clear_all_keeps_generation_recipes(client, enqueued):
     _CANCELLED.clear()
 
 
-def test_a_numeric_key_is_an_id_before_it_is_a_slug(client):
+def test_a_numeric_key_is_an_id_and_digit_only_names_are_refused(client):
     first = _save(
         client, name=_name("Numbered"), kind="image_local",
         params={"prompt": "a cup"}, expose=["prompt"],
     )
-    second = _save(
-        client, name=_name("Also numbered"), kind="image_local",
-        params={"prompt": "another cup"}, expose=["prompt"], slug=str(first["id"]),
-    )
     by_id = client.get(f"/api/recipes/{first['id']}")
     assert by_id.status_code == 200
     assert by_id.json()["id"] == first["id"]
-    by_name = client.get(f"/api/recipes/{second['name']}")
-    assert by_name.status_code == 200
-    assert by_name.json()["id"] == second["id"]
     assert client.get("/api/recipes/0").status_code == 404
+    huge = client.get("/api/recipes/" + ("9" * 30))
+    assert huge.status_code == 404
+    assert client.get("/api/recipes/%C2%B2").status_code == 404
+    digits = client.post("/api/recipes", json={
+        "name": "12345", "kind": "image_local", "params": {"prompt": "a cup"}, "expose": [],
+    })
+    assert digits.status_code == 400
+    assert digits.json()["field"] == "name"
+    slug = client.post("/api/recipes", json={
+        "name": _name("Slug"), "slug": str(first["id"]),
+        "kind": "image_local", "params": {"prompt": "a cup"}, "expose": [],
+    })
+    assert slug.status_code == 400
+    assert slug.json()["field"] == "slug"
+
+
+def test_guidance_follows_a_different_model_when_it_was_left_at_the_default(client):
+    from backend.app.generators import variants
+
+    offered = variants.available("local")
+    source = offered[0]
+    target = next(variant for variant in offered if variant.guidance != source.guidance)
+    saved = _save(
+        client, name=_name("Guidance"), kind="image_local",
+        params={
+            "prompt": "a cup",
+            "model_variant": source.name,
+            "guidance": source.guidance,
+        },
+        expose=["model_variant"],
+    )
+    dry = client.post(f"/api/recipes/{saved['slug']}/run", json={
+        "inputs": {"model_variant": target.name}, "dry_run": True,
+    })
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["params"]["model_variant"] == target.name
+    assert dry.json()["params"]["guidance"] == target.guidance
+
+
+def test_live_limits_accept_hunyuan_frames_saved_against_wan(client, monkeypatch):
+    import backend.app.generators.registry as reg
+
+    monkeypatch.setattr(reg.settings, "hunyuan_video_model", "tencent/HunyuanVideo")
+    monkeypatch.setattr(reg, "remote_gpu_seen", lambda: False)
+    saved = _save(
+        client, name=_name("Clip"), kind="t2v",
+        params={"prompt": "a cup spinning", "engine": "wan", "num_frames": 49},
+        expose=["engine", "num_frames"],
+    )
+    frames = next(field for field in saved["fields"] if field["name"] == "num_frames")
+    assert frames["constraints"]["min"] == 25
+    dry = client.post(f"/api/recipes/{saved['slug']}/run", json={
+        "inputs": {"engine": "hunyuan", "num_frames": 9}, "dry_run": True,
+    })
+    assert dry.status_code == 200, dry.text
+    body = dry.json()
+    assert body["params"]["engine"] == "hunyuan"
+    assert body["params"]["num_frames"] == 9
+
+
+def test_recipes_and_mcp_recipe_tools_require_the_api_token(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "tok123")
+    assert client.get("/api/recipes").status_code == 401
+    refused = client.post("/api/recipes", json={
+        "name": "Locked cup", "kind": "image_local", "params": {"prompt": "a cup"}, "expose": [],
+    })
+    assert refused.status_code == 401
+    headers = {"Accept": "application/json, text/event-stream"}
+    for name in ("list_recipes", "get_recipe", "save_recipe", "run_recipe"):
+        call = client.post("/api/mcp", headers=headers, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": {}},
+        })
+        assert call.status_code == 401, name
+    allowed = client.get("/api/recipes", headers={"Authorization": "Bearer tok123"})
+    assert allowed.status_code == 200
+    opened = client.post("/api/mcp", headers={**headers, "Authorization": "Bearer tok123"}, json={
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "list_recipes", "arguments": {}},
+    })
+    assert opened.status_code != 401

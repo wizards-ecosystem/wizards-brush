@@ -499,18 +499,27 @@ A name is 1–80 characters and cannot contain `/`. It is unique ignoring case,
 so calling a recipe by name is unambiguous. The slug is 1–64 characters of
 lowercase letters, digits and hyphens. Omitting `slug` derives one from the
 name and appends `-2`, `-3`, … when that slug is taken. An explicit slug is
-used as given, or refused with 409 when it is taken. A key that is all digits
-is looked up as an id first; a numeric slug is reached by name when that id
-exists.
+used as given, or refused with 409 when it is taken. A name or slug that is
+only digits is refused. A key of 1–18 ASCII digits is looked up as an id; a
+longer digit string is not an id and does not match a slug.
 
 `params` are the kind's settings, filled with that kind's defaults at save
-time, so a later change to a default does not retune a saved setup. A control
-added to the kind after the save is not pinned; the job builder applies it.
-Constraints on an exposed field are a snapshot from save time. Changing
-another exposed field on a run does not retune a sibling's snapshotted range.
-The merged params are still checked against the live kind, and a disagreement
-comes back as the usual structured error. Save the recipe again to refresh
-the snapshot.
+time. A value the author omitted, or sent equal to the resolved default, is
+recorded as defaulted. A later change to a registry default does not retune
+that setup while the field it depends on stays the same. When a run changes
+that field — `model_variant` for guidance, `engine` where a control follows
+it — defaulted values are computed again from the live kind. A value the
+author set to something else stays as saved. A control added to the kind
+after the save is not pinned; the job builder applies it.
+
+The published `input_schema` is a snapshot of each field's limits at save
+time, which is what the form and agents read. A run does not enforce that
+snapshot for settings. Setting values are checked against the live kind
+after the merge, so changing `engine` to Hunyuan accepts `num_frames: 9` on
+a recipe whose saved schema still shows Wan's 25–121 range. Input roles
+(`images`, `mask`, `last_frame`) keep the saved counts. A disagreement comes
+back as the usual structured error. Save the recipe again to refresh the
+published schema.
 
 `inputs.images`, `inputs.mask` and `inputs.last_frame` are gallery asset ids.
 An exposed image list whose saved default is empty is required at run time

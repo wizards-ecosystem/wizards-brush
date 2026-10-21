@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from .ops import add_index, add_unique_index
+from .ops import add_column, add_index, add_unique_index
 
 _TABLE = """CREATE TABLE IF NOT EXISTS recipe (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,10 +24,11 @@ _TABLE = """CREATE TABLE IF NOT EXISTS recipe (
     slug         VARCHAR NOT NULL DEFAULT '',
     description  VARCHAR NOT NULL DEFAULT '',
     kind         VARCHAR NOT NULL DEFAULT '',
-    params_json  VARCHAR NOT NULL DEFAULT '{}',
-    fields_json  VARCHAR NOT NULL DEFAULT '[]',
-    inputs_json  VARCHAR NOT NULL DEFAULT '{}',
-    client       VARCHAR NOT NULL DEFAULT '',
+    params_json     VARCHAR NOT NULL DEFAULT '{}',
+    fields_json     VARCHAR NOT NULL DEFAULT '[]',
+    inputs_json     VARCHAR NOT NULL DEFAULT '{}',
+    defaulted_json  VARCHAR NOT NULL DEFAULT '[]',
+    client          VARCHAR NOT NULL DEFAULT '',
     created_at   DATETIME,
     updated_at   DATETIME
 )"""
@@ -46,6 +47,9 @@ _UNIQUE_INDEXES: tuple[tuple[str, str, str], ...] = (
 
 def run(cur: sqlite3.Cursor) -> None:
     cur.execute(_TABLE)
+    # A database created from an earlier draft of this migration has the table
+    # already and would ignore the new column in CREATE TABLE IF NOT EXISTS.
+    add_column(cur, "recipe", "defaulted_json", "VARCHAR NOT NULL DEFAULT '[]'")
     for name, table, cols in _INDEXES:
         add_index(cur, name, table, cols)
     for name, table, cols in _UNIQUE_INDEXES:

@@ -177,7 +177,8 @@ async def create_recipe(body: RecipeWrite) -> RecipeRead:
         row = db.insert_recipe(
             name=stored["name"], slug=stored["slug"], description=stored["description"],
             kind=stored["kind"], params=stored["params"], fields=stored["fields"],
-            inputs=stored["inputs"], client=client_tag.current(),
+            inputs=stored["inputs"], defaulted=list(stored["defaulted"]),
+            client=client_tag.current(),
         )
     except db.RecipeConflict as error:
         raise _conflict("name", "that name or slug is already used") from error
@@ -205,7 +206,8 @@ async def update_recipe(key: str, body: RecipeWrite) -> RecipeRead:
         stored = _store(body, exclude_id=current.id, previous_slug=kept)
         row = db.update_recipe(
             current.id, name=stored["name"], slug=stored["slug"], description=stored["description"],
-            kind=stored["kind"], params=stored["params"], fields=stored["fields"], inputs=stored["inputs"],
+            kind=stored["kind"], params=stored["params"], fields=stored["fields"],
+            inputs=stored["inputs"], defaulted=list(stored["defaulted"]),
         )
     except db.RecipeConflict as error:
         raise _conflict("name", "that name or slug is already used") from error
@@ -234,7 +236,9 @@ async def run_recipe(key: str, body: RecipeRunBody) -> RecipeRun:
     row = db.find_recipe(key)
     if row is None or row.id is None:
         raise _missing(key)
-    params, inputs = saved.merge_run(row.params, row.inputs, row.fields, body.inputs)
+    params, inputs = saved.merge_run(
+        row.kind, row.params, row.inputs, row.fields, body.inputs, row.defaulted,
+    )
     result = await create_job(JobCreate(
         kind=row.kind, params=params, inputs=JobInputs.model_validate(inputs),
         dry_run=body.dry_run, request_id=body.request_id,

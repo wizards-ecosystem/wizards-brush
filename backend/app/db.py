@@ -1215,7 +1215,8 @@ def _detach_recipe(s: Session, row: Recipe) -> Recipe:
     """Load every column, then leave the session so callers can read the row."""
     loaded = (
         row.id, row.name, row.slug, row.description, row.kind, row.params_json,
-        row.fields_json, row.inputs_json, row.client, row.created_at, row.updated_at,
+        row.fields_json, row.inputs_json, row.defaulted_json, row.client,
+        row.created_at, row.updated_at,
     )
     del loaded
     s.expunge(row)
@@ -1231,6 +1232,7 @@ def insert_recipe(
     params: dict[str, Any],
     fields: list[dict[str, Any]],
     inputs: dict[str, Any],
+    defaulted: list[str],
     client: str,
 ) -> Recipe:
     now = datetime.now(UTC)
@@ -1238,7 +1240,8 @@ def insert_recipe(
         row = Recipe(
             name=name, slug=slug, description=description, kind=kind,
             params_json=json.dumps(params), fields_json=json.dumps(fields),
-            inputs_json=json.dumps(inputs), client=client,
+            inputs_json=json.dumps(inputs), defaulted_json=json.dumps(list(defaulted)),
+            client=client,
             created_at=now, updated_at=now,
         )
         s.add(row)
@@ -1261,6 +1264,7 @@ def update_recipe(
     params: dict[str, Any],
     fields: list[dict[str, Any]],
     inputs: dict[str, Any],
+    defaulted: list[str],
 ) -> Recipe | None:
     with session() as s:
         row = s.get(Recipe, recipe_id)
@@ -1273,6 +1277,7 @@ def update_recipe(
         row.params_json = json.dumps(params)
         row.fields_json = json.dumps(fields)
         row.inputs_json = json.dumps(inputs)
+        row.defaulted_json = json.dumps(list(defaulted))
         row.updated_at = datetime.now(UTC)
         s.add(row)
         try:
@@ -1335,7 +1340,9 @@ def find_recipe(key: str) -> Recipe | None:
     text = key.strip()
     if not text:
         return None
-    if text.isdigit():
+    # "²".isdigit() is true and int() raises. A 40-digit string fits in Python
+    # and overflows SQLite. Eighteen ASCII digits stay inside a signed 64-bit int.
+    if text.isascii() and text.isdigit() and len(text) <= 18:
         row = get_recipe(int(text))
         if row is not None:
             return row
