@@ -6,6 +6,10 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+No changes yet.
+
+## [0.1.8] - 2026-10-21
+
 ### Fixed
 
 - A refused OpenAI image edit no longer saves the upload. The images are
@@ -17,6 +21,12 @@ contributors know which user-facing changes need release notes.
   dry run validates its mask without writing the mask file. A repeated
   `request_id` on `edit` is recognized before those images are imported. A
   dry run also validates while the Remote GPU worker is offline.
+- Named region masks send float32 to their ONNX graphs. The mean and standard
+  deviation were Python tuples, which promoted the pixels to float64, and both
+  graphs rejected that.
+- Remote inpaint keeps its padded crop and the lossless source overlay in the
+  app. Asking the worker to crop again could fail after the image had rendered,
+  because diffusers resizes the image and not the mask before its own overlay.
 
 ### Added
 
@@ -35,6 +45,18 @@ contributors know which user-facing changes need release notes.
   name). The value is stored on the job, copied into output metadata, and
   returned on job and asset responses. Set `API_TOKEN_NAME` to label token
   clients. `Authorization: Bearer` is accepted alongside `X-API-Token`.
+
+### Changed
+
+- The database records the submitting client (migration `0009`). A backup of
+  `output/gen.db` is written before it runs; 0.1.7 will not open the migrated
+  database, so keep that backup to roll back.
+- Python and frontend dependencies moved forward together, and the worker
+  image's lock with them: FastAPI 0.142.4, uvicorn 0.54.0, peft 0.21.2,
+  filelock 4.0.12, accelerate 1.15.0, React 19.3.0, Vite 8.3.3, Vitest 5.0.3.
+  The frontend lock also takes undici 8.11.2, brace-expansion 5.0.12 and
+  source-map-js 1.2.2. diffusers, transformers and torch are unchanged, but
+  the lock change gives the worker image a new build id.
 
 ## [0.1.7] - 2026-10-11
 
@@ -295,6 +317,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.1.8]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.8
 [0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
 [0.1.5]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.5
