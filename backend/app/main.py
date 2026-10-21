@@ -13,6 +13,8 @@ from . import client_tag, enrichment, log, notify
 from .agent.mcp_server import exact_route as mcp_exact_route
 from .agent.mcp_server import http_app as mcp_http_app
 from .agent.mcp_server import open_sessions
+from .agent.openai_compat import error_response as openai_error_response
+from .agent.openai_compat import router as openai_router
 from .config import ROOT, settings
 from .db import (
     acquire_process_lock,
@@ -243,7 +245,8 @@ of named axes: `POST /api/variant-sets`, then `GET /api/variant-sets/{id}/wait`.
 Every submission accepts a `request_id`; resubmitting it returns the original work
 instead of queuing it twice, so a client can retry blindly after a network error.
 The full guide with examples is `docs/api.md` in the repository.
-Agents use the same API through MCP at `/api/mcp`; see `docs/agents.md`.
+Agents use the same API through MCP at `/api/mcp`, or the OpenAI image API at
+`/api/openai/v1`; see `docs/agents.md`.
 """
 
 _API_TAGS = [
@@ -254,6 +257,7 @@ _API_TAGS = [
     {"name": "images", "description": "Multipart image generation routes used by the UI."},
     {"name": "videos", "description": "Multipart video generation routes used by the UI."},
     {"name": "tools", "description": "Per-tool routes; `POST /api/jobs` covers them too."},
+    {"name": "openai", "description": "OpenAI-compatible image generation and edits."},
 ]
 
 app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifespan,
@@ -261,8 +265,13 @@ app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifesp
 
 
 @app.exception_handler(RequestError)
-async def request_error(_request, exc: RequestError):
-    """Job refusals keep `detail` as a string and add the fields an agent can fix."""
+async def request_error(request, exc: RequestError):
+    """Job refusals keep `detail` as a string and add the fields an agent can fix.
+
+    The OpenAI image routes use that API's error envelope instead.
+    """
+    if request.url.path.startswith("/api/openai/"):
+        return openai_error_response(exc)
     return JSONResponse(error_body(exc), status_code=exc.status_code)
 
 # CORS is deliberately NOT "*".
@@ -341,7 +350,7 @@ async def api_auth(request, call_next):
 async def tag_client(request, call_next):
     """Record UI vs token-named API on jobs created during this request.
 
-    MCP tools override this with ``mcp`` for the jobs they submit.
+    MCP tools and the OpenAI image routes override this for the jobs they submit.
     """
     token = client_tag.bind_request(request)
     try:
@@ -358,7 +367,7 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
-          variant_sets.router):
+          variant_sets.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

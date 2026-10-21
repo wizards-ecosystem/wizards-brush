@@ -35,11 +35,15 @@ because a tokenless wildcard would make arbitrary web pages callers of a local
 API. Command-line clients may omit `Origin`; browser API requests and every
 WebSocket connection are checked against the served or configured origin.
 
-`/api/mcp` uses those same Host and token checks. The MCP SDK can also keep a
-host allow-list, but the list is fixed when the session starts and would
-disagree with a token set later, or with a LAN Host the bind address cannot
-name. That SDK allow-list is off. A non-loopback Host is refused until
-`API_TOKEN` is set; with the token set, the token is what admits the request.
+`/api/mcp` and `/api/openai/v1` use those same Host and token checks. There is
+no bare `/v1`. That path is outside `/api`, so it would miss the token, Origin
+and Fetch-Metadata checks.
+
+The MCP SDK can also keep a host allow-list, but the list is fixed when the
+session starts and would disagree with a token set later, or with a LAN Host
+the bind address cannot name. That SDK allow-list is off. A non-loopback Host
+is refused until `API_TOKEN` is set; with the token set, the token is what
+admits the request.
 
 Do not port-forward the Uvicorn listener or expose it directly to the internet.
 For access outside one trusted LAN, keep the app on loopback, set `API_TOKEN`,

@@ -74,6 +74,19 @@ def test_mcp_endpoint_uses_the_same_token(client, token_on):
     assert allowed.status_code != 401
 
 
+def test_openai_endpoint_uses_the_same_token(client, token_on):
+    assert client.get("/api/openai/v1/models").status_code == 401
+    refused = client.get(
+        "/api/openai/v1/models", headers={"Authorization": "Bearer wrong"},
+    )
+    assert refused.status_code == 401
+    assert refused.json() == {"detail": "unauthorized"}
+    allowed = client.get(
+        "/api/openai/v1/models", headers={"Authorization": "Bearer tok123"},
+    )
+    assert allowed.status_code == 200
+
+
 def test_browser_session_uses_server_set_http_only_cookies(client, token_on):
     path = settings.images_dir / "session_probe.png"
     response = client.post("/api/auth/session", headers={"X-API-Token": "tok123"})
@@ -238,6 +251,8 @@ def test_ws_rejects_missing_or_foreign_origin(client):
 
 def test_tokenless_loopback_rejects_untrusted_host(client):
     assert client.get("/api/stats", headers={"Host": "evil.example"}).status_code == 421
+    assert client.get("/api/openai/v1/models", headers={"Host": "evil.example"}).status_code == 421
+    assert client.post("/api/mcp", headers={"Host": "evil.example"}).status_code == 421
 
 
 def test_cross_origin_api_requests_are_rejected_but_cli_and_vite_work(client):
@@ -250,6 +265,14 @@ def test_cross_origin_api_requests_are_rejected_but_cli_and_vite_work(client):
     ).status_code == 200
     assert client.get("/api/stats", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.get("/api/stats", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert client.get(
+        "/api/openai/v1/models", headers={"Origin": "https://evil.example"},
+    ).status_code == 403
+    assert client.get(
+        "/api/openai/v1/models", headers={"Sec-Fetch-Site": "cross-site"},
+    ).status_code == 403
+    assert client.post("/api/mcp", headers={"Origin": "https://evil.example"}).status_code == 403
+    assert client.post("/api/mcp", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
     assert client.get("/api/stats").status_code == 200
     assert client.get(
         "/api/stats", headers={"Origin": "http://localhost:5173"}

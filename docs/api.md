@@ -47,6 +47,13 @@ Authorization: Bearer <token>
 A present header is checked on its own. A wrong bearer token does not fall
 through to the browser session cookie.
 
+`/api/openai/v1` is the OpenAI image API (`GET /models`, `POST /images/generations`,
+`POST /images/edits`). It uses this same token and the same Host, Origin and
+Fetch-Metadata checks. A refused image call returns
+`{"error": {"message", "type", "param", "code"}}` instead of `detail`.
+A missing token is still `{"detail": "unauthorized"}`, because that check
+runs before the route. See [Agents](agents.md).
+
 `/files/...` URLs, such as the `url` and `thumb_url` fields on an asset, are for
 browsers. They accept only the HttpOnly cookie a browser session receives, so
 a program fetches bytes from `GET /api/assets/{id}/file` instead, which honours
@@ -509,6 +516,7 @@ tag:
 | `assets` | Import, search, download, export |
 | `tools` | Per-tool routes |
 | `images`, `videos` | The UI's multipart routes |
+| `openai` | OpenAI-compatible image generation and edits (`/api/openai/v1`) |
 | `system`, `settings`, `library`, `collections`, `loras`, `wildcards`, `grid` | Supporting routes |
 
 The multipart routes (`/api/generate/...`, `/api/tools/...`) remain supported.

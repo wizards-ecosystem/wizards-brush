@@ -269,9 +269,11 @@ Everything here is also available over HTTP, and the interface is one client of
 that API. The [API guide](api.md) covers bringing images in, queuing any
 generator or tool, waiting for results and running variant sets from a script.
 
-To see the request for what is on screen, use **Copy as an API request** (the
-copy icon at the top of any generator's panel) or **Copy API request** in the
-variant set editor. Each copies a runnable `curl` command.
+To see the request for what is on screen, use **Copy as** (the copy icon at
+the top of any generator's panel). It offers the job API `curl` command, an
+MCP `generate` or `edit` call, and, for image kinds the OpenAI API can run,
+a Python SDK snippet. **Copy API request** in the variant set editor copies
+the set as `curl`.
 
 ## Remote GPU
 

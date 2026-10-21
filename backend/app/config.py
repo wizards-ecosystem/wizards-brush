@@ -219,8 +219,13 @@ class Settings(BaseSettings):
     cors_origins: str = Field(default="", alias="CORS_ORIGINS")
     api_token: str = Field(default="", alias="API_TOKEN")
     # Name recorded on jobs submitted with the API token (not the browser UI,
-    # and not MCP). Empty means those jobs are tagged "api".
+    # and not MCP). Empty means those jobs are tagged "api". OpenAI image
+    # requests use this name when it is set, and "openai" when it is empty.
     api_token_name: str = Field(default="", alias="API_TOKEN_NAME")
+    # How long /api/openai/v1/images/* waits for the finished image. Past this
+    # the response is 504 and names the job, which keeps running. The same
+    # Idempotency-Key waits for that job again.
+    openai_compat_timeout: float = Field(default=300.0, ge=0, alias="OPENAI_COMPAT_TIMEOUT")
     # File export privacy. Reproducibility metadata and the standardized AI
     # provenance declaration are separate choices because their audiences and
     # disclosure consequences differ.

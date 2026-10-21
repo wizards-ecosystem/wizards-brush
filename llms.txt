@@ -8,3 +8,12 @@
 - [API guide](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/api.md)
 - [Agents](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/agents.md)
 - [Working standards](https://github.com/wizards-ecosystem/wizards-brush/blob/main/AGENTS.md)
+
+## Agents
+
+Drive the same jobs through MCP at `/api/mcp`, or through the OpenAI image API
+at `/api/openai/v1` (`GET /models`, `POST /images/generations`, `POST /images/edits`).
+Model ids are friendly names such as `brush-fast` and `brush-quality`, and also
+raw ids such as `local/klein` and `remote/quality`. `GET /models` lists the
+friendly ids. Setup, the field mapping, and both error shapes are in
+[docs/agents.md](https://github.com/wizards-ecosystem/wizards-brush/blob/main/docs/agents.md).

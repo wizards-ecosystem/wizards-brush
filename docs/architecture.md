@@ -31,9 +31,9 @@ The local browser, API, database, and files are one deployment boundary. By
 default the server binds to localhost and rejects non-loopback Host headers. A
 non-loopback listener requires `API_TOKEN`; unsafe browser requests and every
 WebSocket handshake also pass exact Origin checks before routing. `/api/mcp`
-does not add a second host allow-list: the MCP SDK's list is off, because it
-is fixed at session start and cannot follow `API_TOKEN`. The middleware above
-is the check. See the [network security guide](network-security.md).
+and `/api/openai/v1` stay on that same middleware. The MCP SDK's own host
+allow-list is off, because it is fixed at session start and cannot follow
+`API_TOKEN`. See the [network security guide](network-security.md).
 
 Prompts, filenames, image uploads, masks, metadata imports, LoRA names, URLs,
 and WebSocket messages cross input boundaries. Routers clamp and sanitize

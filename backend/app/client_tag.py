@@ -1,4 +1,4 @@
-"""Which client submitted a job: the UI, MCP, or the API token's name.
+"""Which client submitted a job: the UI, MCP, the OpenAI image API, or the API token's name.
 
 Stored on the job row at creation and copied into output metadata. It is
 provenance, not an authorization check — a caller can still claim to be a
