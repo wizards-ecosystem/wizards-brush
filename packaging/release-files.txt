@@ -12,6 +12,7 @@ worker
 install.sh
 start.sh
 backend
+docs/agents.md
 docs/api.md
 docs/model-licenses.md
 docs/network-security.md
@@ -20,6 +21,7 @@ docs/runpod.md
 models/loras/README.md
 scripts/api_example.py
 scripts/bootstrap-tools.sh
+scripts/brush-mcp.sh
 scripts/check-host.sh
 scripts/doctor.py
 scripts/download_models.py

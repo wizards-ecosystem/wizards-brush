@@ -29,7 +29,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import controls, db
-from ..models import AssetKind, AssetRead, JobKind, JobRead, JobStatus
+from ..models import Asset, AssetKind, AssetRead, JobKind, JobRead, JobStatus
+from ..problems import RequestError, as_request_error, close_suggestions
 from ..queue import lane_for
 from . import images, tools, videos
 from .common import (
@@ -129,6 +130,9 @@ class JobCreate(BaseModel):
         default_factory=dict,
         description="Settings; see the kind's `params` schema. Omitted ones take their defaults.")
     inputs: JobInputs = Field(default_factory=JobInputs)
+    dry_run: bool = Field(
+        default=False,
+        description="Validate and return the params that would be queued, without creating a job.")
     request_id: str | None = Field(
         default=None,
         description="Idempotency key (16-128 of A-Z a-z 0-9 _ -). Resubmitting it returns "
@@ -141,6 +145,19 @@ class JobSubmission(BaseModel):
     group_id: str | None = None
     duplicate: bool = Field(
         default=False, description="True when request_id named an earlier submission.")
+
+
+class DryRunResult(BaseModel):
+    """A validated request that was not queued."""
+
+    dry_run: Literal[True] = True
+    kind: str
+    params: dict[str, Any]
+    would_queue: int = Field(description="How many jobs a real submit would create. 0 when "
+                                         "request_id already names one.")
+    duplicate: bool = False
+    job_id: int | None = None
+    job_ids: list[int] = Field(default_factory=list)
 
 
 class KindImages(BaseModel):
@@ -284,14 +301,23 @@ async def job_kinds() -> list[JobKindInfo]:
 def _asset(asset_id: int, kind: str, role: str):
     a = db.get_asset(asset_id)
     if a is None:
-        raise HTTPException(status_code=404,
-                            detail=f"{role}: asset {asset_id} does not exist or is in the trash")
+        raise RequestError(
+            404, f"{role}: asset {asset_id} does not exist or is in the trash",
+            code="not_found", field=role,
+            suggestions=["Import the image first, then pass its asset id."],
+        )
     if a.kind != kind:
-        raise HTTPException(status_code=400,
-                            detail=f"{role}: asset {asset_id} is a {a.kind}, not a {kind}")
+        raise RequestError(
+            400, f"{role}: asset {asset_id} is a {a.kind}, not a {kind}",
+            code="invalid_request", field=role,
+            suggestions=[f"Pass a {kind} asset id."],
+        )
     if not Path(a.path).exists():
-        raise HTTPException(status_code=409,
-                            detail=f"{role}: asset {asset_id}'s file is missing from disk")
+        raise RequestError(
+            409, f"{role}: asset {asset_id}'s file is missing from disk",
+            code="conflict", field=role,
+            suggestions=["Re-import the file; the library row points at nothing."],
+        )
     return a
 
 
@@ -300,30 +326,48 @@ def _resolve(kind: str, spec: Inputs, given: JobInputs) -> tuple[list[str], str 
     if not spec.min_images <= count <= spec.max_images:
         want = (f"{spec.min_images}" if spec.min_images == spec.max_images
                 else f"{spec.min_images}-{spec.max_images}")
-        raise HTTPException(status_code=400,
-                            detail=f"{kind} takes {want} input {spec.image_kind}(s); got {count}")
+        hint = (f"Pass {want} {spec.image_kind} asset id(s) in inputs.images."
+                if spec.min_images else "This kind takes no images; use generate, not edit.")
+        raise RequestError(
+            400, f"{kind} takes {want} input {spec.image_kind}(s); got {count}",
+            code="invalid_request", field="inputs.images",
+            suggestions=[hint],
+        )
     sources = [_asset(i, spec.image_kind, f"inputs.images[{n}]")
                for n, i in enumerate(given.images)]
     mask_path = None
     if given.mask is not None and spec.mask == "none":
-        raise HTTPException(status_code=400, detail=f"{kind} does not take a mask")
+        raise RequestError(
+            400, f"{kind} does not take a mask",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Omit inputs.mask for this kind."],
+        )
     if spec.mask == "required" and given.mask is None:
-        raise HTTPException(status_code=400,
-                            detail=f"{kind} needs inputs.mask: white = change, black = keep")
+        raise RequestError(
+            400, f"{kind} needs inputs.mask: white = change, black = keep",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Add inputs.mask: white marks what should change, same size as the image."],
+        )
     if given.mask is not None:
         mask = _asset(given.mask, AssetKind.image.value, "inputs.mask")
         src = sources[0]
         if (mask.width, mask.height) != (src.width, src.height):
-            raise HTTPException(
-                status_code=400,
-                detail=f"inputs.mask is {mask.width}x{mask.height} but the image is "
-                       f"{src.width}x{src.height}; a mask must match its image")
+            raise RequestError(
+                400,
+                f"inputs.mask is {mask.width}x{mask.height} but the image is "
+                f"{src.width}x{src.height}; a mask must match its image",
+                code="invalid_request", field="inputs.mask",
+                suggestions=["Use a mask the same width and height as the image."],
+            )
         mask_path = mask.path
     last_path = None
     if given.last_frame is not None:
         if not spec.last_frame:
-            raise HTTPException(status_code=400,
-                                detail=f"{kind} does not take a last frame here")
+            raise RequestError(
+                400, f"{kind} does not take a last frame here",
+                code="invalid_request", field="inputs.last_frame",
+                suggestions=["Omit inputs.last_frame for this kind."],
+            )
         last_path = _asset(given.last_frame, AssetKind.image.value, "inputs.last_frame").path
     return [a.path for a in sources], mask_path, last_path
 
@@ -335,7 +379,7 @@ def _submission(result: dict[str, Any], *, duplicate: bool) -> JobSubmission:
 
 
 @router.post("/jobs", responses=error_responses(400, 404, 409, 503))
-async def create_job(body: JobCreate) -> JobSubmission:
+async def create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     """Queue one generation or tool job from asset ids and JSON settings.
 
     Settings are validated strictly against the kind's schema: an unknown name or
@@ -345,22 +389,32 @@ async def create_job(body: JobCreate) -> JobSubmission:
 
     The request itself is judged before the server's state: a malformed request
     is a 400 even when the kind is unavailable here, because a 503 would tell the
-    client to retry something that can never succeed.
+    client to retry something that can never succeed. `dry_run` runs that same
+    check and returns the params that would be stored, without creating a job
+    or writing a mask file. It does not ask whether the kind can run right now,
+    so a remote kind still validates while its worker is offline.
     """
-    catalogue = _catalogue()
-    info = catalogue.get(body.kind)
-    if info is None:
-        known = ", ".join(sorted(catalogue))
-        raise HTTPException(status_code=400,
-                            detail=f"unknown or unavailable kind '{body.kind}' (available: {known})")
-    request_id = normalize_request_id(body.request_id)
-    if request_id and (existing := db.job_for_request(request_id)) is not None:
-        return _submission(_submission_response(existing), duplicate=True)
+    try:
+        return await _create_job(body)
+    except HTTPException as exc:
+        raise as_request_error(exc) from None
+
+
+async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
+    info = _require_known(body.kind)
+    request_id, prior = duplicate_of(body.request_id, dry_run=body.dry_run)
+    if prior is not None:
+        return prior
 
     if body.kind in tools.TOOLS:
         tool = tools.TOOLS[body.kind]
         clean = _validated(body.kind, body.params, {str(c["name"]): c for c in tool.controls})
         _resolve(body.kind, inputs_for(body.kind), body.inputs)
+        source = db.get_asset(body.inputs.images[0])
+        assert source is not None  # _resolve already refused a missing id
+        built = tool.build(source, clean)
+        if body.dry_run:
+            return _dry(body.kind, built, 1)
         await _require_runnable(info)
         result = await tools.submit_tool(body.kind, body.inputs.images[0], clean,
                                          request_id=request_id)
@@ -374,7 +428,6 @@ async def create_job(body: JobCreate) -> JobSubmission:
     spec = registry_specs()[body.kind]
     clean = _validated(body.kind, body.params, _controls_of(spec))
     paths, mask_path, last_path = _resolve(body.kind, inputs_for(body.kind, spec), body.inputs)
-    await _require_runnable(info)
     if body.kind in _LOCAL_GPU:
         images.require_local_gpu()
     raw = {**clean, "request_id": request_id}
@@ -384,6 +437,9 @@ async def create_job(body: JobCreate) -> JobSubmission:
         params = videos.build_params(body.kind, raw, paths, last_path)
     if body.kind in _MODEL_ACCESS:
         images.require_model_access(params)
+    if body.dry_run:
+        return _dry(body.kind, params, _would_queue(body.kind, params))
+    await _require_runnable(info)
     handler = get_handler(body.kind)
     if handler is None:  # pragma: no cover — every catalogued kind registers one at import
         raise HTTPException(status_code=500, detail=f"no handler for {body.kind}")
@@ -394,9 +450,17 @@ async def create_job(body: JobCreate) -> JobSubmission:
 async def _require_runnable(info: JobKindInfo) -> None:
     """503 when the kind cannot run here now; remote kinds need a live worker."""
     if not info.available:
-        raise HTTPException(status_code=503, detail=info.unavailable_reason)
+        remote = info.lane == "remote" or "remote gpu" in (info.unavailable_reason or "").lower()
+        raise RequestError(
+            503, info.unavailable_reason or "unavailable",
+            code="remote_offline" if remote else "unavailable", field="kind",
+            suggestions=(["Start the Remote GPU worker, then retry."] if remote else []),
+        )
     if info.lane == "remote" and (blocker := remote_blocker(await remote_state())):
-        raise HTTPException(status_code=503, detail=blocker)
+        raise RequestError(
+            503, blocker, code="remote_offline", field="kind",
+            suggestions=["Start the Remote GPU worker, then retry."],
+        )
 
 
 def _validated(kind: str, params: dict[str, Any],
@@ -404,70 +468,296 @@ def _validated(kind: str, params: dict[str, Any],
     try:
         return controls.check_params(params, known, subject=kind)
     except controls.ControlError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from None
+        raise RequestError(
+            400, str(error), code=error.code, field=error.field,
+            valid_options=error.valid_options, suggestions=error.suggestions,
+        ) from None
 
 
-async def _create_refine(body: JobCreate, info: JobKindInfo,
-                         request_id: str | None) -> JobSubmission:
-    """Facade: one sentence becomes an ordinary inpaint_remote or image_edit job."""
-    from PIL import Image as PILImage
+def _dry(kind: str, params: dict[str, Any], would_queue: int) -> DryRunResult:
+    from ..redaction import redact
 
+    return DryRunResult(kind=kind, params=redact(params), would_queue=would_queue)
+
+
+def _would_queue(kind: str, params: dict[str, Any]) -> int:
+    if kind not in _FANOUT or not params.get("combinatorial"):
+        return 1
+    from ..prompt_engine import count_variants
+
+    return max(1, count_variants(str(params.get("prompt") or "")))
+
+
+@dataclass(frozen=True)
+class MemoryImage:
+    """An edit input that may exist only as decoded pixels."""
+
+    asset_id: int | None
+    width: int
+    height: int
+    image: Any = None
+
+
+def duplicate_of(
+    request_id: str | None, *, dry_run: bool,
+) -> tuple[str | None, JobSubmission | DryRunResult | None]:
+    """The earlier submission for `request_id`, before any new files are written.
+
+    Callers that import images must ask this first. A retry otherwise stores
+    the new bytes and then discovers the key was already used.
+    """
+    normalized = normalize_request_id(request_id)
+    if not normalized:
+        return None, None
+    existing = db.job_for_request(normalized)
+    if existing is None:
+        return normalized, None
+    submission = _submission(_submission_response(existing), duplicate=True)
+    if not dry_run:
+        return normalized, submission
+    return normalized, DryRunResult(
+        kind=existing.kind,
+        params=_dry(existing.kind, existing.params, 0).params,
+        would_queue=0,
+        duplicate=True,
+        job_id=submission.job_id,
+        job_ids=list(submission.job_ids),
+    )
+
+
+def _require_known(kind: str) -> JobKindInfo:
+    catalogue = _catalogue()
+    info = catalogue.get(kind)
+    if info is None:
+        known = sorted(catalogue)
+        raise RequestError(
+            400,
+            f"unknown or unavailable kind '{kind}' (available: {', '.join(known)})",
+            code="kind_unavailable", field="kind", valid_options=known,
+            suggestions=close_suggestions(kind, known),
+        )
+    return info
+
+
+def _image_settings(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
+    """Image-job settings with no input files attached."""
+    profile = JobKind.image_local.value if kind == JobKind.control_local.value else kind
+    params = images.common_params(raw, profile)
+    if kind == JobKind.control_local.value:
+        return images.control_extras(params, raw)
+    if kind == JobKind.outpaint.value:
+        return images.outpaint_extras(params, raw)
+    return params
+
+
+def _measure(image: MemoryImage, asset_kind: str, role: str) -> tuple[int, int]:
+    if image.asset_id is None:
+        return image.width, image.height
+    row = _asset(image.asset_id, asset_kind, role)
+    return int(row.width or 0), int(row.height or 0)
+
+
+def _expect_memory(kind: str, spec: Inputs, given: list[MemoryImage],
+                   mask: MemoryImage | None) -> None:
+    """The same input rules as `_resolve`, for images that were not stored."""
+    count = len(given)
+    if not spec.min_images <= count <= spec.max_images:
+        want = (f"{spec.min_images}" if spec.min_images == spec.max_images
+                else f"{spec.min_images}-{spec.max_images}")
+        hint = (f"Pass {want} {spec.image_kind} asset id(s) in inputs.images."
+                if spec.min_images else "This kind takes no images; use generate, not edit.")
+        raise RequestError(
+            400, f"{kind} takes {want} input {spec.image_kind}(s); got {count}",
+            code="invalid_request", field="inputs.images",
+            suggestions=[hint],
+        )
+    sources = [_measure(image, spec.image_kind, f"inputs.images[{n}]")
+               for n, image in enumerate(given)]
+    if mask is not None and spec.mask == "none":
+        raise RequestError(
+            400, f"{kind} does not take a mask",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Omit inputs.mask for this kind."],
+        )
+    if spec.mask == "required" and mask is None:
+        raise RequestError(
+            400, f"{kind} needs inputs.mask: white = change, black = keep",
+            code="invalid_request", field="inputs.mask",
+            suggestions=["Add inputs.mask: white marks what should change, same size as the image."],
+        )
+    if mask is not None:
+        mask_size = _measure(mask, AssetKind.image.value, "inputs.mask")
+        if mask_size != sources[0]:
+            raise RequestError(
+                400,
+                f"inputs.mask is {mask_size[0]}x{mask_size[1]} but the image is "
+                f"{sources[0][0]}x{sources[0][1]}; a mask must match its image",
+                code="invalid_request", field="inputs.mask",
+                suggestions=["Use a mask the same width and height as the image."],
+            )
+
+
+def _refine_known() -> dict[str, dict[str, Any]]:
     from ..generators import parsing
-    from ..refine import infer_region, is_restyle, refine_defaults
-    from ..utils.io import save_image
     from ..variant_sets.operations import registry_specs
 
     target_kind = (JobKind.inpaint_remote.value
                    if JobKind.inpaint_remote.value in registry_specs()
                    else JobKind.image_edit.value)
-    spec = registry_specs()[target_kind]
     extra: dict[str, dict[str, Any]] = {
         "region": {"name": "region", "type": "select", "default": "",
                    "options": ["", *parsing.REGIONS]},
         "click_x": {"name": "click_x", "type": "number", "default": -1, "min": -1, "max": 16384},
         "click_y": {"name": "click_y", "type": "number", "default": -1, "min": -1, "max": 16384},
     }
-    clean = _validated("refine", body.params, {**_controls_of(spec), **extra})
-    paths, _mask, _last = _resolve("refine", Inputs(1, 1), body.inputs)
-    await _require_runnable(info)
-    prompt = str(clean.get("prompt") or "")
-    raw = refine_defaults(prompt, {**clean, "request_id": request_id})
-    raw["parent_asset_id"] = body.inputs.images[0]
+    return {**_controls_of(registry_specs()[target_kind]), **extra}
+
+
+def _plan_refine(source: Any, raw: dict[str, Any], paths: list[str], *,
+                 dry_run: bool) -> tuple[str, dict[str, Any]]:
+    """Choose inpaint or restyle. A dry run returns before any mask file is written."""
+    from ..generators import parsing
+    from ..refine import infer_region, is_restyle
+    from ..utils.io import save_image
+    from ..variant_sets.operations import registry_specs
+
+    prompt = str(raw.get("prompt") or "")
     region = str(raw.get("region") or "").strip()
     click_x = as_int(raw.get("click_x"), -1, -1, 16384)
     click_y = as_int(raw.get("click_y"), -1, -1, 16384)
-    with PILImage.open(paths[0]) as opened:
-        opened.load()
-        source = opened.convert("RGB")
     if click_x >= 0 and click_y >= 0:
         region = parsing.region_at(source, click_x, click_y)
         raw["region"] = region
     restyle = is_restyle(prompt) and not region
     if restyle and str(raw.get("input_fidelity") or "high") != "high":
-        params = images.build_params(JobKind.image_edit.value, raw, paths)
-        handler = get_handler(JobKind.image_edit.value)
-        kind = JobKind.image_edit.value
-    else:
-        if not region:
-            region = infer_region(prompt) or "subject_minus_face"
-            raw["region"] = region
-        try:
-            mask = parsing.mask_for(source, region)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from None
-        if mask.getbbox() is None:
-            raise HTTPException(status_code=400, detail=f"region {region!r} is empty on this image")
-        mask_path = str(save_image(mask.convert("L"), "mask").path)
-        raw.setdefault("input_fidelity", "high")
-        if JobKind.inpaint_remote.value in registry_specs():
-            kind = JobKind.inpaint_remote.value
-            params = images.build_params(kind, raw, paths, mask_path)
-        else:
-            kind = JobKind.image_edit.value
-            params = images.build_params(kind, raw, paths)
-            params["mask_path"] = mask_path
+        return JobKind.image_edit.value, _refine_params(JobKind.image_edit.value, raw, paths)
+    if not region:
+        region = infer_region(prompt) or "subject_minus_face"
+        raw["region"] = region
+    try:
+        mask = parsing.mask_for(source, region)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if mask.getbbox() is None:
+        raise HTTPException(status_code=400, detail=f"region {region!r} is empty on this image")
+    raw.setdefault("input_fidelity", "high")
+    inpaint = JobKind.inpaint_remote.value in registry_specs()
+    kind = JobKind.inpaint_remote.value if inpaint else JobKind.image_edit.value
+    if dry_run:
+        params = _refine_params(kind, raw, paths)
+        params.pop("mask_path", None)
+        if not inpaint:
             params["input_fidelity"] = "high"
-        handler = get_handler(kind)
+        return kind, params
+    mask_path = str(save_image(mask.convert("L"), "mask").path)
+    if inpaint:
+        return kind, images.build_params(kind, raw, paths, mask_path)
+    params = images.build_params(kind, raw, paths)
+    params["mask_path"] = mask_path
+    params["input_fidelity"] = "high"
+    return kind, params
+
+
+def _refine_params(kind: str, raw: dict[str, Any], paths: list[str]) -> dict[str, Any]:
+    if not paths:
+        return _image_settings(kind, raw)
+    return images.build_params(kind, raw, paths)
+
+
+async def dry_run_unsaved(
+    kind: str,
+    params: dict[str, Any],
+    images_in: list[MemoryImage],
+    mask: MemoryImage | None,
+    *,
+    request_id: str | None = None,
+) -> DryRunResult:
+    """Validate an edit whose data URLs were checked in memory and not stored.
+
+    Asset ids in the list are still looked up. Nothing here creates a job,
+    an asset, or a mask file, and a remote kind does not need its worker.
+    """
+    _require_known(kind)
+    normalized = normalize_request_id(request_id)
+    if kind in tools.TOOLS:
+        tool = tools.TOOLS[kind]
+        clean = _validated(kind, params, {str(c["name"]): c for c in tool.controls})
+        _expect_memory(kind, Inputs(1, 1, image_kind=tool.input), images_in, mask)
+        stand_in = Asset(
+            kind=tool.input, path="", filename="dry-run",
+            width=images_in[0].width, height=images_in[0].height,
+        )
+        built = tool.build(stand_in, clean)
+        for key in ("src_path", "src_meta", "source_asset_id"):
+            built.pop(key, None)
+        return _dry(kind, built, 1)
+    if kind == "refine":
+        from ..refine import refine_defaults
+
+        clean = _validated("refine", params, _refine_known())
+        _expect_memory("refine", Inputs(1, 1), images_in, mask)
+        source = images_in[0].image
+        if source is None:
+            raise RequestError(
+                400, "refine needs the image bytes to judge the region",
+                code="invalid_request", field="images",
+                suggestions=["Pass a data URL, or an asset id of an image already in the gallery."],
+            )
+        prompt = str(clean.get("prompt") or "")
+        raw = refine_defaults(prompt, {**clean, "request_id": normalized})
+        if images_in[0].asset_id is not None:
+            raw["parent_asset_id"] = images_in[0].asset_id
+        planned, built = _plan_refine(source.convert("RGB"), raw, [], dry_run=True)
+        return _dry(planned, built, 1)
+
+    from ..variant_sets.operations import registry_specs
+
+    spec = registry_specs().get(kind)
+    taken = inputs_for(kind, spec)
+    clean = _validated(kind, params, _controls_of(spec or {}))
+    _expect_memory(kind, taken, images_in, mask)
+    raw = {**clean, "request_id": normalized}
+    if kind in _LOCAL_GPU:
+        images.require_local_gpu()
+    if kind in _IMAGE_KINDS:
+        built = _image_settings(kind, raw)
+    elif kind == JobKind.i2v.value:
+        built = videos.build_params(kind, raw, ["."])
+        built.pop("image_path", None)
+        built.pop("last_image_path", None)
+    elif kind in _VIDEO_KINDS:
+        built = videos.build_params(kind, raw)
+    else:
+        raise RequestError(
+            400, f"{kind} cannot be checked from an image that is not in the gallery",
+            code="invalid_request", field="kind",
+            suggestions=["Import the file, then pass its asset id."],
+        )
+    if kind in _MODEL_ACCESS:
+        images.require_model_access(built)
+    return _dry(kind, built, _would_queue(kind, built))
+
+
+async def _create_refine(body: JobCreate, info: JobKindInfo,
+                         request_id: str | None) -> JobSubmission | DryRunResult:
+    """Facade: one sentence becomes an ordinary inpaint_remote or image_edit job."""
+    from PIL import Image as PILImage
+
+    from ..refine import refine_defaults
+
+    clean = _validated("refine", body.params, _refine_known())
+    paths, _mask, _last = _resolve("refine", Inputs(1, 1), body.inputs)
+    prompt = str(clean.get("prompt") or "")
+    raw = refine_defaults(prompt, {**clean, "request_id": request_id})
+    raw["parent_asset_id"] = body.inputs.images[0]
+    with PILImage.open(paths[0]) as opened:
+        opened.load()
+        source = opened.convert("RGB")
+    kind, params = _plan_refine(source, raw, paths, dry_run=body.dry_run)
+    if body.dry_run:
+        return _dry(kind, params, 1)
+    await _require_runnable(info)
+    handler = get_handler(kind)
     if handler is None:
         raise HTTPException(status_code=500, detail=f"no handler for {kind}")
     return _submission(await submit(kind, params, handler), duplicate=False)
@@ -492,12 +782,22 @@ async def wait_job(
     Always answers within `timeout` (60 s at most, so a proxy's idle limit is
     never the thing that ends the request). `settled: false` means wait again.
     """
+    try:
+        return await _wait_job(job_id, timeout)
+    except HTTPException as exc:
+        raise as_request_error(exc) from None
+
+
+async def _wait_job(job_id: int, timeout: float) -> JobWait:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
         job = db.get_job(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
+            raise RequestError(
+                404, "job not found", code="not_found", field="job_id",
+                suggestions=["Check the job id, or submit the job again."],
+            )
         if job.status in TERMINAL or loop.time() >= deadline:
             return _view(job)
         await asyncio.sleep(min(_POLL_SECONDS, max(0.0, deadline - loop.time())))

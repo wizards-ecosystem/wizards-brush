@@ -74,7 +74,7 @@ def test_persisted_video_gets_portable_sidecar_and_purge_removes_it(
     sidecar = settings.videos_dir / f"{asset.filename}.json"
     payload = json.loads(sidecar.read_text())
     assert payload["schema"] == "wizards-brush-video/v1"
-    assert payload["generation"] == {"prompt": "waves", "seed": 3}
+    assert payload["generation"] == {"prompt": "waves", "seed": 3, "client": "api"}
     assert payload["content_hash"]
 
     assert db.delete_asset(aid)

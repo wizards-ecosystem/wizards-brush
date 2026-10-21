@@ -24,6 +24,54 @@ def test_api_gated_with_token(client, token_on):
     assert client.get("/api/stats", headers={"X-API-Token": "tok123"}).status_code == 200
     # Header-only over HTTP: a ?token= query string would end up in access logs.
     assert client.get("/api/stats?token=tok123").status_code == 401
+    # Bearer is the header MCP clients send. A wrong one does not fall through
+    # to a browser cookie.
+    assert client.get("/api/stats", headers={"Authorization": "Bearer tok123"}).status_code == 200
+    assert client.get("/api/stats", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    client.cookies.set(
+        "wb_api_token", browser_session_token("tok123", "api"), path="/api",
+    )
+    assert client.get("/api/stats", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    client.cookies.clear()
+
+
+def test_asset_file_accepts_a_bearer_token(client, token_on):
+    import io
+
+    from PIL import Image
+
+    from backend.app import db
+
+    settings.ensure_dirs()
+    path = settings.images_dir / "bearer_file.png"
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), "red").save(buf, format="PNG")
+    path.write_bytes(buf.getvalue())
+    asset = db.add_asset(
+        "image", path, width=2, height=2, generator="import", mime_type="image/png",
+    )
+    url = f"/api/assets/{asset.id}/file"
+    try:
+        assert client.get(url).status_code == 401
+        ok = client.get(url, headers={"Authorization": "Bearer tok123"})
+        assert ok.status_code == 200
+        assert ok.content == path.read_bytes()
+        files = client.get(
+            f"/files/images/{path.name}", headers={"Authorization": "Bearer tok123"},
+        )
+        assert files.status_code == 401
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_mcp_endpoint_uses_the_same_token(client, token_on):
+    assert client.post("/api/mcp", json={}).status_code == 401
+    refused = client.post("/api/mcp", json={}, headers={"Authorization": "Bearer wrong"})
+    assert refused.status_code == 401
+    allowed = client.post(
+        "/api/mcp", json={}, headers={"Authorization": "Bearer tok123"},
+    )
+    assert allowed.status_code != 401
 
 
 def test_browser_session_uses_server_set_http_only_cookies(client, token_on):

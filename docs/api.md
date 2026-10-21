@@ -37,11 +37,15 @@ whose `Host` is loopback (`127.0.0.1`, `localhost`, `::1`), and no credential
 is needed.
 
 With `API_TOKEN` set, which is required for LAN access, send the token on every
-`/api` request:
+`/api` request, as either header:
 
 ```
 X-API-Token: <token>
+Authorization: Bearer <token>
 ```
+
+A present header is checked on its own. A wrong bearer token does not fall
+through to the browser session cookie.
 
 `/files/...` URLs, such as the `url` and `thumb_url` fields on an asset, are for
 browsers. They accept only the HttpOnly cookie a browser session receives, so
@@ -55,8 +59,12 @@ See [network security](network-security.md) for LAN, TLS and CORS details.
 
 - **Ids.** Inputs are gallery asset ids. An id comes from an earlier job's
   output or from `POST /api/assets/import`. Files are never passed by path.
-- **Errors.** A refused request is a JSON body `{"detail": "..."}` that says
-  what to change. The status codes mean:
+- **Errors.** A refused request is a JSON body whose `detail` is a string that
+  says what to change. Job refusals (`POST /api/jobs` and `GET /api/jobs/{id}/wait`)
+  also carry `code`, and when the server knows them `field`, `valid_options`
+  and up to three `suggestions`. A 422 from a malformed body (an unknown
+  top-level field, for example) keeps FastAPI's list-shaped `detail`. The
+  status codes mean:
 
   | Status | Meaning |
   | --- | --- |
@@ -85,6 +93,10 @@ See [network security](network-security.md) for LAN, TLS and CORS details.
 - **Deletes are soft.** A deleted asset moves to the trash. It is no longer
   served or accepted as an input, and it can be restored until the trash is
   emptied.
+- **Client.** Each job records who submitted it: `ui` for the browser, `mcp`
+  for a tool call, or `API_TOKEN_NAME` (default `api`) when the token was sent.
+  The same value is copied into output metadata and returned as `client` on
+  the job and on the assets that job produced.
 
 ## Quick start
 
@@ -183,6 +195,21 @@ Response:
 ```json
 {"job_id": 97, "job_ids": [97], "group_id": null, "duplicate": false}
 ```
+
+`"dry_run": true` runs the same validation and returns the params that would
+be stored, without creating a job:
+
+```json
+{"dry_run": true, "kind": "image_local", "params": {"prompt": "..."}, "would_queue": 1,
+ "duplicate": false, "job_id": null, "job_ids": []}
+```
+
+`would_queue` is how many jobs a real submit would create (more than one for a
+combinatorial prompt). When `request_id` already names a submission,
+`duplicate` is true, `would_queue` is 0, and `job_ids` are the existing jobs.
+A dry run does not write a mask file. It also does not require the Remote GPU
+to be connected: a remote kind that would be 503 on submit still validates.
+Submitting it for real is still 503 until the worker answers.
 
 `params` works as follows:
 

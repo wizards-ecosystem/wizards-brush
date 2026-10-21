@@ -157,6 +157,13 @@ https://api.github.com/repositories/1191052193 (AGPL-3.0)
     preflight, orphan-recovery, and retry designs. No source or UI expression
     was copied.
 
+comfy-mcp: https://github.com/Comfy-Org/comfy-mcp (AGPL-3.0-or-later)
+    The idea of returning a refused job request with a field, a stable code,
+    the legal options and a short suggestion, and of checking a request without
+    queueing it, was taken from that project's described behaviour. No source
+    was read for this repository and none was copied. The implementation in
+    backend/app/problems.py and the job API is independent.
+
 --------------------------------------------------------------------------------
 Runtime dependencies
 --------------------------------------------------------------------------------

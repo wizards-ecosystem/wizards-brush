@@ -25,8 +25,18 @@ from ..utils.io import save_image, stamp_name
 logger = log.get("post")
 
 class ErrorDetail(BaseModel):
-    """The body of every refused request."""
+    """The body of a refused request.
+
+    `detail` is always present. Job refusals also carry `code` and, when the
+    server knows them, `field`, `valid_options` and `suggestions`.
+    """
     detail: str = Field(description="What went wrong, written for the caller to act on.")
+    code: str | None = Field(default=None, description="Stable machine-readable code.")
+    field: str | None = Field(default=None, description="The input to change, when known.")
+    valid_options: list[Any] | None = Field(
+        default=None, description="Legal values for `field`, when the set is known.")
+    suggestions: list[str] | None = Field(
+        default=None, description="Up to three short corrections.")
 
 
 _ERROR_TEXT = {
@@ -713,6 +723,18 @@ def _announce_asset(asset_id: int, job_id: int, kind: str) -> None:
         logger.debug("could not announce asset %s", asset_id, exc_info=True)
 
 
+def _stamp_client(meta: dict, job_id: int) -> dict:
+    """Copy the submitting client into output metadata. The column is the record;
+    the file's provenance has to carry it too, or an export loses it."""
+    if meta.get("client"):
+        return meta
+    job = db.get_job(job_id)
+    client = job.client if job is not None else ""
+    if not client:
+        return meta
+    return {**meta, "client": client}
+
+
 def persist_image(img: Image.Image, *, job_id: int, generator: str, meta: dict, tag: str,
                   params: dict[str, Any] | None = None) -> int:
     """Save an image, record it, and queue enrichment.
@@ -723,6 +745,7 @@ def persist_image(img: Image.Image, *, job_id: int, generator: str, meta: dict, 
     *derived* dict built by `image_meta` — it has no read history of its own, so
     handing it to the tracker asks the wrong object what happened.
     """
+    meta = _stamp_client(meta, job_id)
     meta = _honest_meta(meta, job_id, params)
     # Embedded in the file itself, not only in the database: provenance and the
     # A1111-style parameters block travel with the image when it is exported.
@@ -834,6 +857,7 @@ def persist_video_file(src: Path, *, job_id: int, generator: str, meta: dict, ta
     from ..utils.hashing import hash_file
 
     digest = hash_file(path) or ""
+    meta = _stamp_client(meta, job_id)
     asset = db.add_asset(AssetKind.video.value, path, thumb=thumb, width=w, height=h,
                          job_id=job_id, generator=generator, meta=meta,
                          content_hash=digest,

@@ -20,8 +20,9 @@ API_TOKEN=paste-the-random-value-here
 
 `make start` refuses a non-loopback listener when `API_TOKEN` is empty. Enter
 the same token in **Settings -> API access** on each browser. Command-line API
-calls use the `X-API-Token` header. The browser exchanges that header once for
-backend-issued, path-scoped `HttpOnly` and `SameSite=Strict` cookies, so the
+calls use the `X-API-Token` header, or `Authorization: Bearer`. The browser
+exchanges that header once for backend-issued, path-scoped `HttpOnly` and
+`SameSite=Strict` cookies, so the
 reusable token is never persisted in script-readable storage or placed in a
 URL. The cookies contain purpose-bound session credentials, not the API token.
 
@@ -33,6 +34,12 @@ proxy is already supported without configuration. Wildcards are ignored
 because a tokenless wildcard would make arbitrary web pages callers of a local
 API. Command-line clients may omit `Origin`; browser API requests and every
 WebSocket connection are checked against the served or configured origin.
+
+`/api/mcp` uses those same Host and token checks. The MCP SDK can also keep a
+host allow-list, but the list is fixed when the session starts and would
+disagree with a token set later, or with a LAN Host the bind address cannot
+name. That SDK allow-list is off. A non-loopback Host is refused until
+`API_TOKEN` is set; with the token set, the token is what admits the request.
 
 Do not port-forward the Uvicorn listener or expose it directly to the internet.
 For access outside one trusted LAN, keep the app on loopback, set `API_TOKEN`,

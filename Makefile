@@ -5,7 +5,7 @@ PROJECT_ENV = source scripts/project-env.sh &&
 .PHONY: host-check install setup bootstrap install-nunchaku migrate dev start stop browser browser-dev build models models-status \
 	benchmark-local-plan benchmark-local benchmark-a100-plan benchmark-a100 remote-gpu-lock remote-gpu-config remote-gpu-image test clean-gens \
 	clean clean-build clean-cache clean-runtime lint typecheck check release-check doctor offline-check \
-	optional-check sbom-check release-layout-check release-bundle help
+	optional-check sbom-check release-layout-check release-bundle mcp-stdio help
 
 host-check:   ## verify required host commands without downloading anything
 	bash scripts/check-host.sh
@@ -27,6 +27,9 @@ migrate:      ## move legacy model/cache directories into models/
 
 dev:          ## backend :8000 (reload) + Vite :5173
 	bash scripts/dev.sh
+
+mcp-stdio:    ## speak MCP on stdio by relaying to the running app
+	$(PROJECT_ENV) .venv/bin/python -m backend.app.agent.stdio_bridge
 
 start:        ## build frontend + serve on one LAN port (handles everything)
 	bash scripts/start.sh

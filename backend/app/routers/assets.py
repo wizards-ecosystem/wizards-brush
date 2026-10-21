@@ -190,6 +190,86 @@ def _import_image(data: bytes, role: str) -> Image.Image:
     return image.convert("RGBA" if alpha else "RGB")
 
 
+def validate_image_bytes(data: bytes, role: str) -> Image.Image:
+    """Decode an upload and apply the library's checks, without writing it.
+
+    A dry run uses this so a data URL is judged the same way as an import
+    and then discarded. `import_bytes` is this plus the save.
+    """
+    from .common import MAX_UPLOAD_BYTES
+
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)",
+        )
+    try:
+        image = _import_image(data, role)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if role == "mask" and image.getbbox() is None:
+        raise HTTPException(
+            status_code=400,
+            detail="the mask is empty: white marks what should change",
+        )
+    return image
+
+
+def import_bytes(
+    data: bytes,
+    *,
+    role: Literal["source", "mask"] = "source",
+    filename: str = "",
+    tags: list[str] | None = None,
+    collection_id: int | None = None,
+) -> int:
+    """Store image bytes in the library and return the new asset id.
+
+    The upload route and the agent core both call this, so a data URL and a
+    multipart file take the same checks. Raises HTTPException on a bad input.
+    """
+    from ..utils.io import save_image
+    from .common import MAX_UPLOAD_BYTES, _enrich
+
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)",
+        )
+    if collection_id is not None and not any(
+        c.id == collection_id for c, _n in db.list_collections()
+    ):
+        raise HTTPException(status_code=404, detail=f"collection {collection_id} not found")
+    clean_tags = [tag.strip()[:64] for tag in (tags or []) if tag.strip()][:20]
+    original = Path(filename or "").name[:200]
+    image = validate_image_bytes(data, role)
+    saved = save_image(image, "mask" if role == "mask" else "import")
+    meta: dict = (
+        {"mask": {"source": "upload"}} if role == "mask"
+        else {"import": {"filename": original, "mode": image.mode}}
+    )
+    asset = db.add_asset(
+        AssetKind.image.value, saved.path, thumb=saved.thumb,
+        width=saved.width, height=saved.height,
+        generator="mask" if role == "mask" else "import", meta=meta,
+        content_hash=saved.content_hash, size_bytes=saved.size_bytes,
+        mime_type="image/png",
+    )
+    assert asset.id is not None
+    asset_id = int(asset.id)
+    if clean_tags:
+        db.update_asset(asset_id, tags=clean_tags)
+    if collection_id is not None:
+        db.add_to_collection(collection_id, [asset_id])
+    if role != "mask":
+        _enrich(asset_id)  # captions make an import searchable like anything generated
+    return asset_id
+
+
 @router.post("/assets/import", responses=error_responses(400, 404))
 async def import_asset(
     file: UploadFile,
@@ -203,48 +283,14 @@ async def import_asset(
     PNG, JPEG, WebP and the other formats Pillow reads, up to the upload
     limits. The file is re-encoded as PNG with its transparency intact.
     """
-    from .common import MAX_UPLOAD_BYTES, _enrich
+    from .common import MAX_UPLOAD_BYTES
 
     data = await file.read(MAX_UPLOAD_BYTES + 1)
-    if not data:
-        raise HTTPException(status_code=400, detail="empty upload")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=400,
-                            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
-    if collection_id is not None and not any(c.id == collection_id
-                                             for c, _n in db.list_collections()):
-        raise HTTPException(status_code=404, detail=f"collection {collection_id} not found")
-    clean_tags = [t.strip()[:64] for t in tags.split(",") if t.strip()][:20]
-    original = Path(file.filename or "").name[:200]
-
-    def _store() -> int:
-        from ..utils.io import save_image
-
-        try:
-            image = _import_image(data, role)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from None
-        if role == "mask" and image.getbbox() is None:
-            raise HTTPException(status_code=400,
-                                detail="the mask is empty: white marks what should change")
-        saved = save_image(image, "mask" if role == "mask" else "import")
-        meta: dict = ({"mask": {"source": "upload"}} if role == "mask"
-                      else {"import": {"filename": original, "mode": image.mode}})
-        asset = db.add_asset(AssetKind.image.value, saved.path, thumb=saved.thumb,
-                             width=saved.width, height=saved.height,
-                             generator="mask" if role == "mask" else "import", meta=meta,
-                             content_hash=saved.content_hash, size_bytes=saved.size_bytes,
-                             mime_type="image/png")
-        assert asset.id is not None
-        if clean_tags:
-            db.update_asset(asset.id, tags=clean_tags)
-        if collection_id is not None:
-            db.add_to_collection(collection_id, [asset.id])
-        return int(asset.id)
-
-    asset_id = await asyncio.to_thread(_store)
-    if role != "mask":
-        _enrich(asset_id)  # captions make an import searchable like anything generated
+    clean_tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    asset_id = await asyncio.to_thread(
+        import_bytes, data, role=role, filename=file.filename or "",
+        tags=clean_tags, collection_id=collection_id,
+    )
     stored = db.get_asset(asset_id)
     assert stored is not None
     return AssetRead.of(stored)

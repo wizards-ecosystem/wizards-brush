@@ -6,7 +6,26 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- `dry_run` no longer stores anything. An MCP `edit` dry run decodes a data
+  URL in memory instead of importing it and starting captioning, and a refine
+  dry run validates its mask without writing the mask file. A repeated
+  `request_id` on `edit` is recognized before those images are imported. A
+  dry run also validates while the Remote GPU worker is offline.
+
+### Added
+
+- An MCP server at `/api/mcp` (Streamable HTTP), plus `scripts/brush-mcp.sh`
+  for clients that only speak stdio. Tools list kinds, describe their schema,
+  generate, edit, wait, and search the gallery. See `docs/agents.md`.
+- Job refusals include `code` and, when known, `field`, `valid_options` and
+  short `suggestions`, on both `POST /api/jobs` and the MCP tools. `detail`
+  stays a string. `dry_run` validates a generate or edit without queueing it.
+- Jobs record the client that submitted them (`ui`, `mcp`, or the API token's
+  name). The value is stored on the job, copied into output metadata, and
+  returned on job and asset responses. Set `API_TOKEN_NAME` to label token
+  clients. `Authorization: Bearer` is accepted alongside `X-API-Token`.
 
 ## [0.1.7] - 2026-10-11
 
