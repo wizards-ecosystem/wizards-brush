@@ -104,6 +104,7 @@ export function mcpCallText(
     ? {
         tool: "edit",
         arguments: {
+          kind: spec.kind,
           instruction: spoken,
           images: ["<asset id>"],
           ...(spec.needs_mask ? { mask: "<mask asset id>" } : {}),
@@ -125,16 +126,6 @@ export function mcpCallText(
     notes: notes.filter((note) => !note.startsWith("Then wait")),
   };
 }
-
-const SDK_SIZE: Record<string, string> = {
-  "1:1": "1024x1024",
-  "16:9": "1536x1024",
-  "3:2": "1536x1024",
-  "4:3": "1536x1024",
-  "9:16": "1024x1536",
-  "2:3": "1024x1536",
-  "3:4": "1024x1536",
-};
 
 function openaiLane(kind: string): "local" | "remote" {
   if (kind === "image_colab" || kind === "image_edit" || kind === "inpaint_remote") return "remote";
@@ -160,13 +151,13 @@ function openaiSize(spec: GeneratorSpec, values: Record<string, unknown>): strin
     if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
     return `${width}x${height}`;
   }
-  return SDK_SIZE[aspect] ?? null;
+  return aspect;
 }
 
 /**
  * A Python snippet for `images.generate` or `images.edit`. Null when this kind
- * has no OpenAI mapping. Ratios become one of the three sizes the official
- * SDK's response model accepts; `Match input` omits `size`.
+ * has no OpenAI mapping. `size` is the ratio or WxH this server accepts.
+ * `Match input` omits `size`.
  */
 export function openaiCallText(
   spec: GeneratorSpec,

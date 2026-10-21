@@ -46,8 +46,9 @@ from .. import client_tag, log
 from ..config import settings
 from ..generators.variants import Variant, available
 from ..problems import RequestError, as_request_error, close_suggestions
+from ..redaction import redact
 from ..routers import job_api
-from ..routers.job_api import DryRunResult, JobCreate, JobInputs, JobSubmission, JobWait
+from ..routers.job_api import DryRunResult, JobCreate, JobInputs, JobSubmission, JobWait, MemoryImage
 from . import core
 
 logger = log.get("openai")
@@ -212,13 +213,24 @@ def _error_type(status: int) -> str:
     return "invalid_request_error"
 
 
+def _openai_param(field: str | None) -> str | None:
+    """OpenAI's names for the same inputs the job API calls ``inputs.images``."""
+    if not field:
+        return None
+    if field == "inputs.mask" or field.endswith(".mask"):
+        return "mask"
+    if field == "images" or field.startswith("inputs.images"):
+        return "image"
+    return field
+
+
 def error_response(exc: HTTPException) -> JSONResponse:
     """The OpenAI envelope, filled from the shared agent error."""
     structured = as_request_error(exc)
     body: dict[str, Any] = {
         "message": str(structured.detail),
         "type": _error_type(structured.status_code),
-        "param": structured.field,
+        "param": _openai_param(structured.field),
         "code": structured.code,
     }
     return JSONResponse({"error": body}, status_code=structured.status_code)
@@ -294,6 +306,16 @@ def _require_text(body: dict[str, Any], field: str) -> str:
     if isinstance(value, str) and value.strip():
         return value
     _reject(400, f"{field} is required", code="invalid_request", field=field)
+
+
+def _model_text(body: dict[str, Any]) -> str:
+    """``brush-fast`` when ``model`` is left out. A present non-string is refused."""
+    if "model" not in body or body["model"] is None or body["model"] == "":
+        return "brush-fast"
+    value = body["model"]
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    _reject(400, "model must be a string", code="invalid_type", field="model")
 
 
 def _optional_text(body: dict[str, Any], field: str) -> str | None:
@@ -374,7 +396,7 @@ def _parse_common(body: dict[str, Any], allowed: frozenset[str]) -> _Parsed:
     _check_stream(body)
     _parse_output_format(body)
     return _Parsed(
-        model=_require_text(body, "model"),
+        model=_model_text(body),
         prompt=_require_text(body, "prompt"),
         n=_parse_n(body),
         size=_parse_size(body),
@@ -437,6 +459,8 @@ async def _json_object(request: Request) -> dict[str, Any]:
 
     try:
         body = await request.json()
+    except UnicodeDecodeError:
+        _reject(400, "request body is not valid UTF-8", code="invalid_request")
     except json.JSONDecodeError:
         _reject(400, "request body is not valid JSON", code="invalid_request")
     if not isinstance(body, dict):
@@ -664,6 +688,36 @@ def _ensure_done(view: JobWait) -> None:
     _reject(500, text or "the job failed", code="error")
 
 
+def _prepare_value(value: bytes | str) -> str:
+    """Bytes from a multipart upload, as the data URL ``prepare_image`` already accepts."""
+    if isinstance(value, str):
+        return value
+    return "data:image/png;base64," + base64.b64encode(value).decode("ascii")
+
+
+async def _prepare_one(
+    value: bytes | str, *, role: Literal["source", "mask"], field: str,
+) -> core.PreparedImage:
+    """Decode an edit input in memory. Nothing is written and captioning does not start."""
+    try:
+        return await core.prepare_image(_prepare_value(value), role=role, persist=False)
+    except RequestError as exc:
+        raise RequestError(
+            exc.status_code, str(exc.detail), code=exc.code, field=field,
+            valid_options=exc.valid_options, suggestions=exc.suggestions,
+        ) from None
+    except HTTPException as exc:
+        structured = as_request_error(exc)
+        raise RequestError(
+            structured.status_code, str(structured.detail), code=structured.code, field=field,
+            valid_options=structured.valid_options, suggestions=structured.suggestions,
+        ) from None
+
+
+def _memory(item: core.PreparedImage) -> MemoryImage:
+    return MemoryImage(item.asset_id, item.width, item.height, item.image)
+
+
 async def _import_one(value: bytes | str, *, role: Literal["source", "mask"], field: str) -> int:
     try:
         if isinstance(value, bytes):
@@ -767,7 +821,7 @@ async def _image_response(
         "brush": {
             "job_ids": list(submission.job_ids),
             "asset_ids": [int(asset.id) for asset in assets],
-            "meta": [asset.meta for asset in assets],
+            "meta": [redact(asset.meta) for asset in assets],
             "size": delivered,
         },
     }
@@ -795,14 +849,36 @@ async def _run(request: Request, parsed: _Parsed, *, edit: bool) -> JSONResponse
             images: list[int] = []
             mask: int | None = None
             if edit:
-                # A repeated key is resolved before this import. Checked again
-                # afterwards in case another request stored it while we decoded.
-                images = [
-                    await _import_one(value, role="source", field="image") for value in parsed.images
+                # Judge the bytes before they become gallery assets. A mismatch,
+                # an extra image, or an offline worker must not leave uploads
+                # behind or start captioning. ``dry_run_unsaved`` does not ask
+                # whether the worker is up, so that 503 is a separate check,
+                # still before the import.
+                prepared = [
+                    await _prepare_one(value, role="source", field="image") for value in parsed.images
                 ]
-                if parsed.mask is not None:
-                    mask = await _import_one(parsed.mask, role="mask", field="mask")
+                mask_prepared = (
+                    None if parsed.mask is None
+                    else await _prepare_one(parsed.mask, role="mask", field="mask")
+                )
+                await job_api.dry_run_unsaved(
+                    kind, params,
+                    [_memory(item) for item in prepared],
+                    None if mask_prepared is None else _memory(mask_prepared),
+                    request_id=request_id,
+                )
+                await job_api.require_runnable(kind)
+                # A repeated key that landed while we decoded is answered
+                # without storing these bytes.
                 prior = _prior(request_id)
+                if prior is None:
+                    images = [
+                        await _import_one(value, role="source", field="image")
+                        for value in parsed.images
+                    ]
+                    if parsed.mask is not None:
+                        mask = await _import_one(parsed.mask, role="mask", field="mask")
+                    prior = _prior(request_id)
             if prior is None:
                 prior = await _submit(kind, params, images=images, mask=mask, request_id=request_id)
         assert prior is not None

@@ -247,7 +247,7 @@ mask was sent.
 | Field | What happens |
 | --- | --- |
 | `prompt` | Required. Becomes `params.prompt`. |
-| `model` | Required. A friendly or raw id. There is no dall-e default. |
+| `model` | A friendly or raw id. Omitted means `brush-fast`. |
 | `n` | `batch`, from 1 to 8. A kind with no batch control accepts only 1. |
 | `size` | A named ratio (`1:1`, `3:4`, `4:3`, `2:3`, `3:2`, `9:16`, `16:9`) becomes `aspect`. `WxH` becomes `aspect: "Custom"` plus `width` and `height`, each side 16–8192. `auto` or omitted keeps the kind's default. |
 | `response_format` | `b64_json` (default) or `url` (absolute `/api/assets/{id}/file`). |

@@ -84,6 +84,7 @@ describe("mcpCallText", () => {
       "{
         "tool": "edit",
         "arguments": {
+          "kind": "inpaint",
           "instruction": "raw, in watercolour",
           "images": [
             "<asset id>"
@@ -119,7 +120,7 @@ describe("openaiCallText", () => {
     ],
   } as GeneratorSpec;
 
-  it("snapshots a generate snippet with an SDK-sized ratio", () => {
+  it("snapshots a generate snippet with the ratio the server accepts", () => {
     expect(openaiCallText(local, { model_variant: "klein", aspect: "16:9", batch: 2 }, "a ceramic cup"))
       .toMatchInlineSnapshot(`
       "import os
@@ -133,7 +134,7 @@ describe("openaiCallText", () => {
       image = client.images.generate(
           model="local/klein",
           prompt="a ceramic cup",
-          size="1536x1024",
+          size="16:9",
           n=2,
       )"
     `);

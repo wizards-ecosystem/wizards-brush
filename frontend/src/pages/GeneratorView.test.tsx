@@ -107,6 +107,13 @@ describe("GeneratorView workstation", () => {
     await user.click(screen.getByRole("button", { name: "Copy as" }));
     expect(screen.getByRole("menuitem", { name: "MCP call" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "OpenAI SDK" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "API request" })).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "MCP call" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Copy as" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy as" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Copy as" }));
     await user.click(screen.getByRole("menuitem", { name: "API request" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text: string = writeText.mock.calls[0][0];

@@ -8,6 +8,10 @@ contributors know which user-facing changes need release notes.
 
 ### Fixed
 
+- A refused OpenAI image edit no longer saves the upload. The images are
+  checked in memory and stored only after the request is accepted. Omitting
+  `model` selects `brush-fast`. Copy as an MCP edit includes the generator
+  kind, so a local inpaint is not sent as a remote image edit.
 - `dry_run` no longer stores anything. An MCP `edit` dry run decodes a data
   URL in memory instead of importing it and starting captioning, and a refine
   dry run validates its mask without writing the mask file. A repeated

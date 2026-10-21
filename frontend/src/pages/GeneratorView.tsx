@@ -361,17 +361,38 @@ export function GeneratorView() {
 
   useEffect(() => {
     if (!showCopy) return;
+    const root = copyMenuRef.current;
+    const items = () => Array.from(root?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
+    const copyButton = () => root?.querySelector<HTMLButtonElement>("button[aria-label='Copy as']") ?? null;
+    items()[0]?.focus();
     const onPointer = (event: PointerEvent) => {
-      if (!copyMenuRef.current?.contains(event.target as Node)) setShowCopy(false);
+      if (!root?.contains(event.target as Node)) setShowCopy(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowCopy(false);
+      const list = items();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        copyButton()?.focus();
+        setShowCopy(false);
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      if (!list.length) return;
+      const index = list.findIndex((item) => item === document.activeElement);
+      const next =
+        index < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : list.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + list.length) % list.length;
+      list[next]?.focus();
     };
     window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
+    root?.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
+      root?.removeEventListener("keydown", onKey);
     };
   }, [showCopy]);
 

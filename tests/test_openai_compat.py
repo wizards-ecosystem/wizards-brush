@@ -395,6 +395,52 @@ def test_bare_v1_is_not_the_model_list(client):
         assert response.status_code != 200 or "text/html" in response.headers.get("content-type", "")
 
 
+def test_refused_edit_creates_no_assets(client, enqueued, remote_gpu_offline, remote_choice):
+    _, before = db.search_assets(limit=1)
+    source = _data_url(_png(size=(32, 32)))
+    mask = _data_url(_png((255, 255, 255), size=(16, 16)))
+    mismatched = client.post("/api/openai/v1/images/edits", json={
+        "model": "brush-fast", "prompt": "repaint", "image": source, "mask": mask,
+    })
+    assert mismatched.status_code == 400
+    assert _error(mismatched)["param"] == "mask"
+
+    extra = client.post("/api/openai/v1/images/edits", json={
+        "model": "brush-fast", "prompt": "repaint", "images": [source, source],
+    })
+    assert extra.status_code == 400
+    assert _error(extra)["param"] == "image"
+
+    offline = client.post("/api/openai/v1/images/edits", json={
+        "model": "brush-remote", "prompt": "make it red", "image": source,
+    })
+    assert offline.status_code == 503
+    assert _error(offline)["code"] == "remote_offline"
+
+    _, after = db.search_assets(limit=1)
+    assert after == before
+    assert enqueued == []
+
+
+def test_omitted_model_is_brush_fast(client, enqueued, impatient):
+    _, job = _queued(client, prompt="a cup")
+    assert job.kind == "image_local"
+    assert job.params["model_variant"] == "turbo"
+    assert len(enqueued) == 1
+
+
+def test_non_utf8_body_is_a_client_error(client):
+    response = client.post(
+        "/api/openai/v1/images/generations",
+        content=b"\xff\xfe not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    err = _error(response)
+    assert err["type"] == "invalid_request_error"
+    assert err["code"] == "invalid_request"
+
+
 def test_official_sdk_generate_and_edit(client, monkeypatch):
     """The real SDK, over httpx's ASGI transport. Sync httpx cannot drive it."""
     _install_runner(monkeypatch)
