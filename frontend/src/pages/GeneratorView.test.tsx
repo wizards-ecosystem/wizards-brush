@@ -104,13 +104,31 @@ describe("GeneratorView workstation", () => {
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
     renderGenerator();
     await user.type(screen.getByLabelText("Prompt"), "A glass teapot");
-    await user.click(screen.getByRole("button", { name: "Copy as an API request" }));
+    await user.click(screen.getByRole("button", { name: "Copy as" }));
+    expect(screen.getByRole("menuitem", { name: "MCP call" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "OpenAI SDK" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "API request" })).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "MCP call" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Copy as" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy as" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Copy as" }));
+    await user.click(screen.getByRole("menuitem", { name: "API request" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text: string = writeText.mock.calls[0][0];
     expect(text).toContain("curl -X POST http://localhost:3000/api/jobs");
     const body = JSON.parse(text.slice(text.indexOf("-d '") + 4, text.lastIndexOf("'")));
     // Only the generator's own settings: the strict API refuses anything else.
     expect(body).toEqual({ kind: "image_local", params: { prompt: "A glass teapot", batch: 1 } });
+
+    await user.click(screen.getByRole("button", { name: "Copy as" }));
+    await user.click(screen.getByRole("menuitem", { name: "OpenAI SDK" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    const snippet: string = writeText.mock.calls[1][0];
+    expect(snippet).toContain("client.images.generate(");
+    expect(snippet).toContain('model="local/turbo"');
+    expect(snippet).toContain("A glass teapot");
   });
 
   it("keeps the sticky submission action and exposes validation state", () => {

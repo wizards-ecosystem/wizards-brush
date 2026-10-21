@@ -165,8 +165,8 @@ class Job(SQLModel, table=True):
     # reclaim paid A100 work instead of abandoning it in the remote queue.
     remote_client_id: str | None = Field(default=None, index=True)
     remote_token: str | None = Field(default=None, index=True)
-    # Who submitted this job: "ui", "mcp", or the API token's name ("api" when
-    # the token is unnamed). Empty on rows written before the column existed.
+    # Who submitted this job: "ui", "mcp", "openai", or the API token's name
+    # ("api" when the token is unnamed). Empty on rows written before the column existed.
     client: str = ""
     # Human-readable guidance for a failure, kept apart from `error` so the UI
     # can lead with what to do and put the traceback behind a disclosure.

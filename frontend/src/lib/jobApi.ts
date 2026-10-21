@@ -68,3 +68,130 @@ export function jobRequestFor(
   notes.push("Then wait for it: GET /api/jobs/{job_id}/wait (see docs/api.md).");
   return { body, notes };
 }
+
+/** Image kinds the OpenAI image API can queue. Anything else has no snippet. */
+const OPENAI_KINDS = new Set([
+  "image_local",
+  "image_colab",
+  "img2img",
+  "image_edit",
+  "inpaint",
+  "inpaint_remote",
+]);
+
+export function openaiMapped(kind: string): boolean {
+  return OPENAI_KINDS.has(kind);
+}
+
+function quoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+/**
+ * The same form as an MCP `generate` or `edit` call. `wait: true` is in the
+ * call, so the job API's "then wait" note is left off. Import notes stay.
+ */
+export function mcpCallText(
+  spec: GeneratorSpec,
+  values: Record<string, unknown>,
+  prompt: string,
+): { text: string; notes: string[] } {
+  const { body, notes } = jobRequestFor(spec, values, prompt);
+  const params = { ...(body.params ?? {}) };
+  const spoken = String(params.prompt ?? prompt);
+  delete params.prompt;
+  const call = spec.needs_image
+    ? {
+        tool: "edit",
+        arguments: {
+          kind: spec.kind,
+          instruction: spoken,
+          images: ["<asset id>"],
+          ...(spec.needs_mask ? { mask: "<mask asset id>" } : {}),
+          ...(Object.keys(params).length ? { params } : {}),
+          wait: true,
+        },
+      }
+    : {
+        tool: "generate",
+        arguments: {
+          kind: spec.kind,
+          prompt: spoken,
+          ...(Object.keys(params).length ? { params } : {}),
+          wait: true,
+        },
+      };
+  return {
+    text: JSON.stringify(call, null, 2),
+    notes: notes.filter((note) => !note.startsWith("Then wait")),
+  };
+}
+
+function openaiLane(kind: string): "local" | "remote" {
+  if (kind === "image_colab" || kind === "image_edit" || kind === "inpaint_remote") return "remote";
+  return "local";
+}
+
+/** A raw id (`local/turbo`, `remote/quality`) so the snippet does not depend on friendly names. */
+function openaiModel(kind: string, values: Record<string, unknown>): string {
+  const lane = openaiLane(kind);
+  const fallback = lane === "remote" ? "quality" : "turbo";
+  const variant =
+    typeof values.model_variant === "string" && values.model_variant ? values.model_variant : fallback;
+  return `${lane}/${variant}`;
+}
+
+function openaiSize(spec: GeneratorSpec, values: Record<string, unknown>): string | null {
+  if (!spec.controls.some((control) => control.name === "aspect")) return null;
+  const aspect = values.aspect;
+  if (typeof aspect !== "string" || aspect === "" || aspect === "Match input") return null;
+  if (aspect === "Custom") {
+    const width = Number(values.width);
+    const height = Number(values.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return `${width}x${height}`;
+  }
+  return aspect;
+}
+
+/**
+ * A Python snippet for `images.generate` or `images.edit`. Null when this kind
+ * has no OpenAI mapping. `size` is the ratio or WxH this server accepts.
+ * `Match input` omits `size`.
+ */
+export function openaiCallText(
+  spec: GeneratorSpec,
+  values: Record<string, unknown>,
+  prompt: string,
+): string | null {
+  if (!openaiMapped(spec.kind)) return null;
+  const { body } = jobRequestFor(spec, values, prompt);
+  const params = body.params ?? {};
+  const spoken = String(params.prompt ?? prompt);
+  const batch = Number(params.batch);
+  const size = openaiSize(spec, values);
+  const lines = [
+    "import os",
+    "",
+    "from openai import OpenAI",
+    "",
+    "client = OpenAI(",
+    '    base_url="http://127.0.0.1:8000/api/openai/v1",',
+    '    api_key=os.environ["BRUSH_API_TOKEN"],',
+    ")",
+  ];
+  const kwargs = [`    model=${quoted(openaiModel(spec.kind, values))},`, `    prompt=${quoted(spoken)},`];
+  if (size) kwargs.push(`    size=${quoted(size)},`);
+  if (Number.isFinite(batch) && batch > 1) kwargs.push(`    n=${batch},`);
+  if (spec.needs_image) {
+    lines.push("# http URLs are refused. Pass a local file.");
+    lines.push('source = open("image.png", "rb")');
+    if (spec.needs_mask) lines.push('mask = open("mask.png", "rb")');
+    lines.push("image = client.images.edit(", "    image=source,");
+    if (spec.needs_mask) lines.push("    mask=mask,");
+  } else {
+    lines.push("image = client.images.generate(");
+  }
+  lines.push(...kwargs, ")");
+  return lines.join("\n");
+}

@@ -83,13 +83,16 @@ def test_cross_site_api_get_is_rejected_before_routing():
     middleware = BrowserSecurityMiddleware(
         app, settings=SimpleNamespace(api_token="", cors_origins="", effective_bool=lambda _: True)
     )
-    asyncio.run(middleware(
-        _scope([(b"sec-fetch-site", b"cross-site")], method="GET", path="/api/assets"),
-        receive,
-        send,
-    ))
-    assert sent[0]["status"] == 403
-    assert calls["app"] == 0
+    for path in ("/api/assets", "/api/openai/v1/models", "/api/mcp"):
+        sent.clear()
+        calls["app"] = 0
+        asyncio.run(middleware(
+            _scope([(b"sec-fetch-site", b"cross-site")], method="GET", path=path),
+            receive,
+            send,
+        ))
+        assert sent[0]["status"] == 403
+        assert calls["app"] == 0
 
 
 def test_every_http_response_gets_anti_framing_headers():

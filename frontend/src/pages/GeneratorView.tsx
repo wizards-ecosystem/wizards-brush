@@ -17,7 +17,7 @@ import {
   effectiveControlDefault,
   prefillableParams,
 } from "../lib/generators";
-import { apiRequestText, jobRequestFor } from "../lib/jobApi";
+import { apiRequestText, jobRequestFor, mcpCallText, openaiCallText, openaiMapped } from "../lib/jobApi";
 import { COMBO_CAP, estimateCombinations } from "../lib/wildcards";
 import { useStore } from "../store/useStore";
 
@@ -78,6 +78,8 @@ export function GeneratorView() {
   const [naming, setNaming] = useState(false);
   const [wildcards, setWildcards] = useState<WildcardInfo[]>([]);
   const [showWc, setShowWc] = useState(false);
+  const [showCopy, setShowCopy] = useState(false);
+  const copyMenuRef = useRef<HTMLDivElement>(null);
   const [mobileView, setMobileView] = useState<"compose" | "session">("compose");
   const [adjustedState, setAdjustedState] = useState<string[]>([]);
   const [metadataNote, setMetadataNote] = useState("");
@@ -329,17 +331,70 @@ export function GeneratorView() {
     }
   };
 
-  // The same generation as `POST /api/jobs` (docs/api.md), for scripting it.
-  const copyApiRequest = async () => {
+  // The same generation as a script: the job API, an MCP call, or the OpenAI SDK.
+  const copyAs = async (which: "api" | "mcp" | "openai") => {
     if (!spec) return;
-    const { body, notes } = jobRequestFor(spec, values, composedPrompt());
+    setShowCopy(false);
+    const prompt = composedPrompt();
+    let text: string;
+    let label: string;
+    if (which === "api") {
+      const { body, notes } = jobRequestFor(spec, values, prompt);
+      text = apiRequestText("/api/jobs", body, window.location.origin, notes);
+      label = "Copied as an API request";
+    } else if (which === "mcp") {
+      const call = mcpCallText(spec, values, prompt);
+      const comments = call.notes.map((note) => `# ${note}`);
+      text = [...comments, call.text].filter(Boolean).join("\n");
+      label = "Copied as an MCP call";
+    } else {
+      text = openaiCallText(spec, values, prompt) ?? "";
+      label = "Copied as an OpenAI SDK snippet";
+    }
     try {
-      await navigator.clipboard.writeText(apiRequestText("/api/jobs", body, window.location.origin, notes));
-      toast("Copied as an API request: POST /api/jobs", "success");
+      await navigator.clipboard.writeText(text);
+      toast(label, "success");
     } catch (e) {
       toast(`Couldn't copy: ${e}`, "error");
     }
   };
+
+  useEffect(() => {
+    if (!showCopy) return;
+    const root = copyMenuRef.current;
+    const items = () => Array.from(root?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
+    const copyButton = () => root?.querySelector<HTMLButtonElement>("button[aria-label='Copy as']") ?? null;
+    items()[0]?.focus();
+    const onPointer = (event: PointerEvent) => {
+      if (!root?.contains(event.target as Node)) setShowCopy(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      const list = items();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        copyButton()?.focus();
+        setShowCopy(false);
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      if (!list.length) return;
+      const index = list.findIndex((item) => item === document.activeElement);
+      const next =
+        index < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : list.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + list.length) % list.length;
+      list[next]?.focus();
+    };
+    window.addEventListener("pointerdown", onPointer);
+    root?.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      root?.removeEventListener("keydown", onKey);
+    };
+  }, [showCopy]);
 
   // Ctrl/Cmd+Enter to generate.
   const submitRef = useRef(submit);
@@ -463,6 +518,7 @@ export function GeneratorView() {
                     onClick={() => {
                       setShowHist((shown) => !shown);
                       setShowWc(false);
+                      setShowCopy(false);
                     }}
                   />
                   {wildcards.length > 0 && (
@@ -473,6 +529,7 @@ export function GeneratorView() {
                       onClick={() => {
                         setShowWc((shown) => !shown);
                         setShowHist(false);
+                        setShowCopy(false);
                       }}
                     />
                   )}
@@ -498,7 +555,53 @@ export function GeneratorView() {
                     disabled={!values.prompt?.trim()}
                     onClick={() => setNaming(true)}
                   />
-                  <IconButton icon="copy" label="Copy as an API request" onClick={copyApiRequest} />
+                  <div className="relative" ref={copyMenuRef}>
+                    <IconButton
+                      icon="copy"
+                      label="Copy as"
+                      aria-haspopup="menu"
+                      aria-expanded={showCopy}
+                      onClick={() => {
+                        setShowCopy((shown) => !shown);
+                        setShowHist(false);
+                        setShowWc(false);
+                      }}
+                    />
+                    {showCopy && (
+                      <div
+                        role="menu"
+                        aria-label="Copy as"
+                        className="absolute right-0 top-full z-20 mt-1 min-w-44 border border-edge bg-panel3 py-1 shadow-float pop-in"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-panel2 hover:text-ink"
+                          onClick={() => void copyAs("api")}
+                        >
+                          API request
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-panel2 hover:text-ink"
+                          onClick={() => void copyAs("mcp")}
+                        >
+                          MCP call
+                        </button>
+                        {openaiMapped(spec.kind) && (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="block w-full px-3 py-2 text-left text-xs text-muted hover:bg-panel2 hover:text-ink"
+                            onClick={() => void copyAs("openai")}
+                          >
+                            OpenAI SDK
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

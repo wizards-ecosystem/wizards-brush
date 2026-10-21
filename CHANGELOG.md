@@ -8,6 +8,10 @@ contributors know which user-facing changes need release notes.
 
 ### Fixed
 
+- A refused OpenAI image edit no longer saves the upload. The images are
+  checked in memory and stored only after the request is accepted. Omitting
+  `model` selects `brush-fast`. Copy as an MCP edit includes the generator
+  kind, so a local inpaint is not sent as a remote image edit.
 - `dry_run` no longer stores anything. An MCP `edit` dry run decodes a data
   URL in memory instead of importing it and starting captioning, and a refine
   dry run validates its mask without writing the mask file. A repeated
@@ -16,6 +20,11 @@ contributors know which user-facing changes need release notes.
 
 ### Added
 
+- OpenAI-compatible image endpoints at `/api/openai/v1`: list models, generate,
+  and edit. Jobs are the same ones the form and `POST /api/jobs` create.
+  See `docs/agents.md`.
+- The generator's copy button is a menu: an API request, an MCP call, and an
+  OpenAI SDK snippet for image kinds that map.
 - An MCP server at `/api/mcp` (Streamable HTTP), plus `scripts/brush-mcp.sh`
   for clients that only speak stdio. Tools list kinds, describe their schema,
   generate, edit, wait, and search the gallery. See `docs/agents.md`.

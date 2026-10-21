@@ -447,6 +447,15 @@ async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     return _submission(fanned or await submit(body.kind, params, handler), duplicate=False)
 
 
+async def require_runnable(kind: str) -> None:
+    """503 when ``kind`` cannot run here now.
+
+    A dry run judges the request without asking this. Callers that store
+    uploads only after ``dry_run_unsaved`` still ask here before writing.
+    """
+    await _require_runnable(_require_known(kind))
+
+
 async def _require_runnable(info: JobKindInfo) -> None:
     """503 when the kind cannot run here now; remote kinds need a live worker."""
     if not info.available:
