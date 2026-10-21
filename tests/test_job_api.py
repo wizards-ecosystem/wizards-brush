@@ -419,6 +419,10 @@ def test_remote_kinds_are_unavailable_while_the_remote_gpu_is_offline(
     assert r.status_code == 503 and "not connected" in r.json()["detail"]
     bad = _job(client, kind="image_edit", params={"promt": "p"}, inputs={"images": [source.id]})
     assert bad.status_code == 400, "the request is judged before the server's state"
+    dry = _job(client, kind="image_edit", params={"prompt": "p"},
+               inputs={"images": [source.id]}, dry_run=True)
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["dry_run"] is True and dry.json()["would_queue"] == 1
     assert enqueued == []
 
 
@@ -484,6 +488,31 @@ def test_refine_ponytail_builds_a_hair_mask_not_a_full_frame(client, enqueued, s
     assert job.params.get("mask_path")
     assert job.params.get("input_fidelity") == "high"
     assert job.params.get("parent_asset_id") == source.id
+
+
+def test_refine_dry_run_validates_the_mask_without_writing_it(
+        client, enqueued, source, monkeypatch):
+    from backend.app.generators import parsing
+
+    def predict(kind, img):
+        labels = Image.new("L", img.size, parsing.ATR_INDEX["upper-clothes"])
+        for y in range(max(1, img.height // 3)):
+            for x in range(img.width):
+                labels.putpixel((x, y), parsing.ATR_INDEX["hair"])
+        return labels
+
+    monkeypatch.setattr(parsing, "_PREDICT", predict)
+    before = set(settings.images_dir.iterdir()) | set(settings.thumbs_dir.iterdir())
+    response = _job(client, kind="refine", params={"prompt": "a low nape ponytail"},
+                    inputs={"images": [source.id]}, dry_run=True)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["dry_run"] is True
+    assert body["params"]["region"] == "hair"
+    assert "mask_path" not in body["params"]
+    after = set(settings.images_dir.iterdir()) | set(settings.thumbs_dir.iterdir())
+    assert after == before
+    assert enqueued == []
 
 
 def test_refine_validates_like_its_target_kind(client, enqueued, source):

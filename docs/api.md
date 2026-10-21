@@ -207,8 +207,9 @@ be stored, without creating a job:
 `would_queue` is how many jobs a real submit would create (more than one for a
 combinatorial prompt). When `request_id` already names a submission,
 `duplicate` is true, `would_queue` is 0, and `job_ids` are the existing jobs.
-A refine dry run may still write the mask file it would have attached; it does
-not queue the job.
+A dry run does not write a mask file. It also does not require the Remote GPU
+to be connected: a remote kind that would be 503 on submit still validates.
+Submitting it for real is still 503 until the worker answers.
 
 `params` works as follows:
 

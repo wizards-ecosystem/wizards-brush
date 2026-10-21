@@ -34,6 +34,13 @@ Authorization: Bearer <token>
 `/files/...` URLs are cookie-only once a token is set. Tool results include
 `file_url` (`/api/assets/{id}/file`), which accepts the header.
 
+The MCP SDK can keep its own host allow-list, but that list is fixed when
+the session starts, so it cannot follow `API_TOKEN` or a LAN Host the bind
+address does not name. The SDK allow-list is off. The app's Host check is
+the boundary: a non-loopback Host is refused until `API_TOKEN` is set, and
+then any Host that presents the token is accepted. See
+[network security](network-security.md).
+
 ## Tools
 
 | Tool | What it does |
@@ -69,15 +76,19 @@ the long side is at most 512 px. Transparency is kept.
 
 `edit` accepts asset ids or data URLs. `http://` and `https://` URLs are
 refused, so a tool call cannot make the server fetch a remote file. A data
-URL is imported into the gallery before validation, including on a dry run.
+URL is imported into the gallery when the edit is actually queued. `dry_run`
+decodes and checks it in memory: no asset is added and captioning does not
+start. Sending the same `request_id` again returns the original jobs and
+does not import the images a second time.
 
 ### Checking a request
 
 `dry_run: true` on `generate` or `edit` validates the request and returns the
 params that would be stored, including `would_queue`. It does not create a
-job. The same flag exists on `POST /api/jobs`, and both paths share one
-validator. A refine dry run may still write the mask file it would have
-attached.
+job, an asset, or a mask file. The same flag exists on `POST /api/jobs`, and
+both paths share one validator. A dry run does not need the Remote GPU to be
+connected. Submitting that remote kind for real is still 503 until the worker
+answers.
 
 ### Errors
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from fastapi import HTTPException
 
@@ -144,18 +144,57 @@ def decode_data_url(value: str) -> bytes:
     return data
 
 
-async def image_id(value: int | str, *, role: Literal["source", "mask"] = "source") -> int:
-    """An asset id, or a data URL which is imported first."""
+class PreparedImage(NamedTuple):
+    """An edit input after it has been decoded.
+
+    `asset_id` is set when the value was already a gallery id, or when a data
+    URL was imported. A dry run leaves it None and keeps the decoded size in
+    memory; nothing is written and captioning is not started.
+    """
+
+    asset_id: int | None
+    width: int
+    height: int
+    image: Any = None
+
+
+def _image_value(value: object, *, role: Literal["source", "mask"]) -> int | str:
+    field = "images" if role == "source" else "mask"
     if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise RequestError(
             400, "an image must be an asset id or a data URL",
-            code="invalid_request", field="images" if role == "source" else "mask",
+            code="invalid_request", field=field,
         )
-    if isinstance(value, int) or value.isdigit():
-        return int(value)
-    data = decode_data_url(value)
+    return value
+
+
+async def prepare_image(
+    value: int | str,
+    *,
+    role: Literal["source", "mask"] = "source",
+    persist: bool = True,
+) -> PreparedImage:
+    """Resolve an asset id or a data URL.
+
+    `persist` imports a data URL. A dry run passes False: the bytes are
+    decoded and checked, then dropped.
+    """
+    checked = _image_value(value, role=role)
+    if isinstance(checked, int) or checked.isdigit():
+        return PreparedImage(int(checked), 0, 0, None)
+    data = decode_data_url(checked)
+    if not persist:
+        image = await asyncio.to_thread(assets.validate_image_bytes, data, role)
+        return PreparedImage(None, image.width, image.height, image)
     imported = await import_image(data, role=role, filename="agent.png")
-    return imported.id
+    return PreparedImage(int(imported.id), int(imported.width or 0), int(imported.height or 0), None)
+
+
+async def image_id(value: int | str, *, role: Literal["source", "mask"] = "source") -> int:
+    """An asset id, or a data URL which is imported first."""
+    prepared = await prepare_image(value, role=role, persist=True)
+    assert prepared.asset_id is not None
+    return prepared.asset_id
 
 
 def raise_http(exc: HTTPException) -> None:

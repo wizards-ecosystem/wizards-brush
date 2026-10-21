@@ -130,11 +130,20 @@ def test_dry_run_and_unknown_setting_share_the_http_shape(client):
     anyio.run(run)
 
 
+def _asset_ids() -> set[int]:
+    rows, _total = db.search_assets(limit=100_000)
+    return {int(row.id) for row in rows if row.id is not None}
+
+
+def _png_data_url(color: str) -> str:
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), color).save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 def test_edit_imports_a_data_url_and_refuses_http(client, monkeypatch):
     _install_runner(monkeypatch)
-    buf = io.BytesIO()
-    Image.new("RGB", (2, 2), "red").save(buf, format="PNG")
-    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    data_url = _png_data_url("red")
 
     async def run():
         async with Client(mcp_server.mcp) as mcp:
@@ -147,6 +156,7 @@ def test_edit_imports_a_data_url_and_refuses_http(client, monkeypatch):
             body = _error_body(refused)
             assert body["code"] == "invalid_request"
             assert body["field"] == "images"
+            before = _asset_ids()
             edited = await mcp.call_tool("edit", {
                 "images": [data_url],
                 "instruction": "make it blue",
@@ -156,6 +166,43 @@ def test_edit_imports_a_data_url_and_refuses_http(client, monkeypatch):
             assert edited.is_error is False, edited
             assert edited.structured_content["dry_run"] is True
             assert edited.structured_content["params"]["prompt"] == "make it blue"
+            assert _asset_ids() == before
+
+    anyio.run(run)
+
+
+def test_edit_retry_does_not_import_the_data_url_again(client, monkeypatch):
+    _install_runner(monkeypatch)
+    request_id = "edit-retry-0000001"
+
+    def imports() -> set[int]:
+        rows, _total = db.search_assets(limit=100_000)
+        return {
+            int(row.id) for row in rows
+            if row.id is not None and row.generator == "import"
+        }
+
+    async def run():
+        async with Client(mcp_server.mcp) as mcp:
+            before = imports()
+            first = await mcp.call_tool("edit", {
+                "images": [_png_data_url("red")],
+                "instruction": "make it blue",
+                "request_id": request_id,
+                "wait": False,
+            })
+            assert first.is_error is False, first
+            imported = imports() - before
+            assert len(imported) == 1
+            again = await mcp.call_tool("edit", {
+                "images": [_png_data_url("green")],
+                "instruction": "make it green",
+                "request_id": request_id,
+                "wait": False,
+            })
+            assert again.is_error is False, again
+            assert again.structured_content["duplicate"] is True
+            assert imports() - before == imported
 
     anyio.run(run)
 
@@ -206,3 +253,50 @@ def test_mcp_refuses_a_non_loopback_host_and_a_cross_site_fetch(client):
         "Sec-Fetch-Site": "cross-site",
     })
     assert cross.status_code == 403
+
+
+def test_mcp_allows_a_non_loopback_host_when_the_token_matches(client, monkeypatch):
+    from backend.app.config import settings
+
+    monkeypatch.setattr(settings, "api_token", "tok123")
+    headers = {"Host": "evil.example", "Authorization": "Bearer tok123"}
+    allowed = client.post("/api/mcp", json={}, headers=headers)
+    assert allowed.status_code not in {401, 421}
+
+
+def test_mcp_rejects_an_oversized_body(client):
+    from backend.app.main import app
+    from backend.app.security import MAX_REQUEST_BYTES
+
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/mcp",
+        "raw_path": b"/api/mcp",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"localhost"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(MAX_REQUEST_BYTES + 1).encode()),
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", 8000),
+    }
+
+    async def run():
+        await app(scope, receive, send)
+
+    anyio.run(run)
+    assert sent[0]["status"] == 413
+    assert b"request body too large" in sent[1]["body"]

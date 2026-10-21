@@ -190,6 +190,33 @@ def _import_image(data: bytes, role: str) -> Image.Image:
     return image.convert("RGBA" if alpha else "RGB")
 
 
+def validate_image_bytes(data: bytes, role: str) -> Image.Image:
+    """Decode an upload and apply the library's checks, without writing it.
+
+    A dry run uses this so a data URL is judged the same way as an import
+    and then discarded. `import_bytes` is this plus the save.
+    """
+    from .common import MAX_UPLOAD_BYTES
+
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"upload too large (max {MAX_UPLOAD_BYTES // 1024 // 1024} MB)",
+        )
+    try:
+        image = _import_image(data, role)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if role == "mask" and image.getbbox() is None:
+        raise HTTPException(
+            status_code=400,
+            detail="the mask is empty: white marks what should change",
+        )
+    return image
+
+
 def import_bytes(
     data: bytes,
     *,
@@ -219,15 +246,7 @@ def import_bytes(
         raise HTTPException(status_code=404, detail=f"collection {collection_id} not found")
     clean_tags = [tag.strip()[:64] for tag in (tags or []) if tag.strip()][:20]
     original = Path(filename or "").name[:200]
-    try:
-        image = _import_image(data, role)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from None
-    if role == "mask" and image.getbbox() is None:
-        raise HTTPException(
-            status_code=400,
-            detail="the mask is empty: white marks what should change",
-        )
+    image = validate_image_bytes(data, role)
     saved = save_image(image, "mask" if role == "mask" else "import")
     meta: dict = (
         {"mask": {"source": "upload"}} if role == "mask"

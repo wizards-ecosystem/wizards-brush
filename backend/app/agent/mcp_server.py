@@ -23,10 +23,16 @@ from starlette.routing import BaseRoute, Match, NoMatchFound
 from starlette.types import Receive, Scope, Send
 
 from .. import client_tag
-from ..config import settings
 from ..problems import RequestError, as_request_error, error_body
-from ..routers.job_api import DryRunResult, JobCreate, JobInputs, JobSubmission, JobWait
-from ..security import _LOOPBACK_HOSTS, allowed_origins
+from ..routers import job_api
+from ..routers.job_api import (
+    DryRunResult,
+    JobCreate,
+    JobInputs,
+    JobSubmission,
+    JobWait,
+    MemoryImage,
+)
 from ..version import get_version
 from . import core
 
@@ -74,36 +80,24 @@ class KindCatalogue(BaseModel):
     kinds: list[dict[str, Any]]
 
 
+def _memory(item: core.PreparedImage) -> MemoryImage:
+    return MemoryImage(item.asset_id, item.width, item.height, item.image)
+
+
 def _fail(exc: HTTPException) -> ToolError:
     """Tool error whose text is the same JSON object the jobs API returns."""
     return ToolError(json.dumps(error_body(as_request_error(exc))))
 
 
 def _transport_security() -> TransportSecuritySettings:
-    """Loopback allow-list, unless a token is already configured.
+    """Leave the SDK host allow-list off.
 
-    With a token set the app's own Host check and the token are the boundary.
-    The bind address is often 0.0.0.0, which cannot be turned into the Host
-    header a browser or a LAN client will send, so the SDK allow-list would
-    refuse every one of them.
+    The list is captured when the session starts, so it cannot follow
+    API_TOKEN or a Host the bind address does not name. The app's own
+    middleware is the live check: a non-loopback Host is refused until
+    API_TOKEN is set, and then the token is the boundary.
     """
-    if settings.api_token:
-        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
-    hosts: list[str] = []
-    origins: list[str] = []
-    for name in sorted(_LOOPBACK_HOSTS):
-        hosts.extend((name, f"{name}:*"))
-        shown = f"[{name}]" if ":" in name else name
-        origins.extend((f"http://{shown}", f"http://{shown}:*"))
-    # The header is `[::1]`, not `::1`. Keep the raw name as an exact host too.
-    if "::1" in _LOOPBACK_HOSTS:
-        hosts.extend(("[::1]", "[::1]:*"))
-    origins.extend(allowed_origins(settings.cors_origins))
-    return TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=hosts,
-        allowed_origins=origins,
-    )
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 class MountedMCP:
@@ -263,6 +257,12 @@ async def _submit(body: JobCreate, *, wait: bool, inline: bool, ctx: Context) ->
             result = await core.submit(body)
     except HTTPException as exc:
         raise _fail(exc) from None
+    return await _present(result, wait=wait, inline=inline, ctx=ctx)
+
+
+async def _present(
+    result: JobSubmission | DryRunResult, *, wait: bool, inline: bool, ctx: Context,
+) -> Outcome:
     if isinstance(result, DryRunResult):
         return _published(_finish(Outcome(
             dry_run=True,
@@ -354,12 +354,17 @@ async def edit(
     inline_images: bool = False,
     dry_run: bool = False,
 ) -> Outcome:
-    """Edit existing images. Pass asset ids from an earlier job, or data URLs."""
+    """Edit existing images. Pass asset ids from an earlier job, or data URLs.
+
+    A dry run decodes data URLs in memory. It does not add them to the gallery
+    or start captioning. A repeated request_id is answered before any import.
+    """
     try:
-        ids = [await core.image_id(value) for value in images]
-        mask_id = None if mask is None else await core.image_id(mask, role="mask")
+        _, prior = job_api.duplicate_of(request_id, dry_run=dry_run)
     except HTTPException as exc:
         raise _fail(exc) from None
+    if prior is not None:
+        return await _present(prior, wait=wait, inline=inline_images, ctx=ctx)
     settings_map = dict(params or {})
     if instruction:
         if "prompt" in settings_map and settings_map["prompt"] != instruction:
@@ -369,10 +374,42 @@ async def edit(
                 suggestions=["Pass the edit text once, as instruction or as params.prompt."],
             ))
         settings_map["prompt"] = instruction
+    try:
+        prepared = [
+            await core.prepare_image(value, persist=not dry_run) for value in images
+        ]
+        mask_prepared = (
+            None if mask is None
+            else await core.prepare_image(mask, role="mask", persist=not dry_run)
+        )
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    unsaved = any(item.asset_id is None for item in prepared) or (
+        mask_prepared is not None and mask_prepared.asset_id is None
+    )
+    if dry_run and unsaved:
+        try:
+            result = await job_api.dry_run_unsaved(
+                kind, settings_map,
+                [_memory(item) for item in prepared],
+                None if mask_prepared is None else _memory(mask_prepared),
+                request_id=request_id,
+            )
+        except HTTPException as exc:
+            raise _fail(exc) from None
+        return await _present(result, wait=False, inline=False, ctx=ctx)
+    ids = [item.asset_id for item in prepared]
+    if any(item is None for item in ids):
+        raise _fail(RequestError(
+            500, "edit lost an image id", code="error", field="images",
+        ))
     body = JobCreate(
         kind=kind,
         params=settings_map,
-        inputs=JobInputs(images=ids, mask=mask_id),
+        inputs=JobInputs(
+            images=[int(item) for item in ids if item is not None],
+            mask=None if mask_prepared is None else mask_prepared.asset_id,
+        ),
         dry_run=dry_run,
         request_id=request_id,
     )
@@ -416,7 +453,12 @@ async def search_library(
     semantic: bool = False,
     limit: Annotated[int, Field(description="At most 50.", ge=1, le=50)] = 20,
 ) -> dict[str, Any]:
-    """Search the gallery. Each item includes file_url, which accepts the API token."""
+    """Search the gallery.
+
+    Each item's file_url is `/api/assets/{id}/file`, which accepts the API
+    token. `/files/...` does not: once a token is set it accepts only the
+    browser cookie.
+    """
     return await core.search(q, kind=kind, favorite=favorite, semantic=semantic, limit=limit)
 
 

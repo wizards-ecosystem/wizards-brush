@@ -6,6 +6,14 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+### Fixed
+
+- `dry_run` no longer stores anything. An MCP `edit` dry run decodes a data
+  URL in memory instead of importing it and starting captioning, and a refine
+  dry run validates its mask without writing the mask file. A repeated
+  `request_id` on `edit` is recognized before those images are imported. A
+  dry run also validates while the Remote GPU worker is offline.
+
 ### Added
 
 - An MCP server at `/api/mcp` (Streamable HTTP), plus `scripts/brush-mcp.sh`
