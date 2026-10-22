@@ -27,6 +27,7 @@ The test suite runs it against the real app, so it stays correct.
 - [Assets](#assets)
 - [Variant Sets](#variant-sets)
 - [Recipes](#recipes)
+- [Saved recipes](#saved-recipes)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
 
@@ -87,16 +88,16 @@ See [network security](network-security.md) for LAN, TLS and CORS details.
   error tracebacks do, the path is shown relative to the app's folder, and any
   other path in your home directory as `~/...`. Where the app is installed is
   never revealed. The stored records keep the real paths.
-- **Strict settings.** `POST /api/jobs` and Variant Set recipes refuse an
-  unknown setting name or a value outside its control's range, and name it.
-  The UI's multipart routes clamp instead, because a form cannot send such a
-  value.
-- **Idempotency.** `POST /api/jobs` and `POST /api/variant-sets` accept a
-  `request_id`: 16 to 128 characters from `A-Z a-z 0-9 _ -`. Sending the same
-  id again returns the original submission (`"duplicate": true`, or
-  `"created": false` for a set) instead of queuing it twice, so a client can
-  retry blindly after a dropped connection. The body of the repeat is not
-  compared, because the key alone identifies the submission.
+- **Strict settings.** `POST /api/jobs`, saved recipes and Variant Set recipes
+  refuse an unknown setting name or a value outside its control's range, and
+  name it. The UI's multipart routes clamp instead, because a form cannot send
+  such a value.
+- **Idempotency.** `POST /api/jobs`, `POST /api/recipes/{key}/run` and
+  `POST /api/variant-sets` accept a `request_id`: 16 to 128 characters from
+  `A-Z a-z 0-9 _ -`. Sending the same id again returns the original submission
+  (`"duplicate": true`, or `"created": false` for a set) instead of queuing it
+  twice, so a client can retry blindly after a dropped connection. The body of
+  the repeat is not compared, because the key alone identifies the submission.
 - **Deletes are soft.** A deleted asset moves to the trash. It is no longer
   served or accepted as an input, and it can be restored until the trash is
   emptied.
@@ -461,8 +462,10 @@ files.
 
 ## Recipes
 
-A recipe is a saved definition. Editing a recipe never changes a set already
-made from it, because each set keeps its own snapshot.
+A Variant Set recipe is a saved definition of axes, templates and stages.
+Editing one never changes a set already made from it, because each set keeps
+its own snapshot. A saved generation recipe, which runs one ordinary job from
+a short form, is a different resource: see [Saved recipes](#saved-recipes).
 
 | Route | Purpose |
 | --- | --- |
@@ -472,6 +475,68 @@ made from it, because each set keeps its own snapshot.
 | `PUT /api/variant-recipes/{id}` | Replace one |
 | `POST /api/variant-recipes/{id}/clone` | Copy one |
 | `DELETE /api/variant-recipes/{id}` | Delete one |
+
+## Saved recipes
+
+A saved recipe freezes one job kind and the settings that should stay put,
+then publishes the few fields a later run may change. The Recipes page,
+`POST /api/recipes` and the MCP tools share one list: `input_schema` is the
+JSON Schema both the run panel and an agent read. Running a recipe does not
+add a job kind. The server checks `inputs` against that schema, overlays them
+on the frozen params, and calls `POST /api/jobs`. Queueing, provenance, the
+client tag, `dry_run` and structured errors stay on that path.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/recipes` | Save one. `expose` names the settings or inputs a run may change: any control of the kind, plus `images`, `mask` or `last_frame` when the kind accepts that role. |
+| `GET /api/recipes?limit=` | Newest first. Each row includes `fields` and `input_schema`. `limit` is 1–200, default 100. |
+| `GET /api/recipes/{key}` | One recipe by numeric id, slug, or name, including frozen `params` and `inputs`. |
+| `PUT /api/recipes/{key}` | Replace one. The slug stays unless `slug` is sent. Jobs already queued are unchanged. |
+| `DELETE /api/recipes/{key}` | Delete the definition. Queued jobs stay. |
+| `POST /api/recipes/{key}/run` | `{"inputs", "dry_run", "request_id"}`. Unknown input keys are refused. `dry_run` returns the params that would be stored and does not queue a job. |
+
+A name is 1–80 characters and cannot contain `/`. It is unique ignoring case,
+so calling a recipe by name is unambiguous. The slug is 1–64 characters of
+lowercase letters, digits and hyphens. Omitting `slug` derives one from the
+name and appends `-2`, `-3`, … when that slug is taken. An explicit slug is
+used as given, or refused with 409 when it is taken. A name or slug that is
+only digits is refused. A key of 1–18 ASCII digits is looked up as an id; a
+longer digit string is not an id and does not match a slug.
+
+`params` are the kind's settings, filled with that kind's defaults at save
+time. A value the author omitted, or sent equal to the resolved default, is
+recorded as defaulted. A later change to a registry default does not retune
+that setup while the field it depends on stays the same. When a run changes
+that field — `model_variant` for guidance, `engine` where a control follows
+it — defaulted values are computed again from the live kind. A value the
+author set to something else stays as saved. A control added to the kind
+after the save is not pinned; the job builder applies it.
+
+The published `input_schema` is a snapshot of each field's limits at save
+time, which is what the form and agents read. A run does not enforce that
+snapshot for settings. Setting values are checked against the live kind
+after the merge, so changing `engine` to Hunyuan accepts `num_frames: 9` on
+a recipe whose saved schema still shows Wan's 25–121 range. Input roles
+(`images`, `mask`, `last_frame`) keep the saved counts. A disagreement comes
+back as the usual structured error. Save the recipe again to refresh the
+published schema.
+
+`inputs.images`, `inputs.mask` and `inputs.last_frame` are gallery asset ids.
+An exposed image list whose saved default is empty is required at run time
+when the kind needs at least one image. A frozen id must exist, and a mask
+must match its image when both are set. Saving does not ask whether the kind
+can run right now. A real run does, and answers 503 when it cannot. `dry_run`
+does not queue a job and does not require the Remote GPU. A local GPU kind is
+still refused when this machine cannot run one, the same as `POST /api/jobs`.
+
+The run response names the recipe (`recipe_id`, `slug`, `name`) and, for a
+real run, the job ids. The job's own params stay the kind's params. They do
+not gain a recipe id, so rerunning that job still validates. `client` on the
+recipe records who saved it (`ui`, `mcp`, or the API token's name) and is
+left alone by a later update. The job records who ran it.
+
+`clear_all` deletes jobs, assets and variant sets. Saved generation recipes
+stay, as variant recipes and presets do.
 
 ## Finishing and validation reference
 
@@ -512,7 +577,8 @@ tag:
 | Tag | Covers |
 | --- | --- |
 | `jobs` | Queue, wait, follow |
-| `variant-sets` | Sets and recipes |
+| `variant-sets` | Sets and variant recipes |
+| `recipes` | Saved generation recipes |
 | `assets` | Import, search, download, export |
 | `tools` | Per-tool routes |
 | `images`, `videos` | The UI's multipart routes |

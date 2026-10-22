@@ -10,6 +10,7 @@ import { MaskEditor } from "../components/MaskEditor";
 import { MultiImageDropzone } from "../components/MultiImageDropzone";
 import { ProgressBar } from "../components/ProgressBar";
 import { XYGridPanel, GRID_HARD_CAP } from "../components/XYGridPanel";
+import { SaveRecipeDialog } from "../components/SaveRecipeDialog";
 import { Button, EmptyState, IconButton, NameDialog, SegmentedControl, Spinner } from "../components/ui";
 import {
   applyDependentDefaults,
@@ -79,6 +80,7 @@ export function GeneratorView() {
   const [wildcards, setWildcards] = useState<WildcardInfo[]>([]);
   const [showWc, setShowWc] = useState(false);
   const [showCopy, setShowCopy] = useState(false);
+  const [saveRecipe, setSaveRecipe] = useState(false);
   const copyMenuRef = useRef<HTMLDivElement>(null);
   const [mobileView, setMobileView] = useState<"compose" | "session">("compose");
   const [adjustedState, setAdjustedState] = useState<string[]>([]);
@@ -720,6 +722,9 @@ export function GeneratorView() {
                 {blockedReason}
               </div>
             )}
+            <Button className="mb-2 w-full" type="button" onClick={() => setSaveRecipe(true)}>
+              Save as recipe
+            </Button>
             <Button
               variant="primary"
               className="w-full"
@@ -817,6 +822,22 @@ export function GeneratorView() {
           placeholder="preset name"
           onSubmit={savePrompt}
           onClose={() => setNaming(false)}
+        />
+      )}
+      {saveRecipe && (
+        <SaveRecipeDialog
+          kind={spec.kind}
+          controls={spec.controls}
+          values={values}
+          needsImage={slots.length > 0}
+          needsMask={!!spec.needs_mask}
+          needsLastFrame={slots.some((slot) => slot.name === "last_frame")}
+          onClose={() => setSaveRecipe(false)}
+          onSaved={(recipe) => {
+            setSaveRecipe(false);
+            toast(`Saved recipe ${recipe.name}`, "success");
+            navigate(`/recipes/${recipe.slug}`);
+          }}
         />
       )}
     </div>

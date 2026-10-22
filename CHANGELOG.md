@@ -6,7 +6,14 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- Saved recipes. A generation or edit setup can be saved under a name with a
+  short list of exposed fields, then run from the Recipes page,
+  `POST /api/recipes/{key}/run`, or the MCP tools `list_recipes`, `get_recipe`,
+  `save_recipe` and `run_recipe`. One JSON Schema serves the form and agents.
+  Guidance left at the model's default follows a different model, and a run
+  checks settings against the live kind. See `docs/api.md` and `docs/agents.md`.
 
 ## [0.1.8] - 2026-10-21
 

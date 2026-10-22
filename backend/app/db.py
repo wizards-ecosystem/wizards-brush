@@ -24,6 +24,7 @@ from .models import (
     Job,
     JobStatus,
     PromptHistory,
+    Recipe,
     UserPreset,
     VariantItem,
     VariantSet,
@@ -61,6 +62,10 @@ _PROCESS_LOCK: Any = None
 
 class DatabaseInUseError(RuntimeError):
     """Another process already holds this database."""
+
+
+class RecipeConflict(Exception):
+    """A recipe slug or name is already taken. The router turns this into a 409."""
 
 
 def acquire_process_lock(db_path: Path | None = None) -> bool:
@@ -443,7 +448,8 @@ def clear_all() -> dict:
         s.execute(sa_delete(Asset))
         s.execute(sa_delete(Job))
         # Variant Sets are execution records of the jobs just wiped; recipes are
-        # definitions the user wrote, and survive like presets do.
+        # definitions the user wrote, and survive like presets do. Saved
+        # generation recipes (`recipe`) are definitions too, and stay.
         s.execute(sa_delete(VariantItem))
         s.execute(sa_delete(VariantSet))
         s.commit()
@@ -1203,6 +1209,147 @@ def search_by_vector(query: bytes, *, limit: int = 60,
     scores = matrix @ q
     order = np.argsort(-scores)[:limit]
     return [(ids[int(i)], float(scores[int(i)])) for i in order]
+
+
+def _detach_recipe(s: Session, row: Recipe) -> Recipe:
+    """Load every column, then leave the session so callers can read the row."""
+    loaded = (
+        row.id, row.name, row.slug, row.description, row.kind, row.params_json,
+        row.fields_json, row.inputs_json, row.defaulted_json, row.client,
+        row.created_at, row.updated_at,
+    )
+    del loaded
+    s.expunge(row)
+    return row
+
+
+def insert_recipe(
+    *,
+    name: str,
+    slug: str,
+    description: str,
+    kind: str,
+    params: dict[str, Any],
+    fields: list[dict[str, Any]],
+    inputs: dict[str, Any],
+    defaulted: list[str],
+    client: str,
+) -> Recipe:
+    now = datetime.now(UTC)
+    with session() as s:
+        row = Recipe(
+            name=name, slug=slug, description=description, kind=kind,
+            params_json=json.dumps(params), fields_json=json.dumps(fields),
+            inputs_json=json.dumps(inputs), defaulted_json=json.dumps(list(defaulted)),
+            client=client,
+            created_at=now, updated_at=now,
+        )
+        s.add(row)
+        try:
+            s.commit()
+        except IntegrityError as error:
+            s.rollback()
+            raise RecipeConflict(str(error)) from error
+        s.refresh(row)
+        return _detach_recipe(s, row)
+
+
+def update_recipe(
+    recipe_id: int,
+    *,
+    name: str,
+    slug: str,
+    description: str,
+    kind: str,
+    params: dict[str, Any],
+    fields: list[dict[str, Any]],
+    inputs: dict[str, Any],
+    defaulted: list[str],
+) -> Recipe | None:
+    with session() as s:
+        row = s.get(Recipe, recipe_id)
+        if row is None:
+            return None
+        row.name = name
+        row.slug = slug
+        row.description = description
+        row.kind = kind
+        row.params_json = json.dumps(params)
+        row.fields_json = json.dumps(fields)
+        row.inputs_json = json.dumps(inputs)
+        row.defaulted_json = json.dumps(list(defaulted))
+        row.updated_at = datetime.now(UTC)
+        s.add(row)
+        try:
+            s.commit()
+        except IntegrityError as error:
+            s.rollback()
+            raise RecipeConflict(str(error)) from error
+        s.refresh(row)
+        return _detach_recipe(s, row)
+
+
+def delete_recipe(recipe_id: int) -> bool:
+    with session() as s:
+        row = s.get(Recipe, recipe_id)
+        if row is None:
+            return False
+        s.delete(row)
+        s.commit()
+        return True
+
+
+def get_recipe(recipe_id: int) -> Recipe | None:
+    with session() as s:
+        row = s.get(Recipe, recipe_id)
+        if row is None:
+            return None
+        return _detach_recipe(s, row)
+
+
+def recipe_by_slug(slug: str, *, exclude_id: int | None = None) -> Recipe | None:
+    with session() as s:
+        query = select(Recipe).where(Recipe.slug == slug)
+        if exclude_id is not None:
+            query = query.where(Recipe.id != exclude_id)
+        row = s.exec(query).first()
+        if row is None:
+            return None
+        return _detach_recipe(s, row)
+
+
+def recipe_by_name(name: str, *, exclude_id: int | None = None) -> Recipe | None:
+    with session() as s:
+        query = select(Recipe).where(func.lower(Recipe.name) == name.lower())
+        if exclude_id is not None:
+            query = query.where(Recipe.id != exclude_id)
+        row = s.exec(query).first()
+        if row is None:
+            return None
+        return _detach_recipe(s, row)
+
+
+def list_recipes(limit: int = 100) -> list[Recipe]:
+    with session() as s:
+        rows = list(s.exec(select(Recipe).order_by(desc(Recipe.updated_at)).limit(limit)))
+        return [_detach_recipe(s, row) for row in rows]
+
+
+def find_recipe(key: str) -> Recipe | None:
+    """Id, then slug, then case-insensitive name."""
+    text = key.strip()
+    if not text:
+        return None
+    # "²".isdigit() is true and int() raises. A 40-digit string fits in Python
+    # and overflows SQLite. Eighteen ASCII digits stay inside a signed 64-bit int.
+    if text.isascii() and text.isdigit() and len(text) <= 18:
+        row = get_recipe(int(text))
+        if row is not None:
+            return row
+    row = recipe_by_slug(text)
+    if row is not None:
+        return row
+    return recipe_by_name(text)
 
 
 def mark_used(asset_id: int) -> None:

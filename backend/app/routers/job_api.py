@@ -298,6 +298,15 @@ async def job_kinds() -> list[JobKindInfo]:
 
 
 # ---- submission -----------------------------------------------------------------------------
+def require_input_asset(asset_id: int, kind: str, role: str):
+    """The gallery asset `role` names, or a structured refusal.
+
+    Recipes and the job API share this so a frozen asset id is judged the same
+    way as one passed to `POST /api/jobs`.
+    """
+    return _asset(asset_id, kind, role)
+
+
 def _asset(asset_id: int, kind: str, role: str):
     a = db.get_asset(asset_id)
     if a is None:
@@ -532,6 +541,42 @@ def duplicate_of(
         job_id=submission.job_id,
         job_ids=list(submission.job_ids),
     )
+
+
+def kind_contract(kind: str) -> tuple[dict[str, dict[str, Any]], Inputs]:
+    """Controls and input rules for a kind `POST /api/jobs` accepts.
+
+    Availability is not judged. A recipe can be saved while its device is
+    offline; running it still asks whether the kind can run, unless the caller
+    set `dry_run`.
+    """
+    found = _contract(kind)
+    if found is None:
+        known = sorted(_catalogue())
+        raise RequestError(
+            400,
+            f"unknown or unavailable kind '{kind}' (available: {', '.join(known)})",
+            code="kind_unavailable", field="kind", valid_options=known,
+            suggestions=close_suggestions(kind, known),
+        )
+    return found
+
+
+def _contract(kind: str) -> tuple[dict[str, dict[str, Any]], Inputs] | None:
+    if kind in tools.TOOLS:
+        tool = tools.TOOLS[kind]
+        return {str(c["name"]): c for c in tool.controls}, inputs_for(kind)
+    if kind == "refine":
+        if "refine" not in _catalogue():
+            return None
+        return _refine_known(), Inputs(1, 1)
+    from ..variant_sets.operations import registry_specs
+
+    specs = registry_specs()
+    if kind not in specs or kind not in GENERATOR_INPUTS:
+        return None
+    spec = specs[kind]
+    return _controls_of(spec), inputs_for(kind, spec)
 
 
 def _require_known(kind: str) -> JobKindInfo:

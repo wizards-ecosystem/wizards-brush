@@ -10,6 +10,7 @@ import base64
 import io
 import itertools
 import json
+import uuid
 
 import anyio
 from mcp import Client
@@ -23,6 +24,7 @@ from backend.app.routers.common import persist_image
 
 _TOOLS = {
     "list_kinds", "describe_kind", "generate", "edit", "get_job", "wait_job", "search_library",
+    "list_recipes", "get_recipe", "save_recipe", "run_recipe",
 }
 
 
@@ -300,3 +302,66 @@ def test_mcp_rejects_an_oversized_body(client):
     anyio.run(run)
     assert sent[0]["status"] == 413
     assert b"request body too large" in sent[1]["body"]
+
+
+def test_recipe_tools_publish_the_schema_and_keep_the_error_shape(client, monkeypatch):
+    _install_runner(monkeypatch)
+    name = f"MCP cup {uuid.uuid4().hex[:8]}"
+
+    async def run():
+        async with Client(mcp_server.mcp) as mcp:
+            listed = await mcp.list_tools()
+            run_tool = next(tool for tool in listed.tools if tool.name == "run_recipe")
+            props = run_tool.input_schema["properties"]
+            assert "inputs" in props and "dry_run" in props
+            assert "ctx" not in props
+            saved = await mcp.call_tool("save_recipe", {
+                "name": name,
+                "kind": "image_local",
+                "params": {"prompt": "a cup", "seed": 11},
+                "expose": ["prompt"],
+                "field_descriptions": {"prompt": "What to draw."},
+            })
+            assert saved.is_error is False, saved
+            body = saved.structured_content
+            assert body["client"] == "mcp"
+            assert body["input_schema"]["properties"]["prompt"]["description"] == "What to draw."
+            catalogue = await mcp.call_tool("list_recipes", {})
+            assert any(row["slug"] == body["slug"] for row in catalogue.structured_content["recipes"])
+            detail = await mcp.call_tool("get_recipe", {"recipe": body["slug"]})
+            assert detail.structured_content["params"]["seed"] == 11
+            dry = await mcp.call_tool("run_recipe", {
+                "recipe": name,
+                "inputs": {"prompt": "a blue cup"},
+                "dry_run": True,
+                "wait": False,
+            })
+            assert dry.is_error is False, dry
+            assert dry.structured_content["dry_run"] is True
+            assert dry.structured_content["params"]["seed"] == 11
+            assert dry.structured_content["recipe_slug"] == body["slug"]
+            assert dry.structured_content["job_id"] is None
+            refused = await mcp.call_tool("run_recipe", {
+                "recipe": body["slug"],
+                "inputs": {"steps": 4},
+                "dry_run": True,
+            })
+            assert refused.is_error is True
+            error = _error_body(refused)
+            assert error["code"] == "unknown_setting"
+            assert error["field"] == "steps"
+            assert error["valid_options"] == ["prompt"]
+            queued = await mcp.call_tool("run_recipe", {
+                "recipe": body["slug"],
+                "inputs": {"prompt": "a blue cup"},
+                "wait": False,
+            })
+            assert queued.is_error is False, queued
+            assert queued.structured_content["recipe_id"] == body["id"]
+            job = db.get_job(queued.structured_content["job_id"])
+            assert job is not None and job.client == "mcp"
+            assert job.params["seed"] == 11
+            document = await mcp.read_resource(f"brush://recipes/{body['slug']}")
+            assert json.loads(document.contents[0].text)["slug"] == body["slug"]
+
+    anyio.run(run)

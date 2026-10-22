@@ -48,6 +48,8 @@ _INSTRUCTIONS = (
     "Call list_kinds, then describe_kind, before generate or edit. "
     "Settings are strict: an unknown name or an out-of-range value is refused "
     "with field, code, valid_options and suggestions. "
+    "Saved recipes are named setups. list_recipes and get_recipe publish "
+    "input_schema; run_recipe accepts only those fields. "
     "dry_run checks a request and does not queue a job. "
     "Images come back as brush:// resource links and file_url paths; "
     "set inline_images to also receive a small preview. Do not invent settings."
@@ -74,6 +76,9 @@ class Outcome(BaseModel):
     duplicate: bool = False
     job_id: int | None = None
     job_ids: list[int] = Field(default_factory=list)
+    recipe_id: int | None = None
+    recipe_slug: str | None = None
+    recipe_name: str | None = None
 
 
 class KindCatalogue(BaseModel):
@@ -260,11 +265,18 @@ async def _submit(body: JobCreate, *, wait: bool, inline: bool, ctx: Context) ->
     return await _present(result, wait=wait, inline=inline, ctx=ctx)
 
 
+def _with_recipe(outcome: Outcome, recipe: tuple[int, str, str] | None) -> Outcome:
+    if recipe is not None:
+        outcome.recipe_id, outcome.recipe_slug, outcome.recipe_name = recipe
+    return outcome
+
+
 async def _present(
     result: JobSubmission | DryRunResult, *, wait: bool, inline: bool, ctx: Context,
+    recipe: tuple[int, str, str] | None = None,
 ) -> Outcome:
     if isinstance(result, DryRunResult):
-        return _published(_finish(Outcome(
+        return _published(_finish(_with_recipe(Outcome(
             dry_run=True,
             kind=result.kind,
             params=result.params,
@@ -272,7 +284,7 @@ async def _present(
             duplicate=result.duplicate,
             job_id=result.job_id,
             job_ids=list(result.job_ids),
-        ), inline=False))
+        ), recipe), inline=False))
     submission = result
     if not wait:
         try:
@@ -280,19 +292,19 @@ async def _present(
         except HTTPException as exc:
             raise _fail(exc) from None
         settled = row.status in {"done", "error", "canceled"}
-        return _published(_finish(Outcome(
+        return _published(_finish(_with_recipe(Outcome(
             settled=settled,
             job=core.public_job(row),
             kind=row.kind,
             job_id=submission.job_id,
             job_ids=list(submission.job_ids),
             duplicate=submission.duplicate,
-        ), inline=False))
+        ), recipe), inline=False))
     try:
         view = await _wait_first(submission.job_id, ctx)
     except HTTPException as exc:
         raise _fail(exc) from None
-    return _published(_finish(_from_wait(view, submission), inline=inline))
+    return _published(_finish(_with_recipe(_from_wait(view, submission), recipe), inline=inline))
 
 
 @mcp.tool()
@@ -460,6 +472,98 @@ async def search_library(
     browser cookie.
     """
     return await core.search(q, kind=kind, favorite=favorite, semantic=semantic, limit=limit)
+
+
+@mcp.tool()
+async def list_recipes() -> dict[str, Any]:
+    """Saved recipes. Each entry's input_schema is what run_recipe accepts."""
+    return {"recipes": await core.recipe_rows()}
+
+
+@mcp.tool()
+async def get_recipe(
+    recipe: Annotated[str, Field(description="Recipe id, slug, or name.")],
+) -> dict[str, Any]:
+    """One recipe: frozen params, exposed fields, and the JSON Schema for inputs."""
+    try:
+        return await core.recipe_detail(recipe)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def save_recipe(
+    name: Annotated[str, Field(description="Display name. Also used as the slug when slug is omitted.")],
+    kind: Annotated[str, Field(description="A kind from list_kinds.")],
+    params: dict[str, Any] | None = None,
+    expose: Annotated[list[str] | None, Field(
+        description="Setting or input names a later run may change. Other settings stay frozen. "
+                    "Include prompt when the recipe should take a new prompt.")] = None,
+    description: str = "",
+    inputs: dict[str, Any] | None = None,
+    slug: str | None = None,
+    field_descriptions: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Save the current settings as a recipe. The result includes input_schema."""
+    try:
+        with client_tag.use("mcp"):
+            return await core.save_recipe(
+                name=name, kind=kind, params=params, expose=expose, description=description,
+                inputs=inputs, slug=slug, field_descriptions=field_descriptions,
+            )
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def run_recipe(
+    recipe: Annotated[str, Field(description="Recipe id, slug, or name.")],
+    ctx: Context,
+    inputs: Annotated[dict[str, Any] | None, Field(
+        description="Values for the fields in the recipe's input_schema. Unknown keys are refused. "
+                    "Omit a key to keep its saved default.")] = None,
+    wait: Annotated[bool, Field(description="Wait until the job settles, or up to 55 seconds.")] = True,
+    request_id: Annotated[str | None, Field(
+        description="Idempotency key, 16-128 of letters, digits, _ and -.")] = None,
+    inline_images: bool = False,
+    dry_run: Annotated[bool, Field(
+        description="Validate and return the params that would be queued. Creates no job.")] = False,
+) -> Outcome:
+    """Run a saved recipe. Call get_recipe first and send only its input_schema fields."""
+    try:
+        with client_tag.use("mcp"):
+            view = await core.run_recipe(recipe, inputs, dry_run=dry_run, request_id=request_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    if view.dry_run:
+        result: JobSubmission | DryRunResult = DryRunResult(
+            kind=view.kind, params=view.params or {}, would_queue=view.would_queue or 0,
+            duplicate=view.duplicate, job_id=view.job_id, job_ids=list(view.job_ids),
+        )
+    else:
+        result = JobSubmission(
+            job_id=int(view.job_id or 0), job_ids=list(view.job_ids),
+            group_id=view.group_id, duplicate=view.duplicate,
+        )
+    return await _present(
+        result, wait=wait, inline=inline_images, ctx=ctx,
+        recipe=(view.recipe_id, view.slug, view.name),
+    )
+
+
+@mcp.resource("brush://recipes", mime_type="application/json")
+async def recipes_resource() -> dict[str, Any]:
+    """Every saved recipe, including the JSON Schema its inputs must match."""
+    return {"recipes": await core.recipe_rows()}
+
+
+@mcp.resource("brush://recipes/{key}", mime_type="application/json")
+async def recipe_resource(key: str) -> dict[str, Any]:
+    """One recipe by id, slug, or name."""
+    try:
+        return await core.recipe_detail(key)
+    except RequestError as exc:
+        raise ResourceNotFoundError(str(exc.detail)) from None
 
 
 @mcp.resource("brush://kinds", mime_type="application/json")

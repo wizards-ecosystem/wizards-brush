@@ -43,6 +43,8 @@ from . import (
     m0007_job_request_id,
     m0008_variant_sets,
     m0009_job_client,
+    m0010_recipes,
+    m0011_recipe_defaulted,
 )
 
 logger = log.get("migrate")
@@ -60,6 +62,8 @@ MIGRATIONS: list[tuple[str, Migration]] = [
     ("0007_job_request_id", m0007_job_request_id.run),
     ("0008_variant_sets", m0008_variant_sets.run),
     ("0009_job_client", m0009_job_client.run),
+    ("0010_recipes", m0010_recipes.run),
+    ("0011_recipe_defaulted", m0011_recipe_defaulted.run),
 ]
 
 

@@ -16,6 +16,10 @@ import type {
   JobKindInfo,
   JobSubmission,
   JobWait,
+  RecipeRun,
+  RecipeWrite,
+  SavedRecipe,
+  SavedRecipeSummary,
   LoraCatalog,
   NextPicks,
   OkResponse,
@@ -287,6 +291,22 @@ export const api = {
       j<Asset>(r),
     );
   },
+
+  // ---- saved generation recipes (distinct from variant-set recipes) ----------
+  recipes: (limit = 100) => get(`/api/recipes?limit=${limit}`).then((r) => j<SavedRecipeSummary[]>(r)),
+  recipe: (key: string) => get(`/api/recipes/${encodeURIComponent(key)}`).then((r) => j<SavedRecipe>(r)),
+  saveRecipe: (body: RecipeWrite) => postJson("/api/recipes", body).then((r) => j<SavedRecipe>(r)),
+  updateRecipe: (key: string, body: RecipeWrite) =>
+    safeFetch(`/api/recipes/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    }).then((r) => j<SavedRecipe>(r)),
+  deleteRecipe: (key: string) => del(`/api/recipes/${encodeURIComponent(key)}`).then((r) => j<OkResponse>(r)),
+  runRecipe: (
+    key: string,
+    body: { inputs?: Record<string, unknown>; dry_run?: boolean; request_id?: string },
+  ) => postJson(`/api/recipes/${encodeURIComponent(key)}/run`, body).then((r) => j<RecipeRun>(r)),
 
   // ---- Variant Sets ----------------------------------------------------------
   variantCapabilities: () => get("/api/variant-sets/capabilities").then((r) => j<VariantCapabilities>(r)),

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   history: vi.fn(),
   wildcards: vi.fn(),
+  saveRecipe: vi.fn(),
   toast: vi.fn(),
   refreshJobs: vi.fn(),
   refreshPresets: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../api/client", () => ({
     generate: mocks.generate,
     history: mocks.history,
     wildcards: mocks.wildcards,
+    saveRecipe: mocks.saveRecipe,
     cancel: vi.fn(),
     createPreset: vi.fn(),
   },
@@ -159,6 +161,43 @@ describe("GeneratorView workstation", () => {
 
     expect(screen.getByText("No CUDA GPU was detected. Connect Remote GPU instead.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save as recipe" })).toBeEnabled();
+  });
+
+  it("saves the current form as a recipe and exposes the prompt by default", async () => {
+    const user = userEvent.setup();
+    mocks.saveRecipe.mockResolvedValue({
+      id: 4,
+      name: "Studio cup",
+      slug: "studio-cup",
+      description: "",
+      kind: "image_local",
+      fields: [],
+      input_schema: {},
+      client: "ui",
+      created_at: "",
+      updated_at: "",
+      params: {},
+      inputs: { images: [], mask: null, last_frame: null },
+    });
+    renderGenerator();
+    await user.type(screen.getByLabelText("Prompt"), "A ceramic cup");
+    await user.click(screen.getByRole("button", { name: "Save as recipe" }));
+    expect(screen.getByRole("dialog", { name: "Save as recipe" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Prompt/ })).toBeChecked();
+    await user.type(screen.getByLabelText("Name"), "Studio cup");
+    await user.click(screen.getByRole("button", { name: "Save recipe" }));
+    await waitFor(() =>
+      expect(mocks.saveRecipe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Studio cup",
+          kind: "image_local",
+          expose: ["prompt"],
+          params: expect.objectContaining({ prompt: "A ceramic cup", batch: 1 }),
+        }),
+      ),
+    );
+    expect(mocks.toast).toHaveBeenCalledWith("Saved recipe Studio cup", "success");
   });
 
   it("clears legacy prompt drafts without touching unrelated preferences", () => {
