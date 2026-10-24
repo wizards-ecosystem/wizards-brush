@@ -115,6 +115,13 @@ Saving a custom preset writes a new revision; a save names the revision it
 started from and is refused if another save got there first. Deleting archives;
 revisions referenced by jobs are kept.
 
+**Storage.** A preset is a `recipe` row with `schema_version` 2; the row is the
+catalogue head and `reciperevision` holds every revision. Curated revisions
+ship as `backend/app/studio/curated/<name>.r<revision>.json`, one file per
+revision, checked against `LOCK.json` at startup: a shipped revision edited in
+place is refused, and adding one means a new file and a new lock entry
+(`catalogue.lock_entry`). A curated preset that stops shipping is archived.
+
 ## Resources
 
 A resource id is the provider identity plus an exact version:
@@ -179,8 +186,11 @@ reported, never hidden under a strict-replay claim.
 ## Migration ids
 
 Ids are assigned here, centrally, as each packet lands. Taken:
-`0012_recipe_styles` (P02, frozen style fragments on saved generators).
-Planned: `0013_recipe_revisions` (presets), `0014_resources`,
+`0012_recipe_styles` (P02, frozen style fragments on saved generators) and
+`0013_recipe_revisions` (P03: `schema_version`, `preset_id`, `revision`,
+`origin`, `definition_json`, `definition_hash` and `archived_at` on `recipe`,
+the append-only `reciperevision` table, and name uniqueness scoped to saved
+generators). Planned: `0014_resources`,
 `0015_execution_plans`, `0016_resource_imports`, `0017_reference_sets`,
 `0018_artifacts` and `0019_canvas_projects`. A packet that lands out of order takes the next free
 number and updates this list. Every migration is additive: new columns are

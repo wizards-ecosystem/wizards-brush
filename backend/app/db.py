@@ -11,7 +11,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import event, func
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, SQLModel, create_engine, desc, select
+from sqlmodel import Session, SQLModel, col, create_engine, desc, select
 
 from . import migrations
 from .config import settings
@@ -25,6 +25,7 @@ from .models import (
     JobStatus,
     PromptHistory,
     Recipe,
+    RecipeRevision,
     UserPreset,
     VariantItem,
     VariantSet,
@@ -1216,7 +1217,8 @@ def _detach_recipe(s: Session, row: Recipe) -> Recipe:
     loaded = (
         row.id, row.name, row.slug, row.description, row.kind, row.params_json,
         row.fields_json, row.inputs_json, row.defaulted_json, row.styles_json, row.client,
-        row.created_at, row.updated_at,
+        row.created_at, row.updated_at, row.schema_version, row.preset_id, row.revision,
+        row.origin, row.definition_json, row.definition_hash, row.archived_at,
     )
     del loaded
     s.expunge(row)
@@ -1304,9 +1306,10 @@ def delete_recipe(recipe_id: int) -> bool:
 
 
 def get_recipe(recipe_id: int) -> Recipe | None:
+    """A saved generator (v1) by id. A studio preset row is not one."""
     with session() as s:
         row = s.get(Recipe, recipe_id)
-        if row is None:
+        if row is None or (row.schema_version or 1) != 1:
             return None
         return _detach_recipe(s, row)
 
@@ -1323,8 +1326,10 @@ def recipe_by_slug(slug: str, *, exclude_id: int | None = None) -> Recipe | None
 
 
 def recipe_by_name(name: str, *, exclude_id: int | None = None) -> Recipe | None:
+    """Saved generators only: names are unique among them, not across presets."""
     with session() as s:
-        query = select(Recipe).where(func.lower(Recipe.name) == name.lower())
+        query = select(Recipe).where(func.lower(Recipe.name) == name.lower(),
+                                     Recipe.schema_version == 1)
         if exclude_id is not None:
             query = query.where(Recipe.id != exclude_id)
         row = s.exec(query).first()
@@ -1335,7 +1340,8 @@ def recipe_by_name(name: str, *, exclude_id: int | None = None) -> Recipe | None
 
 def list_recipes(limit: int = 100) -> list[Recipe]:
     with session() as s:
-        rows = list(s.exec(select(Recipe).order_by(desc(Recipe.updated_at)).limit(limit)))
+        rows = list(s.exec(select(Recipe).where(Recipe.schema_version == 1)
+                           .order_by(desc(Recipe.updated_at)).limit(limit)))
         return [_detach_recipe(s, row) for row in rows]
 
 
@@ -1351,9 +1357,139 @@ def find_recipe(key: str) -> Recipe | None:
         if row is not None:
             return row
     row = recipe_by_slug(text)
-    if row is not None:
+    if row is not None and (row.schema_version or 1) == 1:
         return row
     return recipe_by_name(text)
+
+
+# ---- studio presets (schema v2 recipe rows + reciperevision) -----------------------------
+class RevisionConflict(Exception):
+    """A preset save named a base revision that is no longer the head."""
+
+    def __init__(self, current: int) -> None:
+        super().__init__(f"the preset is at revision {current}")
+        self.current = current
+
+
+def _detach_revision(s: Session, row: RecipeRevision) -> RecipeRevision:
+    loaded = (row.id, row.recipe_id, row.preset_id, row.revision, row.schema_version,
+              row.origin, row.definition_json, row.definition_hash, row.based_on, row.client,
+              row.created_at)
+    del loaded
+    s.expunge(row)
+    return row
+
+
+def preset_head(preset_id: str) -> Recipe | None:
+    with session() as s:
+        row = s.exec(select(Recipe).where(Recipe.preset_id == preset_id,
+                                          Recipe.schema_version == 2)).first()
+        return None if row is None else _detach_recipe(s, row)
+
+
+def preset_revision(preset_id: str, revision: int) -> RecipeRevision | None:
+    with session() as s:
+        row = s.exec(select(RecipeRevision).where(
+            RecipeRevision.preset_id == preset_id, RecipeRevision.revision == revision)).first()
+        return None if row is None else _detach_revision(s, row)
+
+
+def preset_revisions(preset_id: str) -> list[RecipeRevision]:
+    with session() as s:
+        rows = list(s.exec(select(RecipeRevision).where(RecipeRevision.preset_id == preset_id)
+                           .order_by(col(RecipeRevision.revision))))
+        return [_detach_revision(s, row) for row in rows]
+
+
+def list_presets(*, include_archived: bool = False, limit: int = 500) -> list[Recipe]:
+    with session() as s:
+        query = select(Recipe).where(Recipe.schema_version == 2)
+        if not include_archived:
+            query = query.where(Recipe.archived_at.is_(None))  # type: ignore[union-attr]
+        rows = list(s.exec(query.order_by(col(Recipe.name)).limit(limit)))
+        return [_detach_recipe(s, row) for row in rows]
+
+
+def save_preset_revision(
+    *,
+    preset_id: str,
+    name: str,
+    slug: str,
+    description: str,
+    origin: str,
+    definition: dict[str, Any],
+    definition_hash: str,
+    revision: int,
+    base_revision: int | None,
+    client: str,
+) -> tuple[Recipe, RecipeRevision]:
+    """Write one revision and move the head to it, atomically.
+
+    `base_revision` None creates the preset (it must not exist yet).
+    Otherwise the head must still be at `base_revision`: the check and the
+    write share one transaction, so two saves from the same base cannot both
+    land; the second raises RevisionConflict and writes nothing.
+    """
+    now = datetime.now(UTC)
+    with session() as s:
+        head = s.exec(select(Recipe).where(Recipe.preset_id == preset_id)).first()
+        if base_revision is None:
+            if head is not None:
+                raise RevisionConflict(int(head.revision or 1))
+            head = Recipe(name=name, slug=slug, description=description, kind="",
+                          schema_version=2, preset_id=preset_id, created_at=now,
+                          client=client)
+        else:
+            if head is None:
+                raise RevisionConflict(0)
+            if int(head.revision or 1) != base_revision:
+                raise RevisionConflict(int(head.revision or 1))
+        head.name = name
+        head.description = description
+        head.revision = revision
+        head.origin = origin
+        head.definition_json = json.dumps(definition)
+        head.definition_hash = definition_hash
+        head.updated_at = now
+        s.add(head)
+        try:
+            s.flush()
+            entry = RecipeRevision(
+                recipe_id=int(head.id or 0), preset_id=preset_id, revision=revision,
+                schema_version=2, origin=origin, definition_json=json.dumps(definition),
+                definition_hash=definition_hash, based_on=base_revision, client=client,
+                created_at=now,
+            )
+            s.add(entry)
+            s.commit()
+        except IntegrityError as error:
+            s.rollback()
+            existing = s.exec(select(Recipe).where(Recipe.preset_id == preset_id)).first()
+            if existing is not None:
+                raise RevisionConflict(int(existing.revision or 1)) from error
+            raise RecipeConflict(str(error)) from error
+        s.refresh(head)
+        s.refresh(entry)
+        return _detach_recipe(s, head), _detach_revision(s, entry)
+
+
+def set_preset_archived(preset_id: str, archived: bool) -> Recipe | None:
+    with session() as s:
+        head = s.exec(select(Recipe).where(Recipe.preset_id == preset_id,
+                                           Recipe.schema_version == 2)).first()
+        if head is None:
+            return None
+        head.archived_at = datetime.now(UTC) if archived else None
+        s.add(head)
+        s.commit()
+        s.refresh(head)
+        return _detach_recipe(s, head)
+
+
+def slug_taken(slug: str) -> bool:
+    """Any row, either schema: the slug index is shared."""
+    with session() as s:
+        return s.exec(select(Recipe.id).where(Recipe.slug == slug)).first() is not None
 
 
 def mark_used(asset_id: int) -> None:

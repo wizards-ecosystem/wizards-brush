@@ -484,6 +484,44 @@ a short form, is a different resource: see [Saved recipes](#saved-recipes).
 | `POST /api/variant-recipes/{id}/clone` | Copy one |
 | `DELETE /api/variant-recipes/{id}` | Delete one |
 
+## Studio presets
+
+A studio preset is a named, versioned creative setup: a model and ordered
+adapters by resource id, prompt fragments, settings defaults, ordered
+finishing, reference roles and a validation policy. The schema and its
+vocabulary are in [studio contracts](studio-contracts.md). Curated presets
+ship with the app; custom ones are saved here, by a person or an AI client,
+and both share one schema. `origin` says who owns a preset, never how good it
+is: a preset an AI saved is `custom`, and `client` records who saved it.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/studio/presets` | The catalogue, head revisions by name. `include_archived`, `origin`, `tag`, `q` filter it. |
+| `POST /api/studio/presets` | Save a new custom preset (the definition is the body). It starts at revision 1; `id` is derived from the name when omitted, and the `curated/` namespace is reserved. |
+| `GET /api/studio/presets/{id}` | One preset, its head revision or `?revision=N`. |
+| `PUT /api/studio/presets/{id}` | `{"definition", "base_revision", "on_conflict"}`: save an edit as the next revision. |
+| `GET /api/studio/presets/{id}/revisions` | Every revision, oldest first. |
+| `POST /api/studio/presets/{id}/clone` | Copy a revision (`{"revision", "name", "id"}`, all optional) into a new custom preset. |
+| `POST /api/studio/presets/{id}/archive`, `.../unarchive` | Leave or return to the catalogue. |
+
+Revisions never change once written:
+
+- **Every save is a new revision**, made from the revision you say you started
+  from. A save whose `base_revision` is not the head is a 409
+  `revision_conflict` naming the current revision; with `"on_conflict":
+  "copy"` your version is saved as a new custom preset instead, so neither
+  version is lost. A save that changes nothing writes no revision.
+- **Curated presets are immutable.** Saving an edit to one creates a custom
+  copy, and the response's `cloned_from` names the source revision. The copy
+  does not inherit the curated evaluation evidence.
+- **Archive, never delete.** An archived preset leaves the catalogue, but
+  every revision stays readable by id and number, so jobs and Variant Set
+  snapshots that name one keep resolving.
+
+Storage checks the schema only. A preset whose model is not installed here,
+or needs a larger device, still saves: readiness is a separate question,
+answered when the preset is resolved.
+
 ## Saved recipes
 
 A saved recipe freezes one job kind and the settings that should stay put,

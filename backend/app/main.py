@@ -38,6 +38,7 @@ from .routers import (
     library,
     loras,
     recipes,
+    studio,
     system,
     tools,
     variant_sets,
@@ -132,6 +133,13 @@ async def lifespan(app: FastAPI):
         ensure_shipped()
     except Exception as e:  # noqa: BLE001 — missing recipes must not stop startup
         logger.warning("shipped variant recipes skipped: %s", e)
+    try:
+        from .studio.catalogue import ensure_curated
+
+        if installed := ensure_curated():
+            logger.info("installed %d curated preset revision(s)", installed)
+    except Exception as e:  # noqa: BLE001 — a bad manifest must not stop startup
+        logger.warning("curated presets skipped: %s", e)
     abandoned_remote = remote_orphans()
     n = reconcile_orphans()
     if n:
@@ -261,6 +269,8 @@ _API_TAGS = [
     {"name": "jobs", "description": "Queue any generator or tool, follow it, wait for it."},
     {"name": "variant-sets", "description": "Durable fan-outs over named axes, with "
                                             "finishing, validation and export."},
+    {"name": "presets", "description": "Studio presets: curated and custom creative setups, "
+                                       "by immutable revision."},
     {"name": "assets", "description": "The gallery: import, search, download, export."},
     {"name": "images", "description": "Multipart image generation routes used by the UI."},
     {"name": "videos", "description": "Multipart video generation routes used by the UI."},
@@ -375,7 +385,7 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
-          variant_sets.router, recipes.router, openai_router):
+          variant_sets.router, recipes.router, studio.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

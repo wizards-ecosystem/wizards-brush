@@ -14,6 +14,11 @@ contributors know which user-facing changes need release notes.
   `save_recipe` and `run_recipe`. One JSON Schema serves the form and agents.
   Guidance left at the model's default follows a different model, and a run
   checks settings against the live kind. See `docs/api.md` and `docs/agents.md`.
+- Studio presets (`/api/studio/presets`): named, versioned creative setups
+  that point at a model and adapters by resource id. Every save is an
+  immutable revision made from a stated base revision; a stale save conflicts
+  without losing either version, curated presets are never edited in place
+  (an edit becomes a custom copy), and archiving keeps every revision readable.
 
 ### Fixed
 

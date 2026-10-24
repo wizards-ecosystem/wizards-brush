@@ -177,4 +177,6 @@ def test_live_database_has_the_recipe_table(client):
     indexes = {row[1] for row in connection.execute("PRAGMA index_list(recipe)")}
     connection.close()
     assert "params_json" in columns and "fields_json" in columns and "defaulted_json" in columns
-    assert {"ix_recipe_slug", "ux_recipe_name_nocase"} <= indexes
+    # 0013 scoped name uniqueness to saved generators; presets are unique by id.
+    assert {"ix_recipe_slug", "ux_recipe_name_nocase_v1", "ux_recipe_preset_id"} <= indexes
+    assert "ux_recipe_name_nocase" not in indexes

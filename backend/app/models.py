@@ -375,6 +375,21 @@ class Recipe(SQLModel, table=True):
     client: str = ""
     created_at: datetime = Field(default_factory=_now, index=True)
     updated_at: datetime = Field(default_factory=_now, index=True)
+    # ---- studio presets (0013) ------------------------------------------------
+    # 1: a saved generator (the fields above). 2: a studio preset, whose
+    # content is `definition_json` and whose history is `reciperevision`.
+    schema_version: int = Field(default=1, index=True)
+    # The preset's stable id ("curated/fast-general", "custom/my-look"). NULL
+    # for saved generators. Unique among presets (a partial index).
+    preset_id: str | None = None
+    # The head revision: what the catalogue shows and a new run resolves.
+    revision: int = 1
+    origin: str = ""                    # "" (v1) | "curated" | "custom"
+    definition_json: str = "{}"         # the head revision's authored content
+    definition_hash: str = ""
+    # Archived presets leave the catalogue; their revisions stay readable for
+    # every job that names them.
+    archived_at: datetime | None = None
 
     @property
     def params(self) -> dict[str, Any]:
@@ -393,9 +408,43 @@ class Recipe(SQLModel, table=True):
         return [item for item in _json_or(self.defaulted_json, []) if isinstance(item, str)]
 
     @property
+    def definition(self) -> dict[str, Any]:
+        return _json_or(self.definition_json, {})
+
+    @property
     def styles(self) -> list[dict[str, str]]:
         return [{"id": str(item.get("id") or ""), "text": str(item.get("text") or "")}
                 for item in _json_or(self.styles_json, []) if isinstance(item, dict)]
+
+
+class RecipeRevision(SQLModel, table=True):
+    """One immutable revision of a studio preset.
+
+    Append-only: an edit writes a new row and never changes an old one, and a
+    preset that is archived keeps all of them, because jobs and Variant Set
+    snapshots name (preset_id, revision) and must resolve to exactly what ran.
+    """
+    __table_args__ = (
+        Index("ux_reciperevision_preset_revision", "preset_id", "revision", unique=True),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    recipe_id: int = Field(index=True)
+    preset_id: str = ""
+    revision: int = 1
+    schema_version: int = 2
+    origin: str = ""
+    definition_json: str = "{}"
+    definition_hash: str = ""
+    # The revision this one was edited from, or None for a first revision.
+    based_on: int | None = None
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def definition(self) -> dict[str, Any]:
+        return _json_or(self.definition_json, {})
 
 
 class VariantRecipe(SQLModel, table=True):
