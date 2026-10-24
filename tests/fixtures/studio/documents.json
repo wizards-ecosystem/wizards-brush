@@ -1,0 +1,21 @@
+{
+  "_comment": "One document from each family classify() must keep apart. The v1 body is the shape POST /api/recipes accepts; the Variant Set body is a variantrecipe config.",
+  "saved_generator_v1": {
+    "name": "Ceramic cup",
+    "kind": "image_local",
+    "params": {"prompt": "a ceramic cup on linen", "quality": "Standard", "guidance": 0.0},
+    "expose": ["prompt", "seed"],
+    "inputs": {"images": [], "mask": null, "last_frame": null}
+  },
+  "variant_recipe": {
+    "name": "Eight poses",
+    "source_asset_ids": [],
+    "stages": [
+      {
+        "operation": "image_edit",
+        "axes": [{"name": "pose", "values": ["standing", "sitting"]}],
+        "prompt": "the same character, {{pose}}"
+      }
+    ]
+  }
+}

@@ -9,6 +9,7 @@ Use the shortest guide that answers the question in front of you.
 | [HTTP API](api.md) | Scripting generation, tools, saved recipes and variant sets: import, queue, wait, download, export |
 | [Agents](agents.md) | MCP tools (including saved recipes), the OpenAI image API, Cursor and Claude Desktop, dry runs, and structured errors |
 | [Architecture](architecture.md) | Components, data flow, trust boundaries, and extension points |
+| [Studio contracts](studio-contracts.md) | Preset, resource and execution-plan vocabulary; hashes; migration ids |
 | [Distribution](distribution.md) | Standalone bundle contract, reproducible build, checksums, and publishing flow |
 | [Network security](network-security.md) | Localhost, authenticated LAN access, TLS, CORS, and scoped WSL firewall rules |
 | [Model licenses](model-licenses.md) | Software-versus-weight licensing and the audited model catalogue |

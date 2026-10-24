@@ -1,0 +1,55 @@
+{
+  "_comment": "Resource identities the preset fixtures name. Model rows mirror shipped pins in backend/app/model_sources.py; adapter files are fictional (hash = sha256 of the fixture name).",
+  "resources": [
+    {
+      "id": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6",
+      "kind": "model",
+      "family": "zimage",
+      "provider": "hf",
+      "provider_ref": "Tongyi-MAI/Z-Image-Turbo",
+      "revision": "f332072aa78be7aecdf3ee76d5c247082da564a6",
+      "format": "diffusers",
+      "license": {"id": "apache-2.0", "source": "model card"}
+    },
+    {
+      "id": "hf:Qwen/Qwen-Image-Edit-2511@6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
+      "kind": "model",
+      "family": "qwen_image",
+      "provider": "hf",
+      "provider_ref": "Qwen/Qwen-Image-Edit-2511",
+      "revision": "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
+      "format": "diffusers",
+      "license": {"id": "apache-2.0", "source": "model card"}
+    },
+    {
+      "id": "local:sha256:724599363a4213947b5e04d81b350a3cc1d00de796c088111d00fa3d89ad4516",
+      "kind": "adapter",
+      "family": "zimage",
+      "provider": "local",
+      "provider_ref": "ink_wash.safetensors",
+      "content_hash": "sha256:724599363a4213947b5e04d81b350a3cc1d00de796c088111d00fa3d89ad4516",
+      "format": "safetensors",
+      "license": {"id": "unknown"}
+    },
+    {
+      "id": "local:sha256:16af544427f8d4116611fd461474ec0710ec84d756076909611753f8ae540a92",
+      "kind": "adapter",
+      "family": "zimage",
+      "provider": "local",
+      "provider_ref": "fine_detail.safetensors",
+      "content_hash": "sha256:16af544427f8d4116611fd461474ec0710ec84d756076909611753f8ae540a92",
+      "format": "safetensors",
+      "license": {"id": "unknown"}
+    },
+    {
+      "id": "local:sha256:4ee5a2b71615b093dca8e3a9b4c3e9405ba3f01174f9fd0714c61be36d2443b4",
+      "kind": "adapter",
+      "family": "sdxl",
+      "provider": "local",
+      "provider_ref": "sdxl_style.safetensors",
+      "content_hash": "sha256:4ee5a2b71615b093dca8e3a9b4c3e9405ba3f01174f9fd0714c61be36d2443b4",
+      "format": "safetensors",
+      "license": {"id": "unknown"}
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "_comment": "Contract fixtures (build spec section 4). Independent of real downloads: adapter hashes are sha256 of their fixture names. Each case is named by its key; tests read them by key, so add cases rather than editing ones that ship.",
+  "no_lora": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/fast-general",
+    "revision": 1,
+    "name": "Fast general",
+    "description": "A deliberately adapter-free baseline: the base model's own look.",
+    "origin": "custom",
+    "tags": ["general", "fast"],
+    "operation": "text_to_image",
+    "model": {"resource": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6"},
+    "adapters": [],
+    "prompt": {"template": "{{prompt}}", "negative": ""},
+    "settings": {"quality": "Standard", "aspect": "1:1"}
+  },
+  "two_adapter_stack": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/ink-detail",
+    "revision": 3,
+    "name": "Ink with detail",
+    "origin": "custom",
+    "tags": ["illustration"],
+    "operation": "text_to_image",
+    "model": {"resource": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6"},
+    "adapters": [
+      {"resource": "local:sha256:724599363a4213947b5e04d81b350a3cc1d00de796c088111d00fa3d89ad4516",
+       "strength": 0.8, "trigger": "ink wash"},
+      {"resource": "local:sha256:16af544427f8d4116611fd461474ec0710ec84d756076909611753f8ae540a92",
+       "strength": 0.35}
+    ],
+    "prompt": {"template": "{{triggers}}, {{prompt}}", "negative": "blurry"},
+    "settings": {"quality": "High", "aspect": "3:4", "guidance": 1.5}
+  },
+  "character_reference": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/character-scene",
+    "revision": 1,
+    "name": "Character in a new scene",
+    "description": "Places an approved character reference into the scene the prompt describes.",
+    "origin": "custom",
+    "tags": ["character"],
+    "operation": "edit",
+    "model": {"resource": "hf:Qwen/Qwen-Image-Edit-2511@6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"},
+    "prompt": {"template": "{{prompt}}. Keep this character: {{notes}}"},
+    "references": [
+      {"role": "character", "label": "Character", "accepts": ["image"], "min": 1, "max": 3,
+       "notes_in_prompt": true}
+    ],
+    "settings": {"quality": "Standard"}
+  },
+  "ordered_finishing": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/sticker",
+    "revision": 1,
+    "name": "Transparent sticker",
+    "origin": "custom",
+    "tags": ["asset", "transparent"],
+    "operation": "text_to_image",
+    "model": {"resource": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6"},
+    "prompt": {"template": "{{prompt}}, isolated on a plain background"},
+    "settings": {"aspect": "1:1"},
+    "finish": [
+      {"processor": "background_removal"},
+      {"processor": "resize", "width": 512, "height": 512, "mode": "contain"}
+    ],
+    "validation": [
+      {"validator": "dimensions", "required": true, "options": {"width": 512, "height": 512}},
+      {"validator": "alpha", "required": true, "options": {"alpha": "required"}}
+    ]
+  },
+  "style_template": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/storybook",
+    "revision": 2,
+    "name": "Storybook",
+    "origin": "custom",
+    "tags": ["illustration", "narrative"],
+    "operation": "text_to_image",
+    "model": {"resource": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6"},
+    "prompt": {
+      "template": "a storybook illustration of {{prompt}}, {{styles}}",
+      "negative": "photograph",
+      "styles": [
+        {"id": "watercolor", "label": "Watercolour", "text": "soft watercolour washes"},
+        {"id": "gouache", "label": "Gouache", "text": "flat opaque gouache shapes"},
+        {"id": "warm", "label": "Warm light", "text": "warm late-afternoon light"}
+      ],
+      "default_styles": ["watercolor", "warm"],
+      "enhancement": ["clear silhouettes", "readable story beat"],
+      "enhance_by_default": false
+    },
+    "settings": {"quality": "Standard", "aspect": "4:3"}
+  },
+  "unsupported_combination": {
+    "schema": "wizards-brush/preset",
+    "schema_version": 2,
+    "id": "fixture/sdxl-lora-on-zimage",
+    "revision": 1,
+    "name": "SDXL adapter on Z-Image",
+    "description": "Structurally valid, and deliberately unrunnable: the adapter targets SDXL.",
+    "origin": "custom",
+    "operation": "text_to_image",
+    "model": {"resource": "hf:Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6"},
+    "adapters": [
+      {"resource": "local:sha256:4ee5a2b71615b093dca8e3a9b4c3e9405ba3f01174f9fd0714c61be36d2443b4",
+       "strength": 1.0}
+    ]
+  }
+}
