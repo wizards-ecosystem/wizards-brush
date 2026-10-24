@@ -59,7 +59,12 @@ def _release_to_os() -> None:
     and refuses a load that would have fitted comfortably.
     """
     import ctypes
+    import sys
 
+    # An optimisation, not a requirement: Windows and macOS have no glibc, and
+    # their allocators return pages on their own terms.
+    if not sys.platform.startswith("linux"):
+        return
     with contextlib.suppress(Exception):        # not glibc, or no malloc_trim
         ctypes.CDLL("libc.so.6").malloc_trim(0)
 

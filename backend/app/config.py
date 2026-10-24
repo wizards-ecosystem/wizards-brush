@@ -6,6 +6,7 @@ next to the output dir, layered on top of the `.env` defaults.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
@@ -37,6 +38,24 @@ if ENV_FILE.exists() or ENV_FILE.is_symlink():
             os.chmod(ENV_FILE, 0o600)
         except OSError as exc:
             raise RuntimeError(f".env permissions could not be restricted to 0600: {exc}") from exc
+    elif os.name == "nt":
+        # Windows has no mode bits: an owner-only access list is the 0600
+        # equivalent. A volume without ACLs (exFAT) cannot hold one; say so in
+        # the doctor rather than refusing to start.
+        from .utils.private_files import restrict as _restrict
+
+        try:
+            _restrict(ENV_FILE)
+        except OSError as exc:
+            _OVERRIDE_WARNING = f".env access could not be restricted to this account: {exc}"
+
+
+def _restrict_quietly(path: Path) -> None:
+    """Owner-only access where the platform supports it; never fatal."""
+    from .utils.private_files import restrict
+
+    with contextlib.suppress(OSError):
+        restrict(path)
 
 
 class Settings(BaseSettings):
@@ -425,8 +444,7 @@ class Settings(BaseSettings):
                 backup = p.with_name(f"{p.stem}.corrupt-{time.time_ns()}{p.suffix}")
                 try:
                     os.replace(p, backup)
-                    if os.name == "posix":
-                        os.chmod(backup, 0o600)
+                    _restrict_quietly(backup)
                 except FileNotFoundError:  # another reader already quarantined it
                     return {}
                 except OSError as move_error:
@@ -468,6 +486,8 @@ class Settings(BaseSettings):
                 os.replace(pending, self.runtime_overrides_path)
                 if os.name == "posix":
                     os.chmod(self.runtime_overrides_path, 0o600)
+                else:
+                    _restrict_quietly(self.runtime_overrides_path)
             finally:
                 pending.unlink(missing_ok=True)
 

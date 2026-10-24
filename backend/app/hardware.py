@@ -101,8 +101,10 @@ def describe() -> dict:
     """
     from .backends.local import _device_info
     from .config import settings
+    from .utils.hostmem import probe
 
     device, vram = _device_info()
+    memory = probe()
     p = active()
     override = (settings.hardware_profile or "").strip().lower()
     return {
@@ -120,4 +122,6 @@ def describe() -> dict:
         "tier_mp": p.tier_mp,
         "max_batch": p.max_batch,
         "available": [{"name": q.name, "label": q.label} for q in PROFILES],
+        # Unknown is reported as unknown, with the reason; never as a number.
+        "host_ram": memory.as_dict(),
     }

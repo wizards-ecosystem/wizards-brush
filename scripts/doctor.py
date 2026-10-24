@@ -24,7 +24,34 @@ def inside(value: str | Path) -> bool:
 
 
 def command(*args: str) -> str:
-    return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+    # On Windows npm is npm.cmd; resolving through PATH first finds it, and the
+    # pinned project tools are first on PATH either way.
+    program = shutil.which(args[0]) or args[0]
+    return subprocess.check_output((program, *args[1:]), cwd=ROOT, text=True).strip()
+
+
+def long_path_risk() -> str:
+    """A warning when a deep model-cache path could pass Windows' 260-character
+    limit and long paths are not enabled. Empty when there is no risk."""
+    if sys.platform != "win32":
+        return ""
+    # models\huggingface\hub\models--org--name\snapshots\<40 hex>\component\file
+    deepest = len(str(ROOT)) + 190
+    if deepest < 260:
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Control\FileSystem") as key:
+            enabled = winreg.QueryValueEx(key, "LongPathsEnabled")[0] == 1
+    except OSError:
+        enabled = False
+    if enabled:
+        return ""
+    return (f"the checkout path is {len(str(ROOT))} characters, so model cache files can pass "
+            "Windows' 260-character limit. Move the checkout to a shorter path (for example "
+            "C:\\wb), or have an administrator enable long paths (LongPathsEnabled).")
 
 
 def expected_versions() -> dict[str, str]:
@@ -39,6 +66,7 @@ def expected_versions() -> dict[str, str]:
 def main() -> None:
     release_bundle = (ROOT / "RELEASE-MANIFEST.json").is_file()
     failures: list[str] = []
+    warnings: list[str] = []
     checks: dict[str, str | Path] = {}
     version_checks: dict[str, tuple[str, str]] = {}
     env_names = (
@@ -169,11 +197,8 @@ def main() -> None:
         if legacy.exists():
             failures.append(f"legacy directory still exists: {legacy.relative_to(ROOT)}")
 
+    private_files = (ROOT / ".env", settings.runtime_overrides_path)
     if os.name == "posix":
-        private_files = (
-            ROOT / ".env",
-            settings.runtime_overrides_path,
-        )
         for private_file in private_files:
             if not private_file.exists():
                 continue
@@ -183,6 +208,21 @@ def main() -> None:
                 failures.append(
                     f"{private_file.relative_to(ROOT)} permissions are {mode:04o}; expected 0600"
                 )
+    elif os.name == "nt":
+        from backend.app.utils.private_files import is_private
+
+        for private_file in private_files:
+            if not private_file.exists():
+                continue
+            checks[f"private access {private_file.name}"] = private_file
+            verdict = is_private(private_file)
+            if verdict is False:
+                failures.append(f"{private_file.relative_to(ROOT)} is readable by other accounts; "
+                                "run scripts\\setup.ps1 again to restrict it")
+            elif verdict is None:
+                warnings.append(f"could not read the access list of {private_file.name}")
+    if risk := long_path_risk():
+        warnings.append(risk)
 
     print("The Wizard's Brush self-containment audit")
     for check_name, check_value in checks.items():
@@ -191,6 +231,8 @@ def main() -> None:
     for name, (expected, actual) in version_checks.items():
         marker = "ok" if actual == expected else "WRONG"
         print(f"  {marker:7} {name + ' version':24} {actual}")
+    for warning in warnings:
+        print(f"  warning {warning}")
     if failures:
         print("\nFailures:")
         for failure in failures:
