@@ -37,6 +37,10 @@ class ErrorDetail(BaseModel):
         default=None, description="Legal values for `field`, when the set is known.")
     suggestions: list[str] | None = Field(
         default=None, description="Up to three short corrections.")
+    retryable: bool | None = Field(
+        default=None, description="Whether the same request can succeed later, when known.")
+    state: dict[str, Any] | None = Field(
+        default=None, description="What the refusal left behind, when it changed something.")
 
 
 _ERROR_TEXT = {
@@ -44,6 +48,7 @@ _ERROR_TEXT = {
     401: "Missing or wrong `X-API-Token` (only when the server sets API_TOKEN).",
     404: "No such id, or the asset is in the trash.",
     409: "The current state does not allow it; `detail` says why.",
+    502: "A provider did not confirm the action; `state` says what is still recorded.",
     503: "Not possible on this machine right now, for example the Remote GPU is offline.",
 }
 

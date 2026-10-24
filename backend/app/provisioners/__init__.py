@@ -12,14 +12,25 @@ from __future__ import annotations
 
 from .. import log
 from ..config import settings
-from .base import ERROR, READY, STARTING, STOPPING, Provisioner, ProvisionerError, Session
+from .base import (
+    ERROR,
+    READY,
+    STARTING,
+    STOP_FAILED,
+    STOP_STATES,
+    STOP_UNCONFIRMED,
+    STOPPING,
+    Provisioner,
+    ProvisionerError,
+    Session,
+)
 from .manual import ManualProvisioner
 from .store import SessionStore
 
 logger = log.get("provisioners")
 
 __all__ = [
-    "ERROR", "READY", "STARTING", "STOPPING",
+    "ERROR", "READY", "STARTING", "STOPPING", "STOP_FAILED", "STOP_STATES", "STOP_UNCONFIRMED",
     "Provisioner", "ProvisionerError", "Session", "SessionStore",
     "available", "get_provisioner",
 ]

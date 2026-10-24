@@ -15,6 +15,17 @@ contributors know which user-facing changes need release notes.
   Guidance left at the model's default follows a different model, and a run
   checks settings against the live kind. See `docs/api.md` and `docs/agents.md`.
 
+### Fixed
+
+- A Runpod stop that is not confirmed no longer forgets the pod. A timeout, a
+  refused key or a server error used to clear the only record of hardware that
+  could still be billing. The session is now kept as *stop not confirmed* or
+  *stop failed* through restarts, Stop checks with Runpod before it repeats the
+  termination, Start refuses while the stop is unresolved, and
+  `POST /api/remote-gpu/session/forget` drops the record only for the pod id it
+  is given. Status polls keep the last provider answer (`observed_at`) and the
+  reason the latest one failed.
+
 ## [0.1.8] - 2026-10-21
 
 ### Fixed

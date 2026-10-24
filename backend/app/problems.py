@@ -29,12 +29,18 @@ class RequestError(HTTPException):
         field: str | None = None,
         valid_options: list[Any] | None = None,
         suggestions: list[str] | None = None,
+        retryable: bool | None = None,
+        state: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(status_code=status_code, detail=detail)
         self.code = code
         self.field = field
         self.valid_options = list(valid_options) if valid_options else None
         self.suggestions = [item for item in (suggestions or []) if item][:3]
+        # Whether repeating the same request can succeed, when the server knows,
+        # and the state the refusal left behind (never secrets or paths).
+        self.retryable = retryable
+        self.state = state
 
 
 def close_suggestions(value: object, options: list[Any]) -> list[str]:
@@ -53,6 +59,10 @@ def error_body(exc: RequestError) -> dict[str, Any]:
         body["valid_options"] = exc.valid_options
     if exc.suggestions:
         body["suggestions"] = exc.suggestions
+    if exc.retryable is not None:
+        body["retryable"] = exc.retryable
+    if exc.state is not None:
+        body["state"] = exc.state
     return body
 
 

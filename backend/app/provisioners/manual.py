@@ -32,5 +32,8 @@ class ManualProvisioner:
     def stop(self) -> None:
         return None
 
+    def forget(self, session_id: str) -> bool:
+        return False
+
 
 _ = Provisioner

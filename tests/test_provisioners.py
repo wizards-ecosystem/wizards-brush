@@ -351,3 +351,205 @@ def test_start_route_on_manual_explains_rather_than_500s(client):
 
 def test_stop_route_is_safe_with_nothing_running(client):
     assert client.request("DELETE", "/api/remote-gpu/session").status_code == 200
+
+
+# ---- stop recovery: a stop that is not confirmed must never forget the pod ------
+def _record(state: str = provisioners.READY, **extra) -> None:
+    SessionStore().save(Session(id="pod-abc", provisioner="runpod", state=state,
+                                base_url="https://pod-abc-8000.proxy.runpod.net",
+                                started_at=time.time() - 600, hourly_usd=1.39, **extra))
+
+
+def _fresh_provisioner():
+    """A provisioner with no in-memory state: what a restarted process sees."""
+    return provisioners.get_provisioner()
+
+
+def test_a_confirmed_termination_clears_the_session(runpod_env, monkeypatch):
+    _record()
+    monkeypatch.setattr(runpod_mod.httpx, "Client",
+                        _transport(lambda r: httpx.Response(204)))
+    _fresh_provisioner().stop()
+    assert SessionStore().load() is None
+
+
+def test_a_pod_already_gone_counts_as_terminated(runpod_env, monkeypatch):
+    _record()
+    monkeypatch.setattr(runpod_mod.httpx, "Client",
+                        _transport(lambda r: httpx.Response(404, json={})))
+    _fresh_provisioner().stop()
+    assert SessionStore().load() is None
+
+
+@pytest.mark.parametrize("failure,state", [
+    (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=r)),
+     provisioners.STOP_UNCONFIRMED),
+    (lambda r: httpx.Response(504, text="gateway timeout"), provisioners.STOP_UNCONFIRMED),
+    (lambda r: httpx.Response(403, json={}), provisioners.STOP_FAILED),
+    (lambda r: httpx.Response(500, text="boom"), provisioners.STOP_FAILED),
+    (lambda r: (_ for _ in ()).throw(httpx.ConnectError("no route", request=r)),
+     provisioners.STOP_FAILED),
+], ids=["timeout", "gateway", "forbidden", "server-error", "unreachable"])
+def test_an_unconfirmed_stop_keeps_the_handle_through_a_restart(
+        runpod_env, monkeypatch, failure, state):
+    _record()
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(failure))
+    with pytest.raises(ProvisionerError) as excinfo:
+        _fresh_provisioner().stop()
+    assert excinfo.value.code in {"stop_unconfirmed", "stop_failed"}
+    assert "may still be billing" in str(excinfo.value)
+    kept = SessionStore().load()
+    assert kept is not None and kept.id == "pod-abc"
+    assert kept.state == state and kept.stop_error and kept.stop_attempts == 1
+    # A restarted process still sees it as ours and unresolved, even when the
+    # provider is unreachable at startup.
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(
+        lambda r: (_ for _ in ()).throw(httpx.ConnectError("down", request=r))))
+    adopted = _fresh_provisioner().adopt()
+    assert adopted is not None and adopted.unresolved_stop and adopted.observe_error
+
+
+def test_an_unconfirmed_stop_is_reconciled_before_it_is_repeated(runpod_env, monkeypatch):
+    """The earlier DELETE may have landed. Ask first; a 404 is the confirmation."""
+    _record(state=provisioners.STOP_UNCONFIRMED, stop_error="ReadTimeout", stop_attempts=1)
+    calls: list = []
+
+    def handler(request):
+        calls.append(request.method)
+        return httpx.Response(404, json={})
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    _fresh_provisioner().stop()
+    assert calls == ["GET"]                      # no second DELETE
+    assert SessionStore().load() is None
+
+
+def test_a_retried_stop_repeats_the_delete_when_the_pod_still_exists(runpod_env, monkeypatch):
+    _record(state=provisioners.STOP_FAILED, stop_error="403", stop_attempts=1)
+    calls: list = []
+
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json={"id": "pod-abc", "status": "RUNNING"})
+        return httpx.Response(204)
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    _fresh_provisioner().stop()
+    assert calls == ["GET", "DELETE"]
+    assert SessionStore().load() is None
+
+
+def test_repeated_stops_are_safe(runpod_env, monkeypatch):
+    _record()
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(lambda r: httpx.Response(204)))
+    provisioner = _fresh_provisioner()
+    provisioner.stop()
+    provisioner.stop()                           # nothing recorded: a no-op
+    assert SessionStore().load() is None
+
+
+def test_a_status_poll_keeps_an_unresolved_stop(runpod_env, monkeypatch):
+    """The provider saying "RUNNING" must not turn a failed stop back into
+    a healthy ready session that nobody is trying to stop any more."""
+    _record(state=provisioners.STOP_FAILED, stop_error="403", stop_attempts=2)
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(
+        lambda r: httpx.Response(200, json={"id": "pod-abc", "status": "RUNNING",
+                                            "runtime": {"ports": []}})))
+    session = _fresh_provisioner().status()
+    assert session.state == provisioners.STOP_FAILED and session.stop_attempts == 2
+    assert session.observed_at > 0 and "stop not confirmed" in session.detail
+    assert SessionStore().load().state == provisioners.STOP_FAILED
+
+
+def test_a_status_poll_cannot_resurrect_a_session_stopped_meanwhile(runpod_env, monkeypatch):
+    _record()
+    provisioner = _fresh_provisioner()
+
+    def handler(request):
+        SessionStore().clear()                   # a concurrent stop wins the race
+        return httpx.Response(200, json={"id": "pod-abc", "status": "RUNNING",
+                                         "runtime": {"ports": []}})
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    provisioner.status()
+    assert SessionStore().load() is None
+
+
+def test_no_new_rental_while_a_stop_is_unresolved(runpod_env, monkeypatch):
+    _record(state=provisioners.STOP_UNCONFIRMED, stop_error="timeout", stop_attempts=1)
+    created: list = []
+
+    def handler(request):
+        if request.method == "POST":
+            created.append(request)
+            return httpx.Response(201, json={"id": "pod-second"})
+        return httpx.Response(200, json={"id": "pod-abc", "status": "RUNNING"})
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    with pytest.raises(ProvisionerError) as excinfo:
+        _fresh_provisioner().start()
+    assert excinfo.value.code == "stop_unresolved" and not created
+
+
+def test_forgetting_needs_the_recorded_id(runpod_env):
+    _record(state=provisioners.STOP_FAILED)
+    provisioner = _fresh_provisioner()
+    assert provisioner.forget("pod-other") is False
+    assert SessionStore().load() is not None
+    assert provisioner.forget("pod-abc") is True
+    assert SessionStore().load() is None
+
+
+def test_stop_route_reports_an_unconfirmed_stop_and_keeps_the_url(
+        runpod_env, monkeypatch, client):
+    _record()
+    data = settings.load_overrides()
+    data["remote_gpu_base_url"] = "https://pod-abc-8000.proxy.runpod.net"
+    settings.save_overrides(data)
+
+    def handler(request):
+        if request.method == "DELETE":
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"id": "pod-abc", "status": "RUNNING",
+                                         "runtime": {"ports": []}})
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    response = client.request("DELETE", "/api/remote-gpu/session")
+    assert response.status_code == 502
+    body = response.json()
+    assert body["code"] == "stop_unconfirmed" and body["retryable"] is True
+    assert body["state"]["pod_id"] == "pod-abc"
+    assert body["state"]["state"] == provisioners.STOP_UNCONFIRMED
+    assert body["state"]["possibly_billing"] is True
+    assert "rpa_SECRETKEYVALUE" not in response.text
+    assert settings.load_overrides().get("remote_gpu_base_url")
+    shown = client.get("/api/remote-gpu/session").json()
+    assert shown["state"] == provisioners.STOP_UNCONFIRMED and shown["stop_attempts"] == 1
+    settings.save_overrides({k: v for k, v in settings.load_overrides().items()
+                             if k != "remote_gpu_base_url"})
+
+
+def test_forget_route_requires_the_matching_pod_id(runpod_env, client):
+    _record(state=provisioners.STOP_FAILED)
+    assert client.post("/api/remote-gpu/session/forget",
+                       json={"pod_id": "pod-nope"}).status_code == 404
+    assert SessionStore().load() is not None
+    response = client.post("/api/remote-gpu/session/forget", json={"pod_id": "pod-abc"})
+    assert response.status_code == 200 and response.json()["running"] is False
+    assert SessionStore().load() is None
+
+
+def test_canceling_a_job_never_touches_the_rental(runpod_env, monkeypatch, client):
+    """Stopping inference is not stopping hardware."""
+    _record()
+    calls: list = []
+
+    def handler(request):
+        calls.append(request.method)
+        return httpx.Response(204)
+
+    monkeypatch.setattr(runpod_mod.httpx, "Client", _transport(handler))
+    client.post("/api/jobs/999999/cancel")
+    assert "DELETE" not in calls
+    assert SessionStore().load() is not None

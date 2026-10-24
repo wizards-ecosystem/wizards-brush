@@ -198,6 +198,13 @@ def _adopt_remote_session() -> None:
         return
     cost = session.cost_estimate_usd()
     spend = f", about ${cost:.2f} so far" if cost is not None else ""
+    if session.unresolved_stop:
+        logger.warning(
+            "stopping %s %s was not confirmed before the last exit (%s); it may still be "
+            "billing%s. Retry Stop from Settings: it checks with the provider first.",
+            provisioner.label, session.id, session.stop_error or session.state, spend,
+        )
+        return
     logger.warning(
         "a Remote GPU session from a previous run is still up: %s %s (%.0f min%s). "
         "Stop it from Settings, or it keeps billing.",

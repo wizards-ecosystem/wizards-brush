@@ -287,6 +287,17 @@ running cost the entire time a pod is up, and if the app restarts while one is
 still running it says so at startup with the elapsed time and the spend so far —
 because the alternative is finding out from an invoice. Watch the number.
 
+**A stop is done only when Runpod confirms it.** If the terminate request times
+out, or Runpod refuses it (a revoked key, a 403, a server error), the app keeps
+the session and shows it as *stop not confirmed* or *stop failed*, with the
+error and the possible ongoing cost. Press **Stop** again: it first asks Runpod
+whether the pod still exists, so a termination that landed without its answer
+is recognised rather than repeated. The session survives a restart in that
+state, and **Start GPU** refuses while it is unresolved, so an uncertain stop
+cannot turn into two pods. If you have confirmed in the Runpod console that the
+pod is gone, **Forget** drops the record; after that the app can no longer stop
+that pod. Canceling a job stops the generation, never the rental.
+
 ### Keeping the model cache
 
 By default a terminated pod takes its container disk with it, so the next start
@@ -299,7 +310,7 @@ storage section above still applies: this is buying time, not money.
 
 `REMOTE_GPU_PROVISIONER=manual` is the default and always available. Adding
 another provider is a module in `backend/app/provisioners/` implementing
-`configured`/`start`/`status`/`stop`/`adopt`, plus a row in that package's
+`configured`/`start`/`status`/`stop`/`adopt`/`forget`, plus a row in that package's
 registry and its own `.env` block. The rest of the app only ever learns a base
 URL, so nothing else needs to know the provider exists.
 
