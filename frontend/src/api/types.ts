@@ -592,6 +592,12 @@ export interface RecipeInputs {
   last_frame: number | null;
 }
 
+/** A style chip's text as it was when a recipe was saved. */
+export interface StyleFragment {
+  id: string;
+  text: string;
+}
+
 export interface SavedRecipeSummary {
   id: number;
   name: string;
@@ -600,6 +606,8 @@ export interface SavedRecipeSummary {
   kind: string;
   fields: RecipeField[];
   input_schema: Record<string, unknown>;
+  /** Composed onto the subject prompt in order, exactly as the form does. */
+  styles?: StyleFragment[];
   client: string;
   created_at: string;
   updated_at: string;
@@ -619,6 +627,7 @@ export interface RecipeWrite {
   expose?: string[];
   slug?: string;
   field_descriptions?: Record<string, string>;
+  styles?: StyleFragment[];
 }
 
 export interface RecipeRun {

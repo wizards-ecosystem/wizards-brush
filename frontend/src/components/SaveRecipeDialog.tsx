@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Control, SavedRecipe } from "../api/types";
+import type { Control, SavedRecipe, StyleFragment } from "../api/types";
 import { GalleryPicker } from "./GalleryPicker";
 import { Button, Modal } from "./ui";
 
@@ -11,6 +11,7 @@ export function SaveRecipeDialog({
   kind,
   controls,
   values,
+  styles = [],
   needsImage,
   needsMask,
   needsLastFrame,
@@ -20,6 +21,9 @@ export function SaveRecipeDialog({
   kind: string;
   controls: Control[];
   values: Record<string, unknown>;
+  /** Selected style chips, frozen with their current text. A run composes them
+   * onto its prompt the way Generate does, so the two produce the same text. */
+  styles?: StyleFragment[];
   needsImage: boolean;
   needsMask: boolean;
   needsLastFrame: boolean;
@@ -86,6 +90,7 @@ export function SaveRecipeDialog({
         kind,
         params,
         expose: choices.filter((choice) => selected.has(choice.name)).map((choice) => choice.name),
+        styles,
         inputs: {
           images: !needsImage || selected.has("images") || frozenImage == null ? [] : [frozenImage],
           mask: !needsMask || selected.has("mask") ? null : frozenMask,
@@ -158,6 +163,12 @@ export function SaveRecipeDialog({
             ))}
           </div>
         </fieldset>
+        {styles.length > 0 && (
+          <p className="text-[11px] leading-relaxed text-muted" data-testid="recipe-styles">
+            Styles kept with the prompt: {styles.map((style) => style.id).join(", ")}. Each run adds their
+            text after its prompt, as Generate does.
+          </p>
+        )}
         {needsImage && !selected.has("images") && (
           <div>
             <div className="label">Gallery image to keep</div>

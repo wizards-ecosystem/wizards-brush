@@ -335,3 +335,84 @@ def test_recipes_and_mcp_recipe_tools_require_the_api_token(client, monkeypatch)
         "params": {"name": "list_recipes", "arguments": {}},
     })
     assert opened.status_code != 401
+
+
+# ---- a saved generator resolves the same prompt as Generate -------------------------------
+_WATERCOLOR = {"id": "watercolor", "text": "soft watercolour washes, paper texture"}
+_WARM = {"id": "warm", "text": "warm late-afternoon light"}
+
+
+def _form_job(client, payload):
+    """What the Generate button does: the multipart route with a composed prompt."""
+    import json as _json
+
+    response = client.post("/api/generate/image/local", data={"payload": _json.dumps(payload)})
+    assert response.status_code == 200, response.text
+    return db.get_job(response.json()["job_id"])
+
+
+def test_a_styled_saved_generator_resolves_the_prompt_generate_sends(client, enqueued, monkeypatch):
+    """Section 11: same subject, same distinctive styles, same effective prompt -
+    and the raw subject and fragments stay apart so reuse cannot double them."""
+    from backend.app.routers import images
+
+    monkeypatch.setattr(images, "require_local_gpu", lambda: None)
+    subject = "a fox curled in snow"
+    composed = f"{subject}, {_WATERCOLOR['text']}, {_WARM['text']}"
+    form = _form_job(client, {"prompt": composed, "raw_prompt": subject,
+                              "style_ids": ["watercolor", "warm"], "seed": 11})
+
+    saved = _save(client, name=_name("Styled fox"), kind="image_local",
+                  params={"prompt": "placeholder", "seed": 11}, expose=["prompt"],
+                  styles=[_WATERCOLOR, _WARM])
+    assert saved["styles"] == [_WATERCOLOR, _WARM]
+    assert saved["params"]["prompt"] == "placeholder"          # the subject, never composed
+
+    check = client.post(f"/api/recipes/{saved['slug']}/run",
+                        json={"inputs": {"prompt": subject}, "dry_run": True})
+    assert check.status_code == 200, check.text
+    assert check.json()["params"]["prompt"] == form.params["prompt"] == composed
+
+    ran = client.post(f"/api/recipes/{saved['slug']}/run", json={"inputs": {"prompt": subject}})
+    job = db.get_job(ran.json()["job_id"])
+    assert job.params["prompt"] == form.params["prompt"]
+    assert job.params["raw_prompt"] == form.params["raw_prompt"] == subject
+    assert job.params["style_ids"] == form.params["style_ids"] == ["watercolor", "warm"]
+
+
+def test_saved_style_text_is_frozen_and_ordered(client):
+    saved = _save(client, name=_name("Order"), kind="image_local", params={"prompt": "x"},
+                  expose=["prompt"], styles=[_WARM, _WATERCOLOR])
+    assert [s["id"] for s in client.get(f"/api/recipes/{saved['slug']}").json()["styles"]] == [
+        "warm", "watercolor"]
+
+
+@pytest.mark.parametrize("styles,field", [
+    ([{"id": "a", "text": ""}], "styles.0.text"),
+    ([{"id": "a", "text": "x"}, {"id": "a", "text": "y"}], "styles.1.id"),
+])
+def test_bad_styles_are_refused_with_their_path(client, styles, field):
+    response = client.post("/api/recipes", json={
+        "name": _name("Bad"), "kind": "image_local", "params": {"prompt": "x"},
+        "expose": ["prompt"], "styles": styles})
+    assert response.status_code == 400
+    assert response.json()["field"] == field
+
+
+def test_the_job_api_composes_and_refuses_an_ambiguous_prompt(client, enqueued, monkeypatch):
+    from backend.app.routers import images
+
+    monkeypatch.setattr(images, "require_local_gpu", lambda: None)
+    both = client.post("/api/jobs", json={
+        "kind": "image_local", "params": {"prompt": "a"},
+        "composition": {"subject": "a", "styles": [_WARM]}})
+    assert both.status_code == 400 and both.json()["code"] == "ambiguous_request"
+    dry = client.post("/api/jobs", json={
+        "kind": "image_local", "dry_run": True,
+        "composition": {"subject": "a lighthouse", "styles": [_WARM]}})
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["params"]["prompt"] == f"a lighthouse, {_WARM['text']}"
+    assert dry.json()["params"]["raw_prompt"] == "a lighthouse"
+    tool = client.post("/api/jobs", json={
+        "kind": "upscale", "composition": {"subject": "x"}, "inputs": {"images": [1]}})
+    assert tool.status_code == 400 and tool.json()["field"] == "composition"

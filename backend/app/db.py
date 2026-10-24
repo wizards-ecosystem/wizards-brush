@@ -1215,7 +1215,7 @@ def _detach_recipe(s: Session, row: Recipe) -> Recipe:
     """Load every column, then leave the session so callers can read the row."""
     loaded = (
         row.id, row.name, row.slug, row.description, row.kind, row.params_json,
-        row.fields_json, row.inputs_json, row.defaulted_json, row.client,
+        row.fields_json, row.inputs_json, row.defaulted_json, row.styles_json, row.client,
         row.created_at, row.updated_at,
     )
     del loaded
@@ -1234,6 +1234,7 @@ def insert_recipe(
     inputs: dict[str, Any],
     defaulted: list[str],
     client: str,
+    styles: list[dict[str, str]] | None = None,
 ) -> Recipe:
     now = datetime.now(UTC)
     with session() as s:
@@ -1241,6 +1242,7 @@ def insert_recipe(
             name=name, slug=slug, description=description, kind=kind,
             params_json=json.dumps(params), fields_json=json.dumps(fields),
             inputs_json=json.dumps(inputs), defaulted_json=json.dumps(list(defaulted)),
+            styles_json=json.dumps(list(styles or [])),
             client=client,
             created_at=now, updated_at=now,
         )
@@ -1265,6 +1267,7 @@ def update_recipe(
     fields: list[dict[str, Any]],
     inputs: dict[str, Any],
     defaulted: list[str],
+    styles: list[dict[str, str]] | None = None,
 ) -> Recipe | None:
     with session() as s:
         row = s.get(Recipe, recipe_id)
@@ -1278,6 +1281,7 @@ def update_recipe(
         row.fields_json = json.dumps(fields)
         row.inputs_json = json.dumps(inputs)
         row.defaulted_json = json.dumps(list(defaulted))
+        row.styles_json = json.dumps(list(styles or []))
         row.updated_at = datetime.now(UTC)
         s.add(row)
         try:

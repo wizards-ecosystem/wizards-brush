@@ -115,6 +115,26 @@ class JobInputs(BaseModel):
     last_frame: int | None = Field(default=None, description="i2v only: a last-frame asset id.")
 
 
+class StyleFragmentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=48, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    text: str = Field(min_length=1, max_length=600)
+
+
+class PromptComposition(BaseModel):
+    """A subject and style fragments the server composes into `prompt`.
+
+    The form appends each selected style's text to what was typed, joined by
+    ", ". Sending the parts instead of the result lets the job keep them apart
+    (`raw_prompt`, `style_ids`), so reusing it never appends a style twice.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(default="", max_length=8000)
+    styles: list[StyleFragmentIn] = Field(default_factory=list, max_length=32)
+
+
 class JobCreate(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -137,6 +157,10 @@ class JobCreate(BaseModel):
         default=None,
         description="Idempotency key (16-128 of A-Z a-z 0-9 _ -). Resubmitting it returns "
                     "the original jobs instead of queuing new ones.")
+    composition: PromptComposition | None = Field(
+        default=None,
+        description="Instead of params.prompt: a subject and style fragments, composed "
+                    "as subject, then each style text, joined by ', '.")
 
 
 class JobSubmission(BaseModel):
@@ -415,6 +439,12 @@ async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     if prior is not None:
         return prior
 
+    if body.composition is not None and (body.kind in tools.TOOLS or body.kind == "refine"):
+        raise RequestError(
+            400, f"{body.kind} does not compose a prompt from styles",
+            code="invalid_request", field="composition",
+            suggestions=["Send params.prompt for refine; tools take no prompt."],
+        )
     if body.kind in tools.TOOLS:
         tool = tools.TOOLS[body.kind]
         clean = _validated(body.kind, body.params, {str(c["name"]): c for c in tool.controls})
@@ -435,11 +465,12 @@ async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
     from ..variant_sets.operations import registry_specs
 
     spec = registry_specs()[body.kind]
-    clean = _validated(body.kind, body.params, _controls_of(spec))
+    known = _controls_of(spec)
+    clean = _validated(body.kind, body.params, known)
     paths, mask_path, last_path = _resolve(body.kind, inputs_for(body.kind, spec), body.inputs)
     if body.kind in _LOCAL_GPU:
         images.require_local_gpu()
-    raw = {**clean, "request_id": request_id}
+    raw = {**clean, **_composed(body, known), "request_id": request_id}
     if body.kind in _IMAGE_KINDS:
         params = images.build_params(body.kind, raw, paths, mask_path)
     else:
@@ -454,6 +485,30 @@ async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
         raise HTTPException(status_code=500, detail=f"no handler for {body.kind}")
     fanned = await images.maybe_fanout(body.kind, params, handler) if body.kind in _FANOUT else None
     return _submission(fanned or await submit(body.kind, params, handler), duplicate=False)
+
+
+def _composed(body: JobCreate, known: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The prompt parts a composition names, or nothing without one."""
+    if body.composition is None:
+        return {}
+    if "prompt" in body.params:
+        raise RequestError(
+            400, "send params.prompt or composition, not both",
+            code="ambiguous_request", field="composition",
+            suggestions=["Put what was typed in composition.subject and drop params.prompt."],
+        )
+    if "prompt" not in known:
+        raise RequestError(
+            400, f"{body.kind} has no prompt to compose",
+            code="invalid_request", field="composition",
+        )
+    from ..recipes import compose_prompt
+
+    styles = [style.model_dump() for style in body.composition.styles]
+    prompt = compose_prompt(body.composition.subject, styles)
+    _validated(body.kind, {"prompt": prompt}, known)  # the composed text obeys the same cap
+    return {"prompt": prompt, "raw_prompt": body.composition.subject,
+            "style_ids": [style["id"] for style in styles]}
 
 
 async def require_runnable(kind: str) -> None:

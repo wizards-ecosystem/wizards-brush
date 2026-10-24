@@ -16,7 +16,14 @@ from .. import client_tag, db, log
 from .. import recipes as saved
 from ..problems import RequestError
 from .common import error_responses
-from .job_api import DryRunResult, JobCreate, JobInputs, JobSubmission, create_job
+from .job_api import (
+    DryRunResult,
+    JobCreate,
+    JobInputs,
+    JobSubmission,
+    PromptComposition,
+    create_job,
+)
 
 logger = log.get("recipes")
 router = APIRouter(tags=["recipes"])
@@ -30,6 +37,13 @@ class RecipeInputs(BaseModel):
     last_frame: int | None = None
 
 
+class RecipeStyle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(max_length=48)
+    text: str = Field(max_length=600)
+
+
 class RecipeWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,6 +55,10 @@ class RecipeWrite(BaseModel):
     expose: list[str] = Field(default_factory=list, max_length=32)
     slug: str | None = Field(default=None, max_length=64)
     field_descriptions: dict[str, str] = Field(default_factory=dict)
+    styles: list[RecipeStyle] = Field(
+        default_factory=list, max_length=32,
+        description="Style fragments, in order, composed onto the subject prompt as the "
+                    "form does: subject, then each text, joined by ', '. Text is frozen.")
 
 
 class RecipeFieldModel(BaseModel):
@@ -60,6 +78,7 @@ class RecipeSummary(BaseModel):
     kind: str
     fields: list[RecipeFieldModel]
     input_schema: dict[str, Any]
+    styles: list[RecipeStyle] = Field(default_factory=list)
     client: str
     created_at: Any
     updated_at: Any
@@ -149,6 +168,7 @@ def _store(body: RecipeWrite, *, exclude_id: int | None, previous_slug: str | No
         raise _conflict("name", f"a recipe named '{name}' already exists")
     compiled = saved.compile_recipe(
         body.kind, body.params, list(body.expose), body.inputs.model_dump(), body.field_descriptions,
+        [style.model_dump() for style in body.styles],
     )
     saved.validate_assets(compiled["kind"], compiled["inputs"])
     explicit = (body.slug or "").strip()
@@ -178,7 +198,7 @@ async def create_recipe(body: RecipeWrite) -> RecipeRead:
             name=stored["name"], slug=stored["slug"], description=stored["description"],
             kind=stored["kind"], params=stored["params"], fields=stored["fields"],
             inputs=stored["inputs"], defaulted=list(stored["defaulted"]),
-            client=client_tag.current(),
+            client=client_tag.current(), styles=list(stored["styles"]),
         )
     except db.RecipeConflict as error:
         raise _conflict("name", "that name or slug is already used") from error
@@ -208,6 +228,7 @@ async def update_recipe(key: str, body: RecipeWrite) -> RecipeRead:
             current.id, name=stored["name"], slug=stored["slug"], description=stored["description"],
             kind=stored["kind"], params=stored["params"], fields=stored["fields"],
             inputs=stored["inputs"], defaulted=list(stored["defaulted"]),
+            styles=list(stored["styles"]),
         )
     except db.RecipeConflict as error:
         raise _conflict("name", "that name or slug is already used") from error
@@ -239,9 +260,15 @@ async def run_recipe(key: str, body: RecipeRunBody) -> RecipeRun:
     params, inputs = saved.merge_run(
         row.kind, row.params, row.inputs, row.fields, body.inputs, row.defaulted,
     )
+    composition = None
+    if row.styles:
+        # The subject is the run's prompt; the frozen styles follow it exactly
+        # as they did on the form, and the job keeps the parts apart.
+        composition = PromptComposition(subject=str(params.pop("prompt", "") or ""),
+                                        styles=row.styles)
     result = await create_job(JobCreate(
         kind=row.kind, params=params, inputs=JobInputs.model_validate(inputs),
-        dry_run=body.dry_run, request_id=body.request_id,
+        dry_run=body.dry_run, request_id=body.request_id, composition=composition,
     ))
     return _run_view(row, result)
 

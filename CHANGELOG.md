@@ -25,6 +25,22 @@ contributors know which user-facing changes need release notes.
   `POST /api/remote-gpu/session/forget` drops the record only for the pod id it
   is given. Status polls keep the last provider answer (`observed_at`) and the
   reason the latest one failed.
+- A saved recipe runs the prompt Generate sends. Style chips used to be dropped
+  on save, so a recipe with the same subject produced a different prompt. The
+  selected styles are now frozen with their text (`styles`) and composed onto
+  the run's prompt the same way; `POST /api/jobs` accepts the same parts as
+  `composition`, and the job keeps the subject and styles apart.
+- Ordered finishing steps survive a draft, prompt history and reuse. They used
+  to fall back to defaults with a stale-settings warning; a step whose
+  processor is no longer offered is now dropped by name and the rest kept.
+- Ctrl/Cmd+Enter submits only from the generator's own panel. It used to fire
+  under the Save recipe dialog, the asset viewer and pickers.
+- A newer source image can no longer be replaced by an older one that finished
+  loading later, and replacing the source clears the mask painted on the old
+  image at once instead of when the new picture decodes.
+- All settings on an asset starts from the job that made it when that job
+  still exists. Reuse from image metadata alone says it is partial and names
+  what the file did not record.
 
 ## [0.1.8] - 2026-10-21
 

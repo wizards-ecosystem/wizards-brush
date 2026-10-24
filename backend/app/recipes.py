@@ -32,6 +32,51 @@ _MAX_ASSET_ID = 10**_MAX_ID_DIGITS - 1
 _CONSTRAINT_KEYS = ("min", "max", "step", "options")
 _INPUT_NAMES = ("images", "mask", "last_frame")
 _MISSING = object()
+_MAX_STYLES = 32
+_MAX_STYLE_TEXT = 600
+_STYLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$")
+
+
+def clean_styles(raw: Any) -> list[dict[str, str]]:
+    """Ordered style fragments as saved: [{"id", "text"}], text frozen.
+
+    The text is stored, not just the id: a user style preset can be edited
+    later, and a saved generator must not change meaning when it is.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > _MAX_STYLES:
+        raise RequestError(
+            400, f"styles must be a list of at most {_MAX_STYLES} fragments",
+            code="invalid_type", field="styles",
+        )
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        field = f"styles.{index}"
+        if not isinstance(item, Mapping) or set(item) - {"id", "text"}:
+            raise RequestError(400, f"{field} must be {{\"id\", \"text\"}}",
+                               code="invalid_type", field=field)
+        sid, text = str(item.get("id") or ""), item.get("text")
+        if not _STYLE_ID.fullmatch(sid) or sid in seen:
+            raise RequestError(400, f"{field}.id must be a unique style id",
+                               code="invalid_request", field=f"{field}.id")
+        if not isinstance(text, str) or not text.strip() or len(text) > _MAX_STYLE_TEXT:
+            raise RequestError(
+                400, f"{field}.text must be 1-{_MAX_STYLE_TEXT} characters",
+                code="invalid_request", field=f"{field}.text",
+            )
+        seen.add(sid)
+        out.append({"id": sid, "text": text.strip()})
+    return out
+
+
+def compose_prompt(subject: str, styles: Sequence[Mapping[str, str]]) -> str:
+    """The form's composition: the subject, then each style's text, joined by
+    ", " and skipping empty parts. One rule, so Generate and a saved generator
+    with the same subject and styles send byte-identical prompts."""
+    parts = [str(subject or ""), *(str(style.get("text") or "") for style in styles)]
+    return ", ".join(part for part in parts if part)
 
 
 def clean_name(name: str) -> str:
@@ -100,8 +145,9 @@ def compile_recipe(
     expose: list[str],
     inputs: Mapping[str, Any],
     descriptions: Mapping[str, str] | None = None,
+    styles: Any = None,
 ) -> dict[str, Any]:
-    """Frozen params, frozen inputs, and the exposed-field snapshot.
+    """Frozen params, frozen inputs, styles, and the exposed-field snapshot.
 
     Params are filled with the kind's defaults so a later default change does
     not silently retune a saved setup while its source stays the same. A value
@@ -130,9 +176,15 @@ def compile_recipe(
     frozen_inputs = _frozen_inputs(inputs)
     fields = _fields(kind, known, spec, filled, frozen_inputs, expose, descriptions or {})
     _check_frozen_shape(kind, spec, frozen_inputs, {item["name"] for item in fields})
+    frozen_styles = clean_styles(styles)
+    if frozen_styles and "prompt" not in known:
+        raise RequestError(
+            400, f"{kind} has no prompt for styles to compose onto",
+            code="invalid_request", field="styles",
+        )
     return {
         "kind": kind, "params": filled, "inputs": frozen_inputs, "fields": fields,
-        "defaulted": defaulted,
+        "defaulted": defaulted, "styles": frozen_styles,
     }
 
 
@@ -252,6 +304,7 @@ def public_recipe(row: Any, *, summary: bool = False) -> dict[str, Any]:
         "kind": row.kind,
         "fields": fields,
         "input_schema": schema_for_fields(fields),
+        "styles": list(row.styles),
         "client": row.client or "",
         "created_at": row.created_at,
         "updated_at": row.updated_at,

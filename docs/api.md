@@ -233,6 +233,14 @@ Submitting it for real is still 503 until the worker answers.
   one job per combination, up to 32. The response then lists every `job_ids`
   entry and a shared `group_id`.
 
+Instead of `params.prompt`, a request may send `composition`: the subject that
+was typed and the style fragments to follow it, `{"subject": "a fox",
+"styles": [{"id": "watercolor", "text": "soft watercolour washes"}]}`. The
+server composes them the way the form does (the subject, then each text,
+joined by `", "`) and keeps the parts on the job as `raw_prompt` and
+`style_ids`, so reusing the job never appends a style twice. Sending both
+`composition` and `params.prompt` is refused as `ambiguous_request`.
+
 `inputs` works as follows:
 
 - The number of `images` must fit the kind's `inputs.images` range.
@@ -488,7 +496,7 @@ client tag, `dry_run` and structured errors stay on that path.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/recipes` | Save one. `expose` names the settings or inputs a run may change: any control of the kind, plus `images`, `mask` or `last_frame` when the kind accepts that role. |
+| `POST /api/recipes` | Save one. `expose` names the settings or inputs a run may change: any control of the kind, plus `images`, `mask` or `last_frame` when the kind accepts that role. Optional `styles` freezes ordered style fragments (see below). |
 | `GET /api/recipes?limit=` | Newest first. Each row includes `fields` and `input_schema`. `limit` is 1–200, default 100. |
 | `GET /api/recipes/{key}` | One recipe by numeric id, slug, or name, including frozen `params` and `inputs`. |
 | `PUT /api/recipes/{key}` | Replace one. The slug stays unless `slug` is sent. Jobs already queued are unchanged. |
@@ -520,6 +528,13 @@ a recipe whose saved schema still shows Wan's 25–121 range. Input roles
 (`images`, `mask`, `last_frame`) keep the saved counts. A disagreement comes
 back as the usual structured error. Save the recipe again to refresh the
 published schema.
+
+`styles` is an ordered list of `{"id", "text"}` style fragments, frozen with
+their text at save time, so editing a style preset later does not change the
+recipe. A run composes them onto its prompt exactly as Generate does: the
+prompt, then each text, joined by `", "`. Generate and a recipe run with the
+same subject and styles therefore send the same prompt, and the job keeps the
+subject (`raw_prompt`) and fragments (`style_ids`) apart.
 
 `inputs.images`, `inputs.mask` and `inputs.last_frame` are gallery asset ids.
 An exposed image list whose saved default is empty is required at run time

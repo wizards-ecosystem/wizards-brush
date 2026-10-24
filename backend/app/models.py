@@ -367,6 +367,9 @@ class Recipe(SQLModel, table=True):
     # Setting names filled from the kind's defaults (or sent equal to them).
     # A run recomputes these when the field they follow changes.
     defaulted_json: str = "[]"
+    # Ordered style fragments ({"id", "text"}) frozen at save time and composed
+    # onto the run's subject prompt, so a run matches Generate (0012).
+    styles_json: str = "[]"
     # Who saved it: "ui", "mcp", or the API token's name. Provenance, not a
     # permission. Empty on a row written before the column existed.
     client: str = ""
@@ -388,6 +391,11 @@ class Recipe(SQLModel, table=True):
     @property
     def defaulted(self) -> list[str]:
         return [item for item in _json_or(self.defaulted_json, []) if isinstance(item, str)]
+
+    @property
+    def styles(self) -> list[dict[str, str]]:
+        return [{"id": str(item.get("id") or ""), "text": str(item.get("text") or "")}
+                for item in _json_or(self.styles_json, []) if isinstance(item, dict)]
 
 
 class VariantRecipe(SQLModel, table=True):

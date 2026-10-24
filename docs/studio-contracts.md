@@ -178,10 +178,11 @@ reported, never hidden under a strict-replay claim.
 
 ## Migration ids
 
-Ids are assigned here, centrally, as each packet lands. The planned order is
-`0012_recipe_revisions` (presets), `0013_resources`, `0014_execution_plans`,
-`0015_resource_imports`, `0016_reference_sets`, `0017_artifacts` and
-`0018_canvas_projects`. A packet that lands out of order takes the next free
+Ids are assigned here, centrally, as each packet lands. Taken:
+`0012_recipe_styles` (P02, frozen style fragments on saved generators).
+Planned: `0013_recipe_revisions` (presets), `0014_resources`,
+`0015_execution_plans`, `0016_resource_imports`, `0017_reference_sets`,
+`0018_artifacts` and `0019_canvas_projects`. A packet that lands out of order takes the next free
 number and updates this list. Every migration is additive: new columns are
 nullable or have a safe historical default, and no migration hashes weights or
 downloads anything.

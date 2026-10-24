@@ -46,6 +46,8 @@ export const HIDE_KEYS = new Set([
   // Variant Set lineage: set by the set, never a form value.
   "variant",
   "parent_asset_id",
+  // The persisted parameter-vocabulary version; bookkeeping, not a setting.
+  "_v",
 ]);
 
 /** Which lane a job runs on. The remote lane is named for what it is, not for a
@@ -136,6 +138,26 @@ export function reuseValues(meta: Record<string, any>): Record<string, any> {
   return v;
 }
 
+/** What image metadata alone cannot restore. A finished file records the
+ * prompt, seed and sampling it was made with, but not the job's finishing
+ * request, its inputs or (on older files) its adapters; reuse from metadata is
+ * therefore partial, and the form says which parts it could not fill. */
+export function unrecordedInMetadata(meta: Record<string, any>, generator: string): string[] {
+  const missing: string[] = [];
+  if (!Array.isArray(meta.loras) && !String(generator).startsWith("colab")) missing.push("adapters");
+  if (!Array.isArray(meta.finish_steps)) missing.push("finishing steps");
+  if (meta.negative_prompt == null) missing.push("negative prompt");
+  const spec = GEN_TO_SPEC[generator];
+  if (
+    spec &&
+    ["img2img", "inpaint", "inpaint_remote", "outpaint", "image_edit", "control_local"].includes(spec)
+  ) {
+    missing.push("source images");
+  }
+  if (spec === "inpaint" || spec === "inpaint_remote") missing.push("mask");
+  return missing;
+}
+
 export interface CoercedValues {
   values: Record<string, any>;
   adjusted: string[];
@@ -147,8 +169,32 @@ export function effectiveControlDescriptor(control: Control, values: Record<stri
   return override ? { ...control, ...override } : control;
 }
 
-function legalValue(control: Control, raw: any): { value: any; adjusted: boolean } {
+/** A finishing chain restored from a draft, history or a job: order and option
+ * values are kept exactly. A step whose processor this install does not offer
+ * is dropped by name, so one stale step cannot erase the whole list. */
+function legalFinishing(control: Control, raw: any): { value: any; adjusted: boolean; note?: string } {
+  if (!Array.isArray(raw)) return { value: control.default ?? [], adjusted: true };
+  const offered = control.processors ? new Set(control.processors.map((p) => p.name)) : null;
+  const kept: Record<string, unknown>[] = [];
+  const dropped: string[] = [];
+  for (const step of raw) {
+    const processor = step && typeof step === "object" ? step.processor : undefined;
+    if (typeof processor !== "string" || !processor) {
+      dropped.push("an unnamed step");
+    } else if (offered && !offered.has(processor)) {
+      dropped.push(processor);
+    } else {
+      kept.push({ ...step });
+    }
+  }
+  return dropped.length
+    ? { value: kept, adjusted: true, note: `${control.label} (dropped unavailable: ${dropped.join(", ")})` }
+    : { value: kept, adjusted: false };
+}
+
+function legalValue(control: Control, raw: any): { value: any; adjusted: boolean; note?: string } {
   if (raw === undefined || raw === null) return { value: control.default, adjusted: false };
+  if (control.type === "finishing") return legalFinishing(control, raw);
   if (["select", "segmented", "aspect"].includes(control.type)) {
     return control.options?.includes(String(raw))
       ? { value: String(raw), adjusted: false }
@@ -192,7 +238,7 @@ export function coerceValues(
   controls.forEach((control) => {
     const result = legalValue(effectiveControlDescriptor(control, input), input[control.name]);
     values[control.name] = result.value;
-    if (result.adjusted) adjusted.add(control.label);
+    if (result.adjusted) adjusted.add(result.note ?? control.label);
   });
 
   // A dependent default follows the final, legal controller when its own value

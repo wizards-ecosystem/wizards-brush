@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, authHeaders } from "../api/client";
+import { api, authHeaders, isAbort } from "../api/client";
 import type { Asset, GridConfig, ImageSlot, PromptHistoryItem, WildcardInfo } from "../api/types";
 import { AssetCard } from "../components/AssetCard";
 import { AssetModal } from "../components/AssetModal";
@@ -84,8 +84,12 @@ export function GeneratorView() {
   const copyMenuRef = useRef<HTMLDivElement>(null);
   const [mobileView, setMobileView] = useState<"compose" | "session">("compose");
   const [adjustedState, setAdjustedState] = useState<string[]>([]);
+  const [reuseNote, setReuseNote] = useState("");
   const [metadataNote, setMetadataNote] = useState("");
   const metadataRef = useRef<HTMLInputElement>(null);
+  // The compose panel. Ctrl/Cmd+Enter submits only while focus is inside it, so
+  // a dialog, the asset viewer or a picker can never fire a hidden generation.
+  const composeRef = useRef<HTMLElement>(null);
   const [draftEpoch] = useState(currentDraftEpoch);
   // Simple is the default form, and the preference is global rather than
   // per-generator: "how much do you want to be asked" is a fact about the
@@ -109,6 +113,14 @@ export function GeneratorView() {
     if (spec.needs_image) return [{ name: "image", label: "Input image", required: true }];
     return [];
   }, [spec]);
+
+  // A mask belongs to the image it was painted on. Clear it in the same update
+  // that replaces the image, rather than when the new picture finishes
+  // decoding, so a Generate in between cannot pair image B with A's mask.
+  const setImageFile = (name: string, file: File | null) => {
+    setFiles((previous) => ({ ...previous, [name]: file }));
+    if (name === "image") setMask(null);
+  };
 
   // Initialize form: navigation prefill > saved draft > generator defaults.
   // Done with React's adjust-state-during-render pattern (not an effect) so the
@@ -138,6 +150,7 @@ export function GeneratorView() {
     setValues(coerced.values);
     setAdjustedState(coerced.adjusted);
     const fromAsset = (location.state as any)?.fromAsset;
+    setReuseNote(String((location.state as any)?.reuseNote || ""));
     if (prevSpecId !== spec.id) {
       setPrevSpecId(spec.id);
       setMobileView("compose");
@@ -157,20 +170,28 @@ export function GeneratorView() {
   }
 
   // "Send to img2img/video" passes the source asset to load as the input image.
-  // The fetch is the only part that needs an effect.
+  // The fetch is the only part that needs an effect. A newer navigation aborts
+  // the older fetch, and an answer that still arrives late is ignored, so
+  // source A finishing after source B can never replace B.
   useEffect(() => {
     const fromAsset = (location.state as any)?.fromAsset;
     if (!slots.length || !fromAsset?.url) return;
+    const controller = new AbortController();
     // The frame endpoint lives under /api — token-gated when API_TOKEN is set.
-    fetch(fromAsset.url, { headers: authHeaders() })
+    fetch(fromAsset.url, { headers: authHeaders(), signal: controller.signal })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`${r.status}`))))
-      .then((b) =>
-        setFiles((f) => ({
-          ...f,
-          image: new File([b], fromAsset.filename || "input.png", { type: b.type || "image/png" }),
-        })),
-      )
-      .catch(() => toast("Couldn't load the source image", "error"));
+      .then((b) => {
+        if (controller.signal.aborted) return;
+        setImageFile(
+          "image",
+          new File([b], fromAsset.filename || "input.png", { type: b.type || "image/png" }),
+        );
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || isAbort(error)) return;
+        toast("Couldn't load the source image", "error");
+      });
+    return () => controller.abort();
   }, [location.state, slots, toast]);
 
   // Persist a draft as the user edits (skip files).
@@ -236,11 +257,21 @@ export function GeneratorView() {
       ...applyDependentDefaults(spec?.controls ?? [], name, v[name], value, v),
     }));
 
-  const composedPrompt = () => {
+  // The selected style chips as frozen fragments, in selection order. Generate
+  // composes them onto the prompt; Save as recipe stores them beside the raw
+  // subject so a saved run composes exactly the same text.
+  const selectedStyles = () => {
     const map = styleMap(presets);
-    const styleTexts = (values.style_ids || []).map((sid: string) => map[sid]).filter(Boolean);
-    return [values.prompt, ...styleTexts].filter(Boolean).join(", ");
+    return (values.style_ids || [])
+      .filter((sid: string) => map[sid])
+      .map((sid: string) => ({ id: sid, text: map[sid] }));
   };
+  // Must match recipes.compose_prompt on the server: subject, then each style
+  // text, joined by ", ", skipping empty parts.
+  const composedPrompt = () =>
+    [values.prompt, ...selectedStyles().map((style: { text: string }) => style.text)]
+      .filter(Boolean)
+      .join(", ");
 
   // Settings the Simple form does not show but is still sending, because the
   // user changed them in Full mode and switched back.
@@ -405,10 +436,16 @@ export function GeneratorView() {
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        submitRef.current();
-      }
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "Enter" || e.defaultPrevented) return;
+      // Only from inside this generator's compose panel. Dialogs render in a
+      // portal outside it, so their own Ctrl+Enter never reaches a hidden form.
+      const panel = composeRef.current;
+      if (!panel || !(e.target instanceof Node) || !panel.contains(e.target)) return;
+      // A picker opened from the panel (the dropzone's gallery picker) is a
+      // dialog rendered inside it; its keys belong to it.
+      if (e.target instanceof Element && e.target.closest('[role="dialog"]')) return;
+      e.preventDefault();
+      submitRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -484,6 +521,7 @@ export function GeneratorView() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_clamp(380px,31vw,440px)]">
         <aside
+          ref={composeRef}
           className={`${mobileView === "compose" ? "flex" : "hidden"} min-h-0 flex-col bg-panel lg:col-start-2 lg:row-start-1 lg:flex lg:border-l lg:border-edge`}
           aria-label="Generation controls"
         >
@@ -509,6 +547,14 @@ export function GeneratorView() {
                   {metadataNote && (
                     <p className="mt-2 border-l-2 border-accent pl-2 text-[11px] text-muted">
                       {metadataNote}
+                    </p>
+                  )}
+                  {reuseNote && (
+                    <p
+                      className="mt-2 border-l-2 border-warn pl-2 text-[11px] text-warn"
+                      data-testid="reuse-note"
+                    >
+                      {reuseNote}
                     </p>
                   )}
                 </div>
@@ -669,12 +715,7 @@ export function GeneratorView() {
 
             <div className="space-y-5">
               {slots.length > 0 && (
-                <MultiImageDropzone
-                  slots={slots}
-                  files={files}
-                  values={values}
-                  onChange={(name, file) => setFiles((previous) => ({ ...previous, [name]: file }))}
-                />
+                <MultiImageDropzone slots={slots} files={files} values={values} onChange={setImageFile} />
               )}
               {spec.needs_mask && files.image && <MaskEditor image={files.image} onMask={setMask} />}
               <DynamicControls
@@ -829,6 +870,7 @@ export function GeneratorView() {
           kind={spec.kind}
           controls={spec.controls}
           values={values}
+          styles={selectedStyles()}
           needsImage={slots.length > 0}
           needsMask={!!spec.needs_mask}
           needsLastFrame={slots.some((slot) => slot.name === "last_frame")}

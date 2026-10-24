@@ -243,6 +243,7 @@ async def save_recipe(
     inputs: dict[str, Any] | None = None,
     slug: str | None = None,
     field_descriptions: dict[str, str] | None = None,
+    styles: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Save a recipe through the same compiler the HTTP route uses."""
     from pydantic import ValidationError
@@ -254,6 +255,7 @@ async def save_recipe(
             params=params or {}, expose=list(expose or []),
             inputs=routes.RecipeInputs.model_validate(inputs or {}),
             slug=slug, field_descriptions=field_descriptions or {},
+            styles=[routes.RecipeStyle.model_validate(style) for style in styles or []],
         )
     except ValidationError as exc:
         raise _validation_error(exc) from None

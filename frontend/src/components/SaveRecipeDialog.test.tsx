@@ -63,6 +63,7 @@ describe("SaveRecipeDialog", () => {
       description: "Studio lighting",
       kind: "image_local",
       params: { prompt: "a ceramic cup", seed: 7 },
+      styles: [],
       expose: ["prompt"],
       inputs: { images: [], mask: null, last_frame: null },
     });

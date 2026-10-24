@@ -104,8 +104,9 @@ The same schema drives the Recipes page. Tool definitions stay fixed; the
 exact fields travel with the recipe, so saving one does not add a tool.
 
 `save_recipe` takes `name`, `kind`, `params`, `expose`, and optional
-`description`, `inputs` (frozen gallery asset ids), `slug` and
-`field_descriptions`. The result is the saved recipe, including
+`description`, `inputs` (frozen gallery asset ids), `slug`,
+`field_descriptions` and `styles` (ordered `{id, text}` fragments a run
+appends to its prompt, as the form's style chips do). The result is the saved recipe, including
 `input_schema`. Its `client` is `mcp`.
 
 `run_recipe` accepts only the exposed fields. An unknown key is

@@ -23,6 +23,7 @@ const asset: Asset = {
 };
 
 const mocks = vi.hoisted(() => ({
+  job: vi.fn(),
   createJob: vi.fn(),
   tool: vi.fn(),
   toast: vi.fn(),
@@ -32,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../api/client", () => ({
   api: {
+    job: mocks.job,
     createJob: mocks.createJob,
     tool: mocks.tool,
   },
@@ -132,5 +134,62 @@ describe("AssetModal refine and wand", () => {
     renderModal();
     await user.click(screen.getByRole("button", { name: "A100 inpaint" }));
     expect(screen.getByTestId("path")).toHaveTextContent("/g/inpaint_remote");
+  });
+});
+
+function Landed() {
+  const location = useLocation();
+  return <pre data-testid="landed">{JSON.stringify({ path: location.pathname, state: location.state })}</pre>;
+}
+
+function renderReuse(subject: Asset) {
+  return render(
+    <MemoryRouter>
+      <Routes>
+        <Route path="/" element={<AssetModal asset={subject} onClose={mocks.onClose} />} />
+        <Route path="/g/:id" element={<Landed />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("AssetModal reuse", () => {
+  const made: Asset = {
+    ...asset,
+    generator: "local_image:txt2img",
+    meta: { prompt: "a fox, soft watercolour washes", raw_prompt: "a fox", seed: 12 },
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("starts All settings from the job that made the file", async () => {
+    const finish = [{ processor: "background_removal" }];
+    mocks.job.mockResolvedValue({
+      id: 3,
+      kind: "image_local",
+      params: {
+        prompt: "a fox, soft watercolour washes",
+        raw_prompt: "a fox",
+        seed: 10,
+        finish_steps: finish,
+      },
+    });
+    const user = userEvent.setup();
+    renderReuse(made);
+    await user.click(screen.getByRole("button", { name: "All settings" }));
+    const landed = JSON.parse((await screen.findByTestId("landed")).textContent || "{}");
+    expect(mocks.job).toHaveBeenCalledWith(3);
+    expect(landed.path).toBe("/g/image_local");
+    expect(landed.state.prefillValues).toMatchObject({ prompt: "a fox", seed: 12, finish_steps: finish });
+    expect(landed.state.reuseNote).toBe("");
+  });
+
+  it("labels reuse from metadata alone as partial and names what is missing", async () => {
+    const user = userEvent.setup();
+    renderReuse({ ...made, job_id: null });
+    await user.click(screen.getByRole("button", { name: "All settings" }));
+    const landed = JSON.parse((await screen.findByTestId("landed")).textContent || "{}");
+    expect(mocks.job).not.toHaveBeenCalled();
+    expect(landed.state.reuseNote).toMatch(/^Partial reuse from image metadata; not recorded: adapters/);
   });
 });

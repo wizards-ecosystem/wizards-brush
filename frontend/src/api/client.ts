@@ -74,11 +74,20 @@ async function j<T>(r: Response): Promise<T> {
 /** fetch wrapper that turns a network-level reject (backend down/offline) into a
  * friendly message instead of a raw "TypeError: Failed to fetch" in toasts. */
 async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
+  let failure: unknown;
   try {
     return await fetch(url, init);
-  } catch {
-    throw new Error("Can't reach the backend — is it running?");
+  } catch (error) {
+    failure = error;
   }
+  // A caller that aborted a stale request must see the abort, not an outage.
+  if (isAbort(failure)) throw failure;
+  throw new Error("Can't reach the backend — is it running?");
+}
+
+/** True for a fetch the caller canceled with an AbortController. */
+export function isAbort(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === "AbortError";
 }
 
 export function authHeaders(): Record<string, string> {
@@ -146,6 +155,8 @@ export const api = {
   stats: () => get("/api/stats").then((r) => j<Stats>(r)),
 
   jobs: (limit = 100) => get(`/api/jobs?limit=${limit}`).then((r) => j<Job[]>(r)),
+  job: (id: number, signal?: AbortSignal) =>
+    safeFetch(`/api/jobs/${id}`, { headers: authHeaders(), signal }).then((r) => j<Job>(r)),
   cancel: (id: number) =>
     safeFetch(`/api/jobs/${id}/cancel`, { method: "POST", headers: authHeaders() }).then((r) =>
       j<OkResponse>(r),

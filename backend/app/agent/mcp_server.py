@@ -503,13 +503,16 @@ async def save_recipe(
     inputs: dict[str, Any] | None = None,
     slug: str | None = None,
     field_descriptions: dict[str, str] | None = None,
+    styles: Annotated[list[dict[str, str]] | None, Field(
+        description="Ordered style fragments [{id, text}] composed onto the prompt the way "
+                    "the form does: prompt, then each text, joined by ', '.")] = None,
 ) -> dict[str, Any]:
     """Save the current settings as a recipe. The result includes input_schema."""
     try:
         with client_tag.use("mcp"):
             return await core.save_recipe(
                 name=name, kind=kind, params=params, expose=expose, description=description,
-                inputs=inputs, slug=slug, field_descriptions=field_descriptions,
+                inputs=inputs, slug=slug, field_descriptions=field_descriptions, styles=styles,
             )
     except HTTPException as exc:
         raise _fail(exc) from None

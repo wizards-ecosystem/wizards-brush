@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, markUsed } from "../api/client";
 import type { Asset, HumanGrade, HumanGradeInput } from "../api/types";
-import { GEN_TO_SPEC, reuseValues } from "../lib/generators";
+import { GEN_TO_SPEC, prefillableParams, reuseValues, unrecordedInMetadata } from "../lib/generators";
 import { useStore } from "../store/useStore";
 import { Icon } from "./icons";
 import { Button, ConfirmDialog, IconButton, Modal, StarRating } from "./ui";
@@ -247,10 +247,36 @@ export function AssetModal({
   // Each of these is a moment the asset was *used*, not merely looked at:
   // reused as settings, rerun, fed into another generator, or taken away as a
   // file. That is the behaviour `used_count` exists to record — see the model.
-  const prefill = (values: Record<string, any>) => {
+  const prefill = (values: Record<string, any>, reuseNote = "") => {
     if (!specId) return;
     markUsed(asset.id);
-    navigate(`/g/${specId}`, { state: { prefillValues: values } });
+    navigate(`/g/${specId}`, { state: { prefillValues: values, reuseNote } });
+  };
+  // "All settings" starts from the job that made this file when it still
+  // exists: its params carry the finishing request, adapters and inputs that
+  // image metadata never recorded. Without one (an import, a pruned job) the
+  // metadata is all there is, and the form is told which parts it lacks.
+  const reuseAll = async () => {
+    if (asset.job_id != null) {
+      try {
+        const job = await api.job(asset.job_id);
+        if (GEN_TO_SPEC[asset.generator] === job.kind || specId === job.kind) {
+          const values = prefillableParams(job.params);
+          if (meta.seed != null) values.seed = meta.seed; // this file's own seed in a batch
+          prefill(values);
+          return;
+        }
+      } catch {
+        /* the job is gone: fall back to the file's metadata */
+      }
+    }
+    const missing = unrecordedInMetadata(meta, asset.generator);
+    prefill(
+      reuseValues(meta),
+      missing.length
+        ? `Partial reuse from image metadata; not recorded: ${missing.join(", ")}.`
+        : "Reused from image metadata.",
+    );
   };
   const moreLikeThis = async () => {
     if (asset.job_id == null) return;
@@ -585,7 +611,7 @@ export function AssetModal({
               <div>
                 <div className="label">Reuse</div>
                 <div className="grid grid-cols-2 gap-2">
-                  <Button size="sm" icon="refresh" onClick={() => prefill(reuseValues(meta))}>
+                  <Button size="sm" icon="refresh" onClick={() => void reuseAll()}>
                     All settings
                   </Button>
                   <Button

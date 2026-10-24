@@ -28,7 +28,11 @@ export function MaskEditor({ image, onMask }: { image: File; onMask: (f: File | 
 
   useEffect(() => {
     const im = new Image();
+    let current = true;
     im.onload = () => {
+      // A slower decode of an earlier image must not resize the canvas for
+      // the one that replaced it.
+      if (!current) return;
       setDims({ w: im.naturalWidth, h: im.naturalHeight });
       const c = canvasRef.current!;
       c.width = im.naturalWidth;
@@ -41,6 +45,9 @@ export function MaskEditor({ image, onMask }: { image: File; onMask: (f: File | 
       onMask(null);
     };
     im.src = imgUrl;
+    return () => {
+      current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgUrl]);
 
