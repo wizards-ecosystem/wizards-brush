@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { LoraInfo, LoraCatalog } from "../api/types";
+import { useStore } from "../store/useStore";
 import { Icon } from "./icons";
 
 export type LoraSelection = { path: string; weight: number; te_weight?: number };
@@ -43,6 +44,14 @@ function LoraRow({
         </span>
         <span className="truncate">{lora.label}</span>
         {lora.compatible === false && <span className="shrink-0 text-warn">⚠</span>}
+        {lora.resource_id === null && lora.selectable !== false && (
+          <span
+            className="technical shrink-0 text-[9px] text-white/40"
+            title="Not hashed yet; a preset cannot name it until the library scan verifies it."
+          >
+            unverified
+          </span>
+        )}
       </span>
       <span className="flex shrink-0 items-center gap-2 text-white/40">
         {lora.family && lora.family !== "unknown" && <span className="technical">{lora.arch}</span>}
@@ -81,7 +90,10 @@ export function LoraPicker({
    *  not-for-this-model split. Omit and everything reads as compatible. */
   modelVariant?: string;
 }) {
-  const key = modelVariant ?? "";
+  // Keyed on the install's controls revision as well as the model: importing
+  // an adapter or reconnecting a worker must show up without a reload.
+  const controlsRevision = useStore((state) => state.controlsRevision);
+  const key = `${modelVariant ?? ""}|${controlsRevision}`;
   // Fetched results are keyed, so switching model variant does not briefly show
   // the previous model's compatibility judgements.
   const [fetched, setFetched] = useState<{ key: string; cat: LoraCatalog } | null>(null);

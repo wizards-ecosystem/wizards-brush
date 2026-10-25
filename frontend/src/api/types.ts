@@ -307,6 +307,10 @@ export interface AssetPage {
 
 export interface SystemStatus {
   version?: string;
+  /** Changes whenever what this install can run changes (a worker connected or
+   *  was upgraded, a model finished downloading, a setting moved). The client
+   *  refetches its generator controls when it moves. */
+  capability_revision?: string;
   local_gpu: {
     available: boolean;
     name?: string;
@@ -502,6 +506,9 @@ export interface LoraInfo {
   recommended_weight?: number | null;
   /** Short provenance note from the optional sidecar. */
   why?: string;
+  /** The adapter's content identity once the library scan has hashed it;
+   *  null means "not verified yet", never "unknown file". */
+  resource_id?: string | null;
 }
 
 /** The catalogue plus the limits the backend enforces, so the UI does not
@@ -849,4 +856,264 @@ export interface RemoteSession {
   /** Compute only, and an estimate — the provider bills from its own clock. */
   cost_estimate_usd: number | null;
   worker_connected: boolean;
+}
+
+// ---- studio presets, plans, resources and targets ------------------------------------------
+export type Operation =
+  | "text_to_image"
+  | "image_to_image"
+  | "inpaint"
+  | "outpaint"
+  | "edit"
+  | "control"
+  | "text_to_video"
+  | "image_to_video"
+  | "long_video";
+export type Target = "local" | "remote" | "auto";
+
+export interface PresetStyle {
+  id: string;
+  label?: string;
+  text: string;
+}
+
+export interface PresetDefinition {
+  schema?: string;
+  schema_version?: number;
+  id?: string;
+  revision?: number;
+  name: string;
+  description?: string;
+  origin?: "curated" | "custom";
+  tags?: string[];
+  operation: Operation;
+  model: { resource: string };
+  adapters?: {
+    resource: string;
+    strength: number;
+    text_encoder_strength?: number | null;
+    trigger?: string;
+  }[];
+  prompt?: {
+    template?: string;
+    negative?: string;
+    styles?: PresetStyle[];
+    default_styles?: string[];
+    enhancement?: string[];
+    enhance_by_default?: boolean;
+  };
+  settings?: Record<string, unknown>;
+  finish?: Record<string, unknown>[];
+  references?: {
+    role: string;
+    label?: string;
+    accepts?: string[];
+    min?: number;
+    max?: number;
+    notes_in_prompt?: boolean;
+  }[];
+  validation?: { validator: string; required?: boolean; options?: Record<string, unknown> }[];
+  fields?: { name: string; label?: string; description?: string }[];
+  curation?: {
+    status?: "unreviewed" | "reviewed" | "tested";
+    evidence?: { kind: string; ref?: string; note?: string }[];
+    tested_targets?: { target: string; hardware: string; runtime?: string; tested_on?: string }[];
+    limitations?: string[];
+    examples?: number[];
+  };
+}
+
+export interface PresetSummary {
+  id: string;
+  revision: number;
+  head_revision: number;
+  name: string;
+  description: string;
+  origin: "curated" | "custom";
+  tags: string[];
+  operation: Operation | null;
+  archived: boolean;
+  client: string;
+  definition_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PresetRead extends PresetSummary {
+  definition: PresetDefinition;
+  cloned_from?: { id: string; revision: number } | null;
+}
+
+export interface PlanIssue {
+  code: string;
+  message: string;
+  blocking: boolean;
+  field?: string;
+  action?: string;
+}
+
+export interface PlanReadiness {
+  state: "ready" | "needs_resources" | "needs_check" | "blocked";
+  ready: boolean;
+  submittable: boolean;
+  blockers: PlanIssue[];
+  actions: string[];
+}
+
+export interface PlanAdapter {
+  resource: string;
+  strength: number;
+  text_encoder_strength: number | null;
+  trigger: string;
+  origin: string;
+  status: "ok" | "blocked";
+  family: string;
+  verification: string;
+  library_path: string | null;
+}
+
+export interface ExecutionPlan {
+  schema: string;
+  resolver_version: string;
+  preset: { id: string; revision: number; definition_hash: string; origin: string } | null;
+  operation: Operation;
+  target: {
+    requested: Target;
+    resolved: "local" | "remote" | null;
+    reason: string;
+    allow_remote: boolean;
+    candidates: { target: string; kind: string; available: boolean; issues: PlanIssue[] }[];
+  };
+  kind: string | null;
+  model: {
+    resource: string;
+    repo: string;
+    revision: string;
+    family: string;
+    verification: string;
+    known: boolean;
+    variant: string | null;
+    origin: string;
+  };
+  adapters: PlanAdapter[];
+  prompt: {
+    raw: string;
+    template: string;
+    styles: PresetStyle[];
+    style_ids: string[];
+    triggers: string;
+    notes: string;
+    enhancement: { enabled: boolean; modifications: string[] };
+    positive: string;
+    negative: string;
+  };
+  settings: Record<string, unknown>;
+  provenance: Record<string, string>;
+  changed_dependencies: { field: string; preset: unknown; now: unknown; because: string }[];
+  effective_params: Record<string, unknown>;
+  normalized: { field: string; requested: unknown; effective: unknown; origin: string; reason: string }[];
+  inputs: Record<string, unknown>;
+  seed: { base: number; origin: string; mode: string; items: number[] };
+  finish: Record<string, unknown>[];
+  validation: Record<string, unknown>[];
+  warnings: PlanIssue[];
+  readiness: PlanReadiness;
+  capability_revision: string;
+  hashes: { creative_request_hash: string; execution_plan_hash: string; material_hash: string };
+}
+
+/** The preset request form of POST /api/jobs (no `kind`). */
+export interface PlanRequest {
+  preset_id?: string;
+  revision?: number;
+  operation?: Operation;
+  model?: string;
+  adapters?: { resource: string; strength: number }[];
+  prompt?: string;
+  negative_prompt?: string;
+  styles?: string[];
+  enhance?: boolean;
+  notes?: string;
+  settings?: Record<string, unknown>;
+  finish?: Record<string, unknown>[];
+  inputs?: {
+    images?: number[];
+    mask?: number | null;
+    last_frame?: number | null;
+    references?: Record<string, number[]>;
+  };
+  target?: Target;
+  allow_remote?: boolean;
+  seed?: number;
+  capability_revision?: string;
+}
+
+export interface PreparedPlan {
+  dry_run: true;
+  ready: boolean;
+  submittable: boolean;
+  seed: number;
+  plan: ExecutionPlan;
+}
+
+export interface ResourceView {
+  id: string;
+  kind: "model" | "adapter" | "component";
+  family: string;
+  provider: string;
+  provider_ref: string;
+  revision: string;
+  content_hash: string;
+  format: string;
+  size_bytes: number;
+  label: string;
+  license: { id?: string; source?: string; reviewed?: boolean; [key: string]: unknown };
+  access: string;
+  state: string;
+  verification: string;
+  compat: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  error: string;
+  installs: {
+    target: string;
+    root: string;
+    path: string;
+    state: string;
+    size_bytes: number;
+    error: string;
+  }[];
+  updated_at: string;
+}
+
+export interface RoutingPolicy {
+  remote_enabled: boolean;
+  auto_may_use_remote: boolean;
+  send_inputs_to_remote: boolean;
+}
+
+export interface TargetReport {
+  target: "local" | "remote";
+  identity: string;
+  connected?: boolean;
+  confidence: "measured" | "advertised" | "unknown";
+  hardware: Record<string, unknown>;
+  operations: Operation[];
+  kinds: string[];
+  models: {
+    resource: string;
+    repo: string;
+    variant: string;
+    role: string;
+    installed: boolean | null;
+    install_state: string;
+  }[];
+  unavailable_reason?: string;
+  observed_at: number;
+}
+
+export interface TargetsView {
+  local: TargetReport;
+  remote: TargetReport;
+  policy: RoutingPolicy;
+  capability_revision: string;
 }

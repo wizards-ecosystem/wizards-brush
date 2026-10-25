@@ -142,3 +142,22 @@ describe("useStore", () => {
     expect(revoked).toContain("blob:stale-preview");
   });
 });
+
+describe("capability revision", () => {
+  it("refetches the generator controls when what the install can run changes", async () => {
+    await useStore.getState().boot();
+    const models = vi.fn(() => Promise.resolve([{ id: "y", title: "Y", output: "image" }]));
+    mocks.api.models = models as unknown as typeof mocks.api.models;
+    let revision = "cap-a";
+    mocks.api.system = (() => Promise.resolve({ capability_revision: revision })) as typeof mocks.api.system;
+    await useStore.getState().refreshSystem();
+    await useStore.getState().refreshSystem(); // unchanged: nothing refetched
+    expect(models).not.toHaveBeenCalled();
+    const before = useStore.getState().controlsRevision;
+    revision = "cap-b";
+    await useStore.getState().refreshSystem();
+    expect(models).toHaveBeenCalledTimes(1);
+    expect(useStore.getState().specs[0].id).toBe("y");
+    expect(useStore.getState().controlsRevision).toBe(before + 1);
+  });
+});

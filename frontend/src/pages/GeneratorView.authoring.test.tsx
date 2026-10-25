@@ -308,3 +308,44 @@ describe("authoring state", () => {
     expect(screen.getByTestId("reuse-note")).toHaveTextContent("not recorded: adapters, finishing steps");
   });
 });
+
+describe("controls refetched while open", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mocks.history.mockResolvedValue([]);
+    mocks.wildcards.mockResolvedValue([]);
+    mocks.generate.mockResolvedValue({ job_id: 1 });
+  });
+
+  it("keeps the draft, drops a control the install no longer offers, and says so", async () => {
+    const original = specs.image_local as { controls: unknown[] };
+    const speed = { name: "speed_mode", label: "Speed mode", type: "toggle", default: false };
+    specs.image_local = { ...original, controls: [...original.controls, speed] };
+    const user = userEvent.setup();
+    const view = render(
+      <MemoryRouter initialEntries={["/g/image_local"]}>
+        <Routes>
+          <Route path="/g/:id" element={<GeneratorView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await user.type(screen.getByLabelText("Prompt"), "a quiet harbour");
+    await user.click(screen.getByLabelText("Speed mode"));
+    // The worker that offered speed mode went away: the registry is refetched.
+    specs.image_local = { ...original };
+    view.rerender(
+      <MemoryRouter initialEntries={["/g/image_local"]}>
+        <Routes>
+          <Route path="/g/:id" element={<GeneratorView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("capability-note")).toHaveTextContent("speed_mode");
+    expect(screen.getByLabelText("Prompt")).toHaveValue("a quiet harbour");
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(mocks.generate).toHaveBeenCalledTimes(1));
+    expect(mocks.generate.mock.calls[0][1]).not.toHaveProperty("speed_mode");
+    specs.image_local = original;
+  });
+});

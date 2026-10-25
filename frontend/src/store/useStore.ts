@@ -35,12 +35,18 @@ interface State {
    *  refetch when it moves, so a set's state changes that are not job events —
    *  a variant validated, blocked or unblocked — still reach the screen. */
   variantRevision: number;
+  /** Bumped when the server's capability revision moved and the controls were
+   *  refetched. Caches keyed on what the install offers (the LoRA catalogue,
+   *  preset readiness) key on this too. */
+  controlsRevision: number;
   toasts: Toast[];
   ws: WebSocket | null;
   booted: boolean;
 
   boot: () => Promise<void>;
   refreshSystem: () => Promise<void>;
+  /** Refetch the generator controls and presets, the boot-time catalogue. */
+  refreshControls: () => Promise<void>;
   refreshAssets: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshPresets: () => Promise<void>;
@@ -61,6 +67,7 @@ export const useStore = create<State>((set, get) => ({
   assets: [],
   assetRevision: 0,
   variantRevision: 0,
+  controlsRevision: 0,
   toasts: [],
   ws: null,
   booted: false,
@@ -224,9 +231,24 @@ export const useStore = create<State>((set, get) => ({
 
   refreshSystem: async () => {
     try {
-      set({ system: await api.system() });
+      const previous = get().system?.capability_revision;
+      const system = await api.system();
+      set({ system });
+      // What this install can run changed (a worker connected or upgraded, a
+      // model finished downloading, a setting moved): the boot-time controls
+      // may now offer things that cannot run, or miss things that can.
+      const next = system.capability_revision;
+      if (get().booted && previous && next && previous !== next) await get().refreshControls();
     } catch {
       /* transient */
+    }
+  },
+  refreshControls: async () => {
+    try {
+      const [specs, presets] = await Promise.all([api.models(), api.presets()]);
+      set((s) => ({ specs, presets, controlsRevision: s.controlsRevision + 1 }));
+    } catch {
+      /* transient: the next revision change retries */
     }
   },
   refreshAssets: async () => {

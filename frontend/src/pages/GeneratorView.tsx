@@ -131,6 +131,22 @@ export function GeneratorView() {
   const initKey = spec ? `${spec.id}|${location.key}` : "";
   const [prevInitKey, setPrevInitKey] = useState("");
   const [prevSpecId, setPrevSpecId] = useState<string | null>(null);
+  // The same generator's controls can be refetched while it is open (the
+  // install's capability revision moved). Keep the draft, but check it against
+  // the new controls and say which fields no longer hold, rather than letting a
+  // control the worker dropped keep shipping a value.
+  // Compared by content: a refetch can hand back equal controls in new objects.
+  const controlsKey = spec ? JSON.stringify(spec.controls) : "";
+  const [prevControls, setPrevControls] = useState(controlsKey);
+  const [capabilityNote, setCapabilityNote] = useState<string[]>([]);
+  if (spec && prevControls !== controlsKey) {
+    setPrevControls(controlsKey);
+    if (prevControls && prevInitKey === initKey && Object.keys(values).length) {
+      const rechecked = coerceValues(spec.controls, values, new Set(Object.keys(styleMap(presets))));
+      setValues(rechecked.values);
+      setCapabilityNote(rechecked.adjusted);
+    }
+  }
   if (spec && prevInitKey !== initKey) {
     setPrevInitKey(initKey);
     const prefill = (location.state as any)?.prefillValues;
@@ -542,6 +558,15 @@ export function GeneratorView() {
                   {adjustedState.length > 0 && (
                     <p className="mt-2 border-l-2 border-warn pl-2 text-[11px] text-warn">
                       Updated stale saved settings to match what is available now: {adjustedState.join(", ")}.
+                    </p>
+                  )}
+                  {capabilityNote.length > 0 && (
+                    <p
+                      className="mt-2 border-l-2 border-warn pl-2 text-[11px] text-warn"
+                      data-testid="capability-note"
+                    >
+                      What this install can run changed; these settings no longer applied and were reset:{" "}
+                      {capabilityNote.join(", ")}.
                     </p>
                   )}
                   {metadataNote && (

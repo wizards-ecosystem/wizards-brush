@@ -23,11 +23,19 @@ import type {
   LoraCatalog,
   NextPicks,
   OkResponse,
+  PlanRequest,
+  PreparedPlan,
+  PresetDefinition,
+  PresetRead,
+  PresetSummary,
   Presets,
   PromptHistoryItem,
   RemoteSession,
+  ResourceView,
+  RoutingPolicy,
   Stats,
   SystemStatus,
+  TargetsView,
   UserPreset,
   VariantCapabilities,
   VariantItem,
@@ -56,19 +64,67 @@ if (typeof document !== "undefined") {
 }
 
 /** Extract FastAPI's {detail} from an error response, falling back to raw text/status. */
-async function errorDetail(r: Response): Promise<string> {
-  let detail = await r.text();
+/** A refused request. The message is the server's `detail`, exactly as before;
+ *  the structured fields (code, field, retryable, state, suggestions) ride
+ *  along for callers that act on them. Named "Error" so `${error}` reads as it
+ *  always has in toasts. */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  field?: string;
+  retryable?: boolean;
+  state?: Record<string, unknown>;
+  suggestions?: string[];
+
+  constructor(status: number, body: Record<string, unknown> | null, detail: string) {
+    super(detail);
+    this.name = "Error";
+    this.status = status;
+    if (body) {
+      if (typeof body.code === "string") this.code = body.code;
+      if (typeof body.field === "string") this.field = body.field;
+      if (typeof body.retryable === "boolean") this.retryable = body.retryable;
+      if (body.state && typeof body.state === "object") this.state = body.state as Record<string, unknown>;
+      if (Array.isArray(body.suggestions)) this.suggestions = body.suggestions as string[];
+    }
+  }
+
+  get detail(): string {
+    return this.message;
+  }
+}
+
+async function errorParts(r: Response): Promise<{ body: Record<string, unknown> | null; detail: string }> {
+  const text = await r.text();
+  let body: Record<string, unknown> | null = null;
+  let detail = text;
   try {
-    detail = JSON.parse(detail).detail || detail;
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      body = parsed as Record<string, unknown>;
+      if (typeof body.detail === "string" && body.detail) detail = body.detail;
+    }
   } catch {
     /* keep raw text */
   }
-  return detail || `${r.status}`;
+  return { body, detail: detail || `${r.status}` };
+}
+
+async function errorDetail(r: Response): Promise<string> {
+  return (await errorParts(r)).detail;
 }
 
 async function j<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(await errorDetail(r));
+  if (!r.ok) {
+    const { body, detail } = await errorParts(r);
+    throw new ApiError(r.status, body, detail);
+  }
   return r.json();
+}
+
+/** Preset ids carry one "/" ("custom/my-look"); each part is encoded on its own. */
+function presetPath(id: string): string {
+  return id.split("/").map(encodeURIComponent).join("/");
 }
 
 /** fetch wrapper that turns a network-level reject (backend down/offline) into a
@@ -307,6 +363,60 @@ export const api = {
   recipes: (limit = 100) => get(`/api/recipes?limit=${limit}`).then((r) => j<SavedRecipeSummary[]>(r)),
   recipe: (key: string) => get(`/api/recipes/${encodeURIComponent(key)}`).then((r) => j<SavedRecipe>(r)),
   saveRecipe: (body: RecipeWrite) => postJson("/api/recipes", body).then((r) => j<SavedRecipe>(r)),
+
+  // ---- studio presets, plans, resources and targets ----
+  studioPresets: (includeArchived = false) =>
+    get(`/api/studio/presets${includeArchived ? "?include_archived=true" : ""}`).then((r) =>
+      j<PresetSummary[]>(r),
+    ),
+  studioPreset: (id: string, revision?: number) =>
+    get(`/api/studio/presets/${presetPath(id)}${revision ? `?revision=${revision}` : ""}`).then((r) =>
+      j<PresetRead>(r),
+    ),
+  createStudioPreset: (definition: PresetDefinition) =>
+    postJson("/api/studio/presets", definition).then((r) => j<PresetRead>(r)),
+  updateStudioPreset: (
+    id: string,
+    definition: PresetDefinition,
+    baseRevision: number,
+    onConflict: "error" | "copy" = "error",
+  ) =>
+    safeFetch(`/api/studio/presets/${presetPath(id)}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ definition, base_revision: baseRevision, on_conflict: onConflict }),
+    }).then((r) => j<PresetRead>(r)),
+  cloneStudioPreset: (id: string, body: { revision?: number; name?: string } = {}) =>
+    postJson(`/api/studio/presets/${presetPath(id)}/clone`, body).then((r) => j<PresetRead>(r)),
+  archiveStudioPreset: (id: string, archived = true) =>
+    postJson(`/api/studio/presets/${presetPath(id)}/${archived ? "archive" : "unarchive"}`, {}).then((r) =>
+      j<PresetRead>(r),
+    ),
+  /** Resolve a preset request into its plan. Nothing is queued. Pass a signal
+   *  so a newer draft can cancel an older preview. */
+  preparePlan: (body: PlanRequest, signal?: AbortSignal) =>
+    safeFetch("/api/jobs", {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, dry_run: true }),
+      signal,
+    }).then((r) => j<PreparedPlan>(r)),
+  /** Submit exactly the previewed plan; a plan that changed since is refused. */
+  submitPlan: (body: PlanRequest, expectedPlanHash: string, requestId: string) =>
+    postJson("/api/jobs", { ...body, expected_plan_hash: expectedPlanHash, request_id: requestId }).then(
+      (r) => j<{ job_id: number; job_ids: number[]; duplicate: boolean }>(r),
+    ),
+  replayJob: (jobId: number, mode: "exact" | "latest" = "exact") =>
+    postJson(`/api/jobs/${jobId}/replay`, { mode }).then((r) => j<{ job_id: number; job_ids: number[] }>(r)),
+  resources: (kind?: "model" | "adapter") =>
+    get(`/api/resources${kind ? `?kind=${kind}` : ""}`).then((r) => j<ResourceView[]>(r)),
+  targets: () => get("/api/targets").then((r) => j<TargetsView>(r)),
+  setRoutingPolicy: (changes: Partial<RoutingPolicy>) =>
+    safeFetch("/api/targets/policy", {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    }).then((r) => j<RoutingPolicy>(r)),
   updateRecipe: (key: string, body: RecipeWrite) =>
     safeFetch(`/api/recipes/${encodeURIComponent(key)}`, {
       method: "PUT",
