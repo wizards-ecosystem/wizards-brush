@@ -510,7 +510,7 @@ def inspect_civitai(source: Source) -> dict[str, Any]:
         url=f"https://{CIVITAI_HOST}/models/{model_id}", name=str(model.get("name") or ""),
         license=_civitai_license(model), access="public", family="",
         candidates=candidates, notes=([f"Model type: {model_type}."] if model_type else []),
-        extra={"nsfw": bool(model.get("nsfw")), "model_type": model_type},
+        extra={"model_type": model_type},
     )
 
 
