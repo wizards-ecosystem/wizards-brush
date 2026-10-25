@@ -7,6 +7,7 @@ Use the shortest guide that answers the question in front of you.
 | [Getting started](getting-started.md) | Requirements, installation, LAN access, updates, backup, and removal |
 | [User guide](user-guide.md) | First render, editing workflows, saved recipes, variant sets, queue, gallery, exports, and privacy |
 | [HTTP API](api.md) | Scripting generation, tools, saved recipes and variant sets: import, queue, wait, download, export |
+| [Parity matrix](parity-matrix.md) | What the UI, HTTP API and MCP each support, row by row |
 | [Agents](agents.md) | MCP tools (including saved recipes), the OpenAI image API, Cursor and Claude Desktop, dry runs, and structured errors |
 | [Architecture](architecture.md) | Components, data flow, trust boundaries, and extension points |
 | [Studio contracts](studio-contracts.md) | Preset, resource and execution-plan vocabulary; hashes; migration ids |
