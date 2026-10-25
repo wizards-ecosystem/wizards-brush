@@ -19,8 +19,8 @@ def main() -> None:
         raise RuntimeError("installed MediaPipe no longer provides the required solutions API")
     if OpenposeDetector is None:
         raise RuntimeError("controlnet_aux OpenposeDetector import failed")
-    if version("setuptools") != "84.1.0":
-        raise RuntimeError(f"expected security-tested setuptools 84.1.0, got {version('setuptools')}")
+    if version("setuptools") != "84.2.1":
+        raise RuntimeError(f"expected security-tested setuptools 84.2.1, got {version('setuptools')}")
     if not torch.__version__.startswith("2.11.0"):
         raise RuntimeError(f"expected the pinned torch 2.11.0 runtime, got {torch.__version__}")
 

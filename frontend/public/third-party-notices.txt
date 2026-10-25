@@ -16,7 +16,7 @@ Copyright (c) Remix Software Inc. 2020-2021
 Copyright (c) Shopify Inc. 2022-2023
 https://github.com/remix-run/react-router
 
-Zustand 5.0.15
+Zustand 5.0.16
 Copyright (c) 2019 Paul Henschel
 https://github.com/pmndrs/zustand
 
@@ -33,11 +33,11 @@ Tailwind CSS 4.3.3 and @tailwindcss/postcss 4.3.3
 Copyright (c) Tailwind Labs, Inc.
 https://github.com/tailwindlabs/tailwindcss
 
-Vite 8.3.4
+Vite 8.3.5
 Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
 https://github.com/vitejs/vite
 
-Rolldown 1.2.13
+Rolldown 1.2.15
 Copyright (c) 2024-present VoidZero Inc. & Contributors
 https://github.com/rolldown/rolldown
 
