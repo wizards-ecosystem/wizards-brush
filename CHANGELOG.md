@@ -6,6 +6,8 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 
 - Canvas: layered documents over gallery images, saved as revisions. Layers
@@ -483,6 +485,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.2.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.2.0
 [0.1.8]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.8
 [0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
