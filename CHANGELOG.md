@@ -6,6 +6,12 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+### Changed
+
+- FastAPI 0.159.1, filelock 4.2.4, setuptools 84.2.1 (the torch override is
+  smoke-tested again), zustand 5.0.16, Vite 8.3.5 and the frontend tooling
+  group. The Remote GPU worker's lock follows the app's.
+
 ## [0.2.1] - 2026-10-25
 
 ### Security

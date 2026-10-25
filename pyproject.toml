@@ -62,7 +62,7 @@ dependencies = [
     # test on 5.29.6; the matching uv override below documents that exception.
     "protobuf>=5.29.6,<6",
     # Torch imports setuptools at runtime; 84.x contains the fix for
-    # PYSEC-2026-3447 (from 84.0.0), and 84.1.0 is smoke-tested with the pinned
+    # PYSEC-2026-3447 (from 84.0.0), and 84.2.1 is smoke-tested with the pinned
     # Torch/CUDA pair (make optional-check).
     "setuptools==84.2.1",
     "ftfy>=6.3",
