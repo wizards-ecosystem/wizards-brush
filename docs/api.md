@@ -28,6 +28,7 @@ The test suite runs it against the real app, so it stays correct.
 - [Variant Sets](#variant-sets)
 - [Recipes](#recipes)
 - [Saved recipes](#saved-recipes)
+- [Reference sets](#reference-sets)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
 
@@ -654,6 +655,46 @@ Storage checks the schema only. A preset whose model is not installed here,
 or needs a larger device, still saves: readiness is a separate question,
 answered when the preset is resolved.
 
+## Reference sets
+
+A reference set is a named, ordered collection of gallery assets grouped by
+role: a character, a product, a style or any other subject. Each entry may
+carry a mask painted on that asset (the same size as it) and a short note. A
+set is reference material only. It is not training data, and no model is
+promised to preserve an identity.
+
+```http
+POST /api/reference-sets
+{"name": "Mara", "definition": {
+  "notes": "red scarf, freckles",
+  "roles": [{"role": "character", "label": "Mara",
+             "entries": [{"asset_id": 41}, {"asset_id": 42, "mask_id": 57, "note": "profile"}]}],
+  "representatives": [41]}}
+```
+
+Every save is a new immutable revision. `PUT /api/reference-sets/{id}` takes
+`{definition, base_revision}` and answers `409 revision_conflict` when someone
+saved after the revision you edited, so nothing is overwritten silently.
+`GET /api/reference-sets/{id}?revision=N` reads any revision; archiving
+(`POST .../archive`) hides a set from pickers but keeps every revision
+readable.
+
+A preset role can bind a set (`references[].reference_set`), and a preset
+request can fill a role from a set:
+
+```json
+{"preset_id": "custom/character-scene", "prompt": "she reads in a cafe",
+ "inputs": {"reference_sets": {"character": {"id": 3}}}}
+```
+
+Omit `revision` for the latest. The plan records the revision it used under
+`plan.inputs.reference_sets`, and the job runs those exact assets: editing the
+set afterwards never changes work already queued. A role takes asset ids or a
+set, never both (`ambiguous_request`). A set with more or fewer references
+than the role accepts is refused, never trimmed. When the role has
+`notes_in_prompt` and the request sends no `notes`, the set's notes fill
+`{{notes}}`.
+
 ## Resources
 
 Models and adapters are resources: an identity that never changes, plus the
@@ -891,6 +932,21 @@ exist and decode.
 An output that fails a check is kept, and its item is marked `invalid` with the
 reasons.
 
+A spec may also say which checks are `required` and which are `optional`, by
+name (`file`, `format`, `dimensions`, `alpha`, `corners`, `coverage`,
+`margins`, `unmasked_match`, `face_identity`, `finishing`). A check that cannot
+judge (no source image, no face found, no transparency to measure margins on)
+reports a warning with `available: false`. For a required check that warning
+becomes a failure, and a required check that did not run at all fails too: an
+unknown is never allowed to pass a condition that had to hold. An optional
+check's failure is recorded as a warning (`details.original_status: "fail"`)
+and the item advances. Checks named in neither list behave as before. The
+policy is stored with the set's snapshot, so later default changes do not
+reinterpret an old set.
+
+A preset's `validation` list (`{validator, required, options}`) compiles into
+the same spec. The plan shows the result as `validation_spec`.
+
 ## Endpoint index
 
 The OpenAPI document at `/openapi.json` is the authoritative list, grouped by
@@ -905,6 +961,8 @@ tag:
 | `tools` | Per-tool routes |
 | `images`, `videos` | The UI's multipart routes |
 | `openai` | OpenAI-compatible image generation and edits (`/api/openai/v1`) |
+| `references` | Reference sets |
+| `resources`, `targets` | Models and adapters, imports, routing policy |
 | `system`, `settings`, `library`, `collections`, `loras`, `wildcards`, `grid` | Supporting routes |
 
 The multipart routes (`/api/generate/...`, `/api/tools/...`) remain supported.

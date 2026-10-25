@@ -736,6 +736,77 @@ async def archive_preset(
         raise _fail(exc) from None
 
 
+# ---- reference sets ----------------------------------------------------------------------------
+_REFERENCE_DEFINITION = (
+    "{description, notes, roles: [{role, label, entries: [{asset_id, mask_id, note}]}], "
+    "representatives: [asset ids]}. Order is kept exactly. Asset ids come from the gallery "
+    "(fetch_asset, import_mask, or a finished job).")
+
+
+@mcp.tool()
+async def list_reference_sets(include_archived: bool = False) -> dict[str, Any]:
+    """Reference sets: named, ordered references by role (a character, a product, a
+    style). Reference material only; no model is promised to preserve an identity."""
+    try:
+        return {"reference_sets": await studio_tools.reference_sets(include_archived)}
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def get_reference_set(
+    reference_set: Annotated[int, Field(ge=1)],
+    revision: Annotated[int | None, Field(ge=1, description="Omit for the latest.")] = None,
+) -> dict[str, Any]:
+    """One revision of a reference set, with its ordered entries and masks."""
+    try:
+        return await studio_tools.reference_set(reference_set, revision)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def save_reference_set(
+    name: Annotated[str, Field(min_length=1, max_length=80)],
+    definition: Annotated[dict[str, Any], Field(description=_REFERENCE_DEFINITION)],
+) -> dict[str, Any]:
+    """Side effect: create a reference set at revision 1. Its client is recorded as mcp."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.save_reference_set(name, definition)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def update_reference_set(
+    reference_set: Annotated[int, Field(ge=1)],
+    definition: Annotated[dict[str, Any], Field(description=_REFERENCE_DEFINITION)],
+    base_revision: Annotated[int, Field(ge=1, description="The revision you edited.")],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Side effect: save the next revision. A stale base is revision_conflict. Plans
+    and queued jobs keep the revision they used."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.update_reference_set(reference_set, definition,
+                                                           base_revision, name)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def archive_reference_set(
+    reference_set: Annotated[int, Field(ge=1)],
+    archived: Annotated[bool, Field(description="False unarchives.")] = True,
+) -> dict[str, Any]:
+    """Side effect: hide (or restore) a set in pickers. Its revisions stay readable."""
+    try:
+        return await studio_tools.archive_reference_set(reference_set, archived)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
 # ---- plans -----------------------------------------------------------------------------------
 _PLAN_ARGS = ("preset_id", "revision", "operation", "model", "adapters", "prompt",
               "negative_prompt", "styles", "style_fragments", "enhance", "notes", "settings",
@@ -778,7 +849,8 @@ async def resolve_preset(
     finish: Annotated[list[dict[str, Any]] | None, Field(
         description="Ordered finishing steps; replaces the preset's.")] = None,
     inputs: Annotated[dict[str, Any] | None, Field(
-        description="{images, mask, last_frame, references: {role: [asset ids]}}")] = None,
+        description="{images, mask, last_frame, references: {role: [asset ids]}, "
+                    "reference_sets: {role: {id, revision?}}}")] = None,
     target: Annotated[str | None, Field(description="local, remote or auto.")] = None,
     allow_remote: Annotated[bool | None, Field(
         description="Let auto use a connected remote worker and send this request's inputs "
@@ -815,7 +887,9 @@ async def run_preset(
     notes: str | None = None,
     settings: dict[str, Any] | None = None,
     finish: list[dict[str, Any]] | None = None,
-    inputs: dict[str, Any] | None = None,
+    inputs: Annotated[dict[str, Any] | None, Field(
+        description="{images, mask, last_frame, references: {role: [asset ids]}, "
+                    "reference_sets: {role: {id, revision?}}}")] = None,
     target: str | None = None,
     allow_remote: bool | None = None,
     seed: Annotated[int | None, Field(ge=0, le=2**32 - 1)] = None,

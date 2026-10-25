@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, authHeaders } from "../../api/client";
-import type { Asset, Operation, PresetDefinition } from "../../api/types";
+import type {
+  Asset,
+  Operation,
+  PresetDefinition,
+  ReferenceSetRead,
+  ReferenceSetSummary,
+} from "../../api/types";
 import { useStore } from "../../store/useStore";
 import { GalleryPicker } from "../GalleryPicker";
 import { Icon } from "../icons";
@@ -156,28 +163,212 @@ function DrawMask({ sourceId, onMask }: { sourceId: number; onMask: (id: number)
   );
 }
 
+type Role = NonNullable<PresetDefinition["references"]>[number];
+
+/** The chosen set's entries for one role, as the server will bind them. */
+function SetPreview({ setId, role, min, max }: { setId: number; role: string; min: number; max: number }) {
+  const [found, setFound] = useState<ReferenceSetRead | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    api
+      .referenceSet(setId)
+      .then((read) => {
+        if (!alive) return;
+        setFound(read);
+        setError("");
+      })
+      .catch((e) => alive && setError(`${e}`));
+    return () => {
+      alive = false;
+    };
+  }, [setId]);
+  if (error) return <div className="text-[11px] text-danger">{error}</div>;
+  if (!found) return <div className="text-[11px] text-muted">Reading the set…</div>;
+  const entries = found.definition.roles.find((r) => r.role === role)?.entries ?? [];
+  const fits = entries.length >= min && entries.length <= max;
+  return (
+    <div className="space-y-1" data-testid={`set-preview-${role}`}>
+      <div className="flex flex-wrap gap-2">
+        {entries.map((entry, index) => (
+          <SetThumb key={`${entry.asset_id}-${index}`} id={entry.asset_id} masked={Boolean(entry.mask_id)} />
+        ))}
+      </div>
+      <div className={`text-[11px] ${fits ? "text-muted" : "text-danger"}`}>
+        {found.name} · revision {found.revision} · {entries.length} reference{entries.length === 1 ? "" : "s"}
+        {!fits && ` — this role takes ${min === max ? min : `${min}–${max}`}; the set is not cut to fit`}
+      </div>
+    </div>
+  );
+}
+
+function SetThumb({ id, masked }: { id: number; masked: boolean }) {
+  const asset = useAsset(id);
+  return (
+    <div className="relative size-12 shrink-0 border border-edge bg-black">
+      {asset?.thumb_url || asset?.url ? (
+        <img src={asset.thumb_url ?? asset.url} alt="" className="size-full object-contain" />
+      ) : (
+        <span className="technical flex size-full items-center justify-center text-[9px] text-muted">
+          #{id}
+        </span>
+      )}
+      {masked && (
+        <span className="technical absolute bottom-0 left-0 bg-black/70 px-0.5 text-[8px] uppercase">
+          mask
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One reference role: images picked here, or a reference set. A role the
+ * preset binds to a set uses it until the person picks images or another
+ * set; nothing is mixed, and a set larger than the role is refused by the
+ * server rather than trimmed.
+ */
+function RolePicker({
+  role,
+  sets,
+  ids,
+  chosenSet,
+  onIds,
+  onSet,
+}: {
+  role: Role;
+  sets: ReferenceSetSummary[];
+  ids: number[];
+  chosenSet: number | null;
+  onIds: (ids: number[]) => void;
+  onSet: (id: number | null) => void;
+}) {
+  const min = role.min ?? 0;
+  const maxRefs = role.max ?? 1;
+  const offered = sets.filter((s) => s.roles.some((r) => r.role === role.role));
+  const presetSet = role.reference_set ?? null;
+  const activeSet = chosenSet ?? (ids.length === 0 ? presetSet : null);
+  const mode = activeSet !== null ? "set" : "images";
+  const label = role.label || role.role;
+  return (
+    <div data-testid={`role-${role.role}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="label mb-0">
+          {label}
+          <span className="technical ml-1 text-[10px] text-muted">
+            {min}–{maxRefs}
+          </span>
+        </div>
+        {(offered.length > 0 || presetSet !== null) && (
+          <select
+            className="input w-auto py-0.5 text-[11px]"
+            aria-label={`${label} source`}
+            value={activeSet !== null ? String(activeSet) : ""}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "") {
+                onSet(null);
+                return;
+              }
+              onIds([]);
+              onSet(Number(value));
+            }}
+          >
+            <option value="">Images I pick</option>
+            {presetSet !== null && !offered.some((s) => s.id === presetSet) && (
+              <option value={String(presetSet)}>The preset's set (#{presetSet})</option>
+            )}
+            {offered.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {s.name}
+                {s.id === presetSet ? " (preset's)" : ""}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {mode === "set" && activeSet !== null ? (
+        <div className="mt-2">
+          <SetPreview setId={activeSet} role={role.role} min={min} max={maxRefs} />
+          {chosenSet === null && presetSet !== null && (
+            <div className="mt-1 text-[11px] text-muted">
+              Bound by this preset. Picking images replaces it.
+            </div>
+          )}
+          {chosenSet === null && presetSet !== null && (
+            <div className="mt-2">
+              <AddImage
+                label={`Use my own ${label.toLowerCase()} instead`}
+                onAdd={(id) => {
+                  onSet(null);
+                  onIds([id]);
+                }}
+              />
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {ids.map((id, index) => (
+              <Thumb
+                key={`${id}-${index}`}
+                id={id}
+                label={`${role.role} ${index + 1}`}
+                onRemove={() => onIds(ids.filter((_, n) => n !== index))}
+              />
+            ))}
+          </div>
+          {ids.length < maxRefs && (
+            <div className="mt-2">
+              <AddImage label={`Add ${label}`} onAdd={(id) => onIds([...ids, id])} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function InputPickers({
   operation,
   definition,
   images,
   mask,
   references,
+  referenceSets = {},
   onImages,
   onMask,
   onReferences,
+  onReferenceSets = () => {},
 }: {
   operation: Operation;
   definition: PresetDefinition | null;
   images: number[];
   mask: number | null;
   references: Record<string, number[]>;
+  referenceSets?: Record<string, number>;
   onImages: (ids: number[]) => void;
   onMask: (id: number | null) => void;
   onReferences: (refs: Record<string, number[]>) => void;
+  onReferenceSets?: (sets: Record<string, number>) => void;
 }) {
   const [, max] = SOURCE_IMAGES[operation];
   const roles = definition?.references ?? [];
   const [drawing, setDrawing] = useState(false);
+  const [sets, setSets] = useState<ReferenceSetSummary[]>([]);
+  const hasRoles = roles.length > 0;
+  useEffect(() => {
+    if (!hasRoles) return;
+    let alive = true;
+    api
+      .referenceSets()
+      .then((rows) => alive && setSets(rows))
+      .catch(() => alive && setSets([]));
+    return () => {
+      alive = false;
+    };
+  }, [hasRoles]);
   if (max === 0 && roles.length === 0) return null;
   return (
     <div className="space-y-3" data-testid="input-pickers">
@@ -227,40 +418,32 @@ export function InputPickers({
           )}
         </div>
       )}
-      {roles.map((role) => {
-        const ids = references[role.role] ?? [];
-        const maxRefs = role.max ?? 1;
-        return (
-          <div key={role.role}>
-            <div className="label">
-              {role.label || role.role}
-              <span className="technical ml-1 text-[10px] text-muted">
-                {role.min ?? 0}–{maxRefs}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {ids.map((id, index) => (
-                <Thumb
-                  key={`${id}-${index}`}
-                  id={id}
-                  label={`${role.role} ${index + 1}`}
-                  onRemove={() =>
-                    onReferences({ ...references, [role.role]: ids.filter((_, n) => n !== index) })
-                  }
-                />
-              ))}
-            </div>
-            {ids.length < maxRefs && (
-              <div className="mt-2">
-                <AddImage
-                  label={`Add ${role.label || role.role}`}
-                  onAdd={(id) => onReferences({ ...references, [role.role]: [...ids, id] })}
-                />
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {roles.map((role) => (
+        <RolePicker
+          key={role.role}
+          role={role}
+          sets={sets}
+          ids={references[role.role] ?? []}
+          chosenSet={referenceSets[role.role] ?? null}
+          onIds={(ids) => {
+            const next = { ...references };
+            if (ids.length) next[role.role] = ids;
+            else delete next[role.role];
+            onReferences(next);
+          }}
+          onSet={(id) => {
+            const next = { ...referenceSets };
+            if (id === null) delete next[role.role];
+            else next[role.role] = id;
+            onReferenceSets(next);
+          }}
+        />
+      ))}
+      {hasRoles && (
+        <Link to="/references" className="block text-[11px] text-accent underline hover:text-ink">
+          Manage reference sets
+        </Link>
+      )}
     </div>
   );
 }

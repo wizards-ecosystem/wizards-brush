@@ -101,4 +101,24 @@ describe("the studio draft", () => {
     expect(loadDraft(storage).warning).toMatch(/kept for recovery/);
     expect(storage.getItem(RECOVERED_KEY)).toBe("{not json");
   });
+
+  it("sends a reference set per role and keeps it across presets that share the role", () => {
+    const draft = { ...emptyDraft(), presetId: "p", referenceSets: { character: 4, product: 9 } };
+    expect(toRequest(draft)?.inputs).toEqual({
+      reference_sets: { character: { id: 4 }, product: { id: 9 } },
+    });
+    const { draft: next, dropped } = switchPreset(draft, preset("new", ["character"]));
+    expect(next.referenceSets).toEqual({ character: 4 });
+    expect(dropped).toEqual(["product reference"]);
+  });
+
+  it("an older stored draft without reference sets still loads", () => {
+    const storage = memory();
+    const old = { ...emptyDraft(), presetId: "p" } as Record<string, unknown>;
+    delete old.referenceSets;
+    storage.setItem(DRAFT_KEY, JSON.stringify(old));
+    const { draft, warning } = loadDraft(storage);
+    expect(draft.referenceSets).toEqual({});
+    expect(warning).toBe("");
+  });
 });

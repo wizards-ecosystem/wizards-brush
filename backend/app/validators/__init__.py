@@ -18,6 +18,15 @@ more registered function, with one more optional field on
 The overall verdict is the worst result: any ``fail`` fails the output, else any
 ``warn`` warns, else it passes. ``file`` always runs first; if the file cannot
 be read, nothing else can be judged and the rest are skipped.
+
+**Required and optional.** A check that cannot judge (no source image, no face
+found, no alpha to measure margins on) says so with ``available=False`` and a
+``warn``. A spec may name checks as ``required`` or ``optional``. A required
+check that is unavailable, or that did not run at all, fails: a warning is never
+allowed to stand in for a condition that had to hold. An optional check's
+failure is recorded as a warning, so it can advance. Checks named in neither
+list keep the plain behaviour, which is what every stored spec without a
+policy means.
 """
 from __future__ import annotations
 
@@ -27,9 +36,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Status = Literal["pass", "warn", "fail"]
+# Judged by the Variant Set service rather than a registered check.
+POLICY_ONLY = "finishing"
 Verdict = Literal["passed", "warned", "failed", "skipped"]
 
 
@@ -58,6 +69,22 @@ class ValidationSpec(BaseModel):
     unmasked_match: bool = False
     # Minimum OpenCV SFace cosine vs the first source face, or None to skip.
     face_identity_min: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Check names (see `registered()`, plus "finishing") whose condition must
+    # hold, and ones whose failure only warns. Stored with the spec, so a set's
+    # snapshot keeps the policy it was created with.
+    required: list[str] = Field(default_factory=list, max_length=16)
+    optional: list[str] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def _policy(self) -> ValidationSpec:
+        both = set(self.required) & set(self.optional)
+        if both:
+            raise ValueError(f"{sorted(both)} cannot be both required and optional")
+        known = set(_REGISTRY) | {POLICY_ONLY}
+        unknown = [n for n in [*self.required, *self.optional] if n not in known]
+        if unknown:
+            raise ValueError(f"unknown validator(s) {unknown}; known: {sorted(known)}")
+        return self
 
     def is_empty(self) -> bool:
         return self == ValidationSpec()
@@ -83,10 +110,16 @@ class Result:
     status: Status
     message: str
     details: dict[str, Any] = field(default_factory=dict)
+    # False when the check could not judge at all (a missing source, no face,
+    # no alpha to measure). Its status is then a `warn` that means "unknown".
+    available: bool = True
 
     def as_dict(self) -> dict[str, Any]:
-        return {"validator": self.validator, "status": self.status,
-                "message": self.message, "details": self.details}
+        out: dict[str, Any] = {"validator": self.validator, "status": self.status,
+                               "message": self.message, "details": self.details}
+        if not self.available:
+            out["available"] = False
+        return out
 
 
 @dataclass
@@ -125,6 +158,58 @@ def verdict(results: list[Result]) -> Verdict:
     return "passed" if results else "skipped"
 
 
+def apply_policy(results: list[Result], spec: ValidationSpec) -> list[Result]:
+    """Apply `required`/`optional` to finished results. Idempotent.
+
+    Required: unavailable becomes a fail, and a required check with no result
+    is added as a fail. Optional: a fail becomes a warn that remembers it was
+    one. Everything else is returned unchanged.
+    """
+    required, optional = set(spec.required), set(spec.optional)
+    out: list[Result] = []
+    for r in results:
+        if r.details.get("required") or r.details.get("optional"):
+            out.append(r)  # already judged by this policy
+        elif r.validator in required and not r.available:
+            out.append(Result(r.validator, "fail", f"required check could not run: {r.message}",
+                              {**r.details, "required": True}, available=False))
+        elif r.validator in optional and r.status == "fail":
+            out.append(Result(r.validator, "warn", f"optional check failed: {r.message}",
+                              {**r.details, "optional": True, "original_status": "fail"},
+                              r.available))
+        else:
+            out.append(r)
+    seen = {r.validator for r in out}
+    for name in spec.required:
+        if name not in seen and name != POLICY_ONLY:
+            out.append(Result(name, "fail", "required check did not run: the spec does not "
+                                            "configure it, or the file could not be read",
+                              {"required": True}, available=False))
+    return out
+
+
+def spec_from_policies(policies: list[dict[str, Any]]) -> ValidationSpec:
+    """A preset's ordered validator policy as one spec.
+
+    Each policy names a check, whether it is required, and the spec options
+    that configure it (``{"validator": "alpha", "required": true, "options":
+    {"alpha": "required"}}``). Options for the same field must agree.
+    """
+    fields: dict[str, Any] = {}
+    required: list[str] = []
+    optional: list[str] = []
+    for index, policy in enumerate(policies):
+        name = str(policy.get("validator") or "")
+        for key, value in (policy.get("options") or {}).items():
+            if key in {"required", "optional"} or key not in ValidationSpec.model_fields:
+                raise ValueError(f"validation.{index}: {key!r} is not a validator option")
+            if key in fields and fields[key] != value:
+                raise ValueError(f"validation.{index}: {key} conflicts with an earlier policy")
+            fields[key] = value
+        (required if policy.get("required") else optional).append(name)
+    return ValidationSpec.model_validate({**fields, "required": required, "optional": optional})
+
+
 def run(
     path: Path | str, spec: ValidationSpec | dict[str, Any] | None = None, *,
     meta: dict[str, Any] | None = None, asset_id: int | None = None,
@@ -152,6 +237,7 @@ def run(
     finally:
         if ctx.image is not None:
             ctx.image.close()
+    results = apply_policy(results, model)
     return verdict(results), results
 
 

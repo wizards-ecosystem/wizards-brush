@@ -106,6 +106,13 @@ def inputs_for(kind: str, spec: dict[str, Any] | None = None) -> Inputs:
 
 
 # ---- request / response models -------------------------------------------------------------
+class ReferenceSetBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    revision: int | None = Field(default=None, ge=1)
+
+
 class JobInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -116,6 +123,10 @@ class JobInputs(BaseModel):
     references: dict[str, list[int]] = Field(
         default_factory=dict,
         description="Preset requests only: asset ids per reference role the preset declares.")
+    reference_sets: dict[str, ReferenceSetBinding] = Field(
+        default_factory=dict,
+        description="Preset requests only: role -> {id, revision?} of a reference set to fill "
+                    "that role from. The plan records the revision used.")
 
 
 class StyleFragmentIn(BaseModel):
@@ -519,9 +530,10 @@ async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult | Prepare
                 code="missing_input", field="kind",
             )
         return await _plan_job(body)
-    if body.inputs.references:
-        raise RequestError(400, "inputs.references are for preset requests",
-                           code="invalid_request", field="inputs.references")
+    if body.inputs.references or body.inputs.reference_sets:
+        name = "references" if body.inputs.references else "reference_sets"
+        raise RequestError(400, f"inputs.{name} are for preset requests",
+                           code="invalid_request", field=f"inputs.{name}")
     info = _require_known(body.kind)
     request_id, prior = duplicate_of(body.request_id, dry_run=body.dry_run)
     if prior is not None:

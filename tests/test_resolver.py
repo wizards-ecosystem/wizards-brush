@@ -395,3 +395,88 @@ def test_an_adapter_file_gone_since_the_scan_blocks_rather_than_drops(ctx):
     assert plan["readiness"]["ready"] is False
     assert any(b["code"] == "resource_not_ready" and b["field"] == "adapters"
                for b in plan["readiness"]["blockers"])
+
+
+# ---- reference sets ----------------------------------------------------------------------
+def _sets(ctx, entries_by_revision):
+    """A fake reference set 7 whose 'character' role changes between revisions."""
+    def reference_set(set_id, revision, role):
+        if set_id != 7:
+            raise ResolveError(404, "no such set", code="not_found", field="reference_set")
+        rev = revision or max(entries_by_revision)
+        if role != "character":
+            raise ResolveError(400, "no such role", code="invalid_request",
+                               field=f"inputs.reference_sets.{role}")
+        return {"id": 7, "name": "Mara", "revision": rev, "digest": f"sha256:{rev}",
+                "notes": "red scarf, freckles", "entries": entries_by_revision[rev]}
+
+    ctx.reference_set = reference_set
+    return ctx
+
+
+def test_a_reference_set_fills_a_role_in_order_and_the_plan_pins_its_revision(ctx):
+    _sets(ctx, {1: [{"asset_id": 13}, {"asset_id": 11, "mask_id": 11, "note": "left profile"}],
+                2: [{"asset_id": 11}]})
+    plan = run(ctx, preset_id="fixture/character-scene", prompt="she reads",
+               inputs={"reference_sets": {"character": {"id": 7, "revision": 1}}})
+    refs = plan["inputs"]["references"]["character"]
+    assert [r["asset_id"] for r in refs] == [13, 11]
+    assert refs[1]["mask"]["asset_id"] == 11 and refs[1]["note"] == "left profile"
+    assert plan["inputs"]["reference_sets"]["character"] == {
+        "id": 7, "name": "Mara", "revision": 1, "digest": "sha256:1", "origin": "override"}
+    # The set's notes fill {{notes}} for a role that asks for them.
+    assert plan["prompt"]["positive"] == "she reads. Keep this character: red scarf, freckles"
+    latest = run(ctx, preset_id="fixture/character-scene", prompt="she reads",
+                 inputs={"reference_sets": {"character": {"id": 7}}})
+    assert latest["inputs"]["reference_sets"]["character"]["revision"] == 2
+    assert latest["hashes"]["material_hash"] != plan["hashes"]["material_hash"]
+
+
+def test_a_set_with_more_references_than_the_role_takes_is_refused_not_truncated(ctx):
+    _sets(ctx, {1: [{"asset_id": i} for i in (11, 12, 13, 14)]})
+    with pytest.raises(ResolveError) as excinfo:
+        run(ctx, preset_id="fixture/character-scene", prompt="x",
+            inputs={"reference_sets": {"character": {"id": 7}}})
+    assert excinfo.value.field == "inputs.reference_sets.character"
+    assert "revision 1 has 4" in str(excinfo.value)
+
+
+def test_ids_and_a_set_for_one_role_are_ambiguous(ctx):
+    _sets(ctx, {1: [{"asset_id": 11}]})
+    with pytest.raises(ResolveError) as excinfo:
+        run(ctx, preset_id="fixture/character-scene", prompt="x",
+            inputs={"references": {"character": [11]},
+                    "reference_sets": {"character": {"id": 7}}})
+    assert excinfo.value.code == "ambiguous_request"
+
+
+def test_a_preset_can_bind_a_set_and_a_request_can_replace_it(ctx, monkeypatch):
+    _sets(ctx, {1: [{"asset_id": 13}]})
+    bound = copy.deepcopy(PRESETS["character_reference"])
+    bound["id"] = "fixture/bound-character"
+    bound["references"][0]["reference_set"] = 7
+    original = ctx.preset
+    ctx.preset = lambda pid, rev: ({"definition": bound, "revision": 1,
+                                    "definition_hash": "x"} if pid == bound["id"]
+                                   else original(pid, rev))
+    plan = run(ctx, preset_id=bound["id"], prompt="x")
+    assert plan["inputs"]["reference_sets"]["character"]["origin"] == "preset"
+    explicit = run(ctx, preset_id=bound["id"], prompt="x",
+                   inputs={"references": {"character": [12]}})
+    assert [r["asset_id"] for r in explicit["inputs"]["references"]["character"]] == [12]
+    assert "reference_sets" not in explicit["inputs"]
+
+
+def test_a_preset_validation_policy_compiles_into_the_plan(ctx):
+    sticker = copy.deepcopy(PRESETS["ordered_finishing"])
+    sticker["id"] = "fixture/checked-sticker"
+    sticker["validation"] = [
+        {"validator": "alpha", "required": True, "options": {"alpha": "required"}},
+        {"validator": "margins", "options": {"safe_margin": 8}},
+    ]
+    original = ctx.preset
+    ctx.preset = lambda pid, rev: ({"definition": sticker, "revision": 1, "definition_hash": "x"}
+                                   if pid == sticker["id"] else original(pid, rev))
+    plan = run(ctx, preset_id=sticker["id"], prompt="a cat")
+    assert plan["validation_spec"] == {"alpha": "required", "safe_margin": 8,
+                                       "required": ["alpha"], "optional": ["margins"]}

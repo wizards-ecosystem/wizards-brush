@@ -237,3 +237,38 @@ def test_fetch_asset_returns_full_resolution_bytes_within_a_cap(client, monkeypa
     capped = _call("fetch_asset", {"asset_id": source})
     assert capped.is_error and _error(capped)["code"] == "too_large"
     assert "/api/assets/" in _error(capped)["suggestions"][0]
+
+
+# ---- reference sets (P14) --------------------------------------------------------------------
+def test_reference_sets_through_mcp_match_http_and_conflicts_lose_nothing(client):
+    from PIL import Image
+
+    from backend.app import db
+
+    settings.ensure_dirs()
+    ids = []
+    for n in range(2):
+        path = settings.images_dir / f"mcp-ref-{uuid.uuid4().hex[:6]}-{n}.png"
+        Image.new("RGB", (32, 32), (n * 90, 40, 40)).save(path)
+        ids.append(int(db.add_asset("image", path, width=32, height=32).id or 0))
+    definition = {"roles": [{"role": "product", "entries": [{"asset_id": i} for i in ids]}]}
+    saved = _call("save_reference_set", {"name": f"Mug {uuid.uuid4().hex[:6]}",
+                                         "definition": definition}).structured_content
+    assert saved["revision"] == 1 and saved["client"] == "mcp"
+    http = client.get(f"/api/reference-sets/{saved['id']}").json()
+    assert http["digest"] == saved["digest"]
+    reordered = {"roles": [{"role": "product", "entries": [{"asset_id": i} for i in ids[::-1]]}]}
+    ok = _call("update_reference_set", {"reference_set": saved["id"], "definition": reordered,
+                                        "base_revision": 1})
+    assert ok.structured_content["revision"] == 2
+    stale = _call("update_reference_set", {"reference_set": saved["id"],
+                                           "definition": definition, "base_revision": 1})
+    assert stale.is_error and _error(stale)["code"] == "revision_conflict"
+    first = _call("get_reference_set", {"reference_set": saved["id"], "revision": 1})
+    assert [e["asset_id"] for e in first.structured_content["definition"]["roles"][0]
+            ["entries"]] == ids
+    listed = _call("list_reference_sets", {}).structured_content["reference_sets"]
+    assert saved["id"] in [s["id"] for s in listed]
+    _call("archive_reference_set", {"reference_set": saved["id"]})
+    listed = _call("list_reference_sets", {}).structured_content["reference_sets"]
+    assert saved["id"] not in [s["id"] for s in listed]

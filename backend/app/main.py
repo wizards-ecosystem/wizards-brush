@@ -38,6 +38,7 @@ from .routers import (
     library,
     loras,
     recipes,
+    reference_sets,
     resource_imports,
     resources,
     studio,
@@ -411,7 +412,7 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router, recipes.router, studio.router, resources.router,
-          resource_imports.router, targets.router, openai_router):
+          resource_imports.router, targets.router, reference_sets.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

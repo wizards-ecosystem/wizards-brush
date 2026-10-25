@@ -147,7 +147,7 @@ def check_margins(ctx: ValidationContext) -> Result | None:
     alpha = _alpha(ctx)
     if alpha is None:
         return Result("margins", "warn",
-                      "safe margins can only be measured on an image with transparency")
+                      "safe margins can only be measured on an image with transparency", available=False)
     visible = alpha.point(lambda a: 255 if a > ctx.spec.transparent_threshold else 0)
     box = visible.getbbox()
     if box is None:

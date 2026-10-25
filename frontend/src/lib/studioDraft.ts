@@ -27,6 +27,9 @@ export interface StudioDraft {
   images: number[];
   mask: number | null;
   references: Record<string, number[]>;
+  /** role -> reference set id, used at its latest revision. A role takes
+   *  images or a set, never both; the plan records the revision used. */
+  referenceSets: Record<string, number>;
   target: Target;
   allowRemote: boolean;
   seed: number | null;
@@ -52,6 +55,7 @@ export function emptyDraft(): StudioDraft {
     images: [],
     mask: null,
     references: {},
+    referenceSets: {},
     target: "auto",
     allowRemote: false,
     seed: null,
@@ -77,6 +81,11 @@ export function toRequest(draft: StudioDraft): PlanRequest | null {
   if (draft.images.length) inputs.images = draft.images;
   if (draft.mask !== null) inputs.mask = draft.mask;
   if (Object.keys(draft.references).length) inputs.references = draft.references;
+  if (Object.keys(draft.referenceSets).length) {
+    inputs.reference_sets = Object.fromEntries(
+      Object.entries(draft.referenceSets).map(([role, id]) => [role, { id }]),
+    );
+  }
   if (Object.keys(inputs).length) request.inputs = inputs;
   return request;
 }
@@ -121,12 +130,18 @@ export function switchPreset(
 ): { draft: StudioDraft; dropped: string[] } {
   const roles = new Set((preset.definition.references || []).map((r) => r.role));
   const references = Object.fromEntries(Object.entries(draft.references).filter(([role]) => roles.has(role)));
-  const droppedRoles = Object.keys(draft.references).filter((role) => !roles.has(role));
+  const referenceSets = Object.fromEntries(
+    Object.entries(draft.referenceSets).filter(([role]) => roles.has(role)),
+  );
+  const droppedRoles = [...Object.keys(draft.references), ...Object.keys(draft.referenceSets)].filter(
+    (role, index, all) => !roles.has(role) && all.indexOf(role) === index,
+  );
   const next: StudioDraft = {
     ...resetToPreset(draft),
     presetId: preset.id,
     revision: preset.revision,
     references,
+    referenceSets,
     notes: draft.notes,
     seed: null,
   };

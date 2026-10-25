@@ -58,7 +58,7 @@ def check_unmasked(ctx: ValidationContext) -> Result | None:
     source = _open_rgb(_source_path(ctx))
     if source is None:
         return Result("unmasked_match", "warn",
-                      "unmasked-pixel lock needs the source image")
+                      "unmasked-pixel lock needs the source image", available=False)
     output = ImageOps.exif_transpose(ctx.image).convert("RGB")
     if source.size != output.size:
         return Result("unmasked_match", "fail",
@@ -67,7 +67,7 @@ def check_unmasked(ctx: ValidationContext) -> Result | None:
     mask = _mask_image(ctx, source.size)
     if mask is None:
         return Result("unmasked_match", "warn",
-                      "unmasked-pixel lock needs the original hard mask")
+                      "unmasked-pixel lock needs the original hard mask", available=False)
     keep = ImageChops.invert(mask)
     kept_source = ImageChops.composite(source, Image.new("RGB", source.size), keep)
     kept_output = ImageChops.composite(output, Image.new("RGB", output.size), keep)
@@ -91,14 +91,16 @@ def check_face_identity(ctx: ValidationContext) -> Result | None:
         return None
     source = _open_rgb(_source_path(ctx))
     if source is None:
-        return Result("face_identity", "warn", "face identity needs the source image")
+        return Result("face_identity", "warn", "face identity needs the source image", available=False)
     try:
         from ..generators import identity
         score = identity.compare(source, ImageOps.exif_transpose(ctx.image).convert("RGB"))
     except Exception as error:  # noqa: BLE001
-        return Result("face_identity", "warn", f"face identity could not run: {error}")
+        return Result("face_identity", "warn", f"face identity could not run: {error}",
+                      available=False)
     if score is None:
-        return Result("face_identity", "warn", "no face was found on the source or the output")
+        return Result("face_identity", "warn", "no face was found on the source or the output",
+                      available=False)
     details = {"score": round(score, 4), "minimum": want}
     if score + 1e-9 < want:
         return Result("face_identity", "fail",

@@ -31,6 +31,9 @@ _TOOLS = {
     "resource_preparation_status", "save_preset", "update_preset", "clone_preset",
     "archive_preset", "resolve_preset", "run_preset", "replay_job", "get_plan", "cancel_job",
     "import_mask", "fetch_asset",
+    # P14: reference sets.
+    "list_reference_sets", "get_reference_set", "save_reference_set", "update_reference_set",
+    "archive_reference_set",
 }
 
 

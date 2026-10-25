@@ -611,6 +611,38 @@ class ResourceImport(SQLModel, table=True):
         return _json_or(self.license_json, {})
 
 
+class ReferenceSet(SQLModel, table=True):
+    """The head of a reference set (0017): its name and latest revision."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    revision: int = 1
+    digest: str = ""
+    client: str = ""
+    archived_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ReferenceSetRevision(SQLModel, table=True):
+    """One immutable revision of a reference set (0017)."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    set_id: int = Field(foreign_key="referenceset.id", index=True)
+    revision: int
+    definition_json: str = "{}"
+    digest: str = ""
+    based_on: int | None = None
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def definition(self) -> dict[str, Any]:
+        return _json_or(self.definition_json, {})
+
+
 class VariantRecipe(SQLModel, table=True):
     """A reusable Variant Set definition: configuration only.
 

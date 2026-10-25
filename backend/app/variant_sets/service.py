@@ -420,7 +420,7 @@ def _judge(recipe: RecipeSpec, item: VariantItem,
         source_asset_ids=tuple(item.source_asset_ids))
     finishing = _finishing_result(stage, asset.meta)
     if finishing is not None:
-        results.append(finishing)
+        results = validators.apply_policy([*results, finishing], stage.validation)
         verdict = validators.verdict(results)
     rows = [r.as_dict() for r in results]
     if verdict == "failed":

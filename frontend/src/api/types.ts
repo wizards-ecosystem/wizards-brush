@@ -683,6 +683,10 @@ export interface VariantValidationSpec {
   max_transparent_fraction?: number | null;
   safe_margin?: number | null;
   transparent_threshold?: number;
+  /** Checks whose condition must hold: one that cannot run fails. */
+  required?: string[];
+  /** Checks whose failure only warns. */
+  optional?: string[];
 }
 
 export interface VariantStageSpec {
@@ -917,6 +921,8 @@ export interface PresetDefinition {
     accepts?: string[];
     min?: number;
     max?: number;
+    /** A reference set this role uses unless the request fills it. */
+    reference_set?: number | null;
     notes_in_prompt?: boolean;
   }[];
   validation?: { validator: string; required?: boolean; options?: Record<string, unknown> }[];
@@ -1023,6 +1029,7 @@ export interface ExecutionPlan {
   seed: { base: number; origin: string; mode: string; items: number[] };
   finish: Record<string, unknown>[];
   validation: Record<string, unknown>[];
+  validation_spec?: VariantValidationSpec | null;
   warnings: PlanIssue[];
   readiness: PlanReadiness;
   capability_revision: string;
@@ -1048,6 +1055,7 @@ export interface PlanRequest {
     mask?: number | null;
     last_frame?: number | null;
     references?: Record<string, number[]>;
+    reference_sets?: Record<string, { id: number; revision?: number }>;
   };
   target?: Target;
   allow_remote?: boolean;
@@ -1089,6 +1097,51 @@ export interface ResourceView {
     size_bytes: number;
     error: string;
   }[];
+  updated_at: string;
+}
+
+// ---- reference sets ---------------------------------------------------------------------------
+export interface ReferenceEntry {
+  asset_id: number;
+  mask_id?: number | null;
+  note?: string;
+}
+
+export interface ReferenceRoleEntries {
+  role: string;
+  label?: string;
+  entries: ReferenceEntry[];
+}
+
+export interface ReferenceSetDefinition {
+  description?: string;
+  notes?: string;
+  roles: ReferenceRoleEntries[];
+  representatives?: number[];
+}
+
+export interface ReferenceSetSummary {
+  id: number;
+  name: string;
+  head_revision: number;
+  archived: boolean;
+  description: string;
+  roles: { role: string; label: string; count: number }[];
+  representatives: number[];
+  updated_at: string;
+}
+
+export interface ReferenceSetRead {
+  id: number;
+  name: string;
+  revision: number;
+  head_revision: number;
+  digest: string;
+  archived: boolean;
+  definition: ReferenceSetDefinition;
+  roles: { role: string; label: string; count: number }[];
+  client: string;
+  created_at: string;
   updated_at: string;
 }
 

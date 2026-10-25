@@ -115,6 +115,42 @@ async def clone_preset(preset_id: str, *, revision: int | None, name: str | None
         preset_id, studio.PresetClone(revision=revision, name=name, id=new_id)))
 
 
+# ---- reference sets --------------------------------------------------------------------------
+async def reference_sets(include_archived: bool = False) -> list[dict[str, Any]]:
+    from ..routers import reference_sets as routes
+
+    return _json(await routes.list_sets(include_archived))
+
+
+async def reference_set(set_id: int, revision: int | None = None) -> dict[str, Any]:
+    from ..routers import reference_sets as routes
+
+    return _json(await routes.read_set(set_id, revision))
+
+
+async def save_reference_set(name: str, definition: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import reference_sets as routes
+
+    return _json(await routes.create_set(routes.ReferenceSetCreate(name=name,
+                                                                   definition=definition)))
+
+
+async def update_reference_set(set_id: int, definition: dict[str, Any], base_revision: int,
+                               name: str | None) -> dict[str, Any]:
+    from ..routers import reference_sets as routes
+
+    return _json(await routes.update_set(set_id, routes.ReferenceSetUpdate(
+        definition=definition, base_revision=base_revision, name=name)))
+
+
+async def archive_reference_set(set_id: int, archived: bool) -> dict[str, Any]:
+    from ..routers import reference_sets as routes
+
+    if archived:
+        return _json(await routes.archive_set(set_id))
+    return _json(await routes.unarchive_set(set_id))
+
+
 async def archive_preset(preset_id: str, archived: bool) -> dict[str, Any]:
     from ..routers import studio
 

@@ -33,6 +33,9 @@ import type {
   RemoteSession,
   ImportInspection,
   ImportTask,
+  ReferenceSetDefinition,
+  ReferenceSetRead,
+  ReferenceSetSummary,
   RemotePrepare,
   ResourceView,
   UploadSession,
@@ -417,6 +420,27 @@ export const api = {
     postJson(`/api/jobs/${jobId}/replay`, { mode }).then((r) => j<{ job_id: number; job_ids: number[] }>(r)),
   resources: (kind?: "model" | "adapter") =>
     get(`/api/resources${kind ? `?kind=${kind}` : ""}`).then((r) => j<ResourceView[]>(r)),
+  referenceSets: (includeArchived = false) =>
+    get(`/api/reference-sets${includeArchived ? "?include_archived=true" : ""}`).then((r) =>
+      j<ReferenceSetSummary[]>(r),
+    ),
+  referenceSet: (id: number, revision?: number) =>
+    get(`/api/reference-sets/${id}${revision ? `?revision=${revision}` : ""}`).then((r) =>
+      j<ReferenceSetRead>(r),
+    ),
+  createReferenceSet: (name: string, definition: ReferenceSetDefinition) =>
+    postJson("/api/reference-sets", { name, definition }).then((r) => j<ReferenceSetRead>(r)),
+  /** Save the next revision; a stale base is an ApiError with code revision_conflict. */
+  updateReferenceSet: (id: number, definition: ReferenceSetDefinition, baseRevision: number, name?: string) =>
+    safeFetch(`/api/reference-sets/${id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ definition, base_revision: baseRevision, ...(name ? { name } : {}) }),
+    }).then((r) => j<ReferenceSetRead>(r)),
+  archiveReferenceSet: (id: number, archived = true) =>
+    postJson(`/api/reference-sets/${id}/${archived ? "archive" : "unarchive"}`, {}).then((r) =>
+      j<ReferenceSetRead>(r),
+    ),
   rescanResources: () => postJson("/api/resources/rescan", {}).then((r) => j<Record<string, number>>(r)),
   createUpload: (body: { filename: string; size: number; kind: "adapter" | "model"; sha256?: string }) =>
     postJson("/api/resources/uploads", body).then((r) => j<UploadSession>(r)),

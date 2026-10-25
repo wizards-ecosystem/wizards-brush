@@ -89,6 +89,15 @@ class StyleText(BaseModel):
     text: str = Field(min_length=1, max_length=600)
 
 
+class ReferenceBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    revision: int | None = Field(default=None, ge=1,
+                                 description="Omit for the set's latest revision; the plan "
+                                             "records the one it used.")
+
+
 class ResolveInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,6 +106,9 @@ class ResolveInputs(BaseModel):
     last_frame: int | None = None
     # role -> asset ids, for the roles the preset declares.
     references: dict[str, list[int]] = Field(default_factory=dict)
+    # role -> a reference set to fill that role from; replaces a set the
+    # preset binds. A role takes ids or a set, never both.
+    reference_sets: dict[str, ReferenceBinding] = Field(default_factory=dict)
 
 
 class ResolveRequest(BaseModel):
@@ -171,6 +183,8 @@ class Context:
     resident: Callable[[], str | None] = field(default=lambda: None)
     # The app-wide capability revision, when the caller knows it.
     capability_revision: Callable[[], str] | None = None
+    # (set id, revision or None, role) -> {id, name, revision, digest, notes, entries}.
+    reference_set: Callable[[int, int | None, str], dict[str, Any]] | None = None
 
 
 def live() -> Context:
@@ -199,7 +213,7 @@ def live() -> Context:
 
         return bool(row is not None and row.path and Path(row.path).exists())
 
-    from .. import hardware
+    from .. import hardware, references
     from ..generators.vram import host_ram_shortfall
     from . import targets
 
@@ -213,7 +227,7 @@ def live() -> Context:
         hf_token=lambda: bool(settings.hf_token),
         policy=targets.policy, hardware=hardware.describe,
         memory_shortfall=lambda repo: host_ram_shortfall(repo, settings.local_quant),
-        resident=_resident_model,
+        resident=_resident_model, reference_set=references.role_entries,
     )
 
 
@@ -342,11 +356,20 @@ def _resolve(request: ResolveRequest, ctx: Context,
     known: dict[str, dict[str, Any]] = {str(c["name"]): c for c in (spec or {}).get("controls", [])}
 
     values, origins, changed = _settings(request, preset, known, slot, model_origin, warnings)
-    prompt = _prompt(request, preset, values, origins)
+    bound = _reference_sets(request, preset, ctx)
+    set_notes = [b["notes"] for role, b in bound.items()
+                 if b["notes"] and preset is not None
+                 and any(r.role == role and r.notes_in_prompt for r in preset.references)]
+    prompt_request = request
+    if set_notes and not request.notes:
+        prompt_request = request.model_copy(update={"notes": "; ".join(set_notes)})
+        origins["notes"] = ("override" if any(b["origin"] == "override" for b in bound.values())
+                            else "preset")
+    prompt = _prompt(prompt_request, preset, values, origins)
     adapters, loras = _adapters(request, preset, ctx, model_facts, slot, target, known, blockers,
                                 warnings)
     finish = _finish(request, preset, ctx, warnings)
-    inputs, paths, mask_path, last_path = _inputs(request, preset, kind, specs, ctx)
+    inputs, paths, mask_path, last_path = _inputs(request, preset, kind, specs, ctx, bound)
     origins["seed"] = seed_origin
     sent = len(inputs["images"]) + sum(len(v) for v in inputs["references"].values()) + \
         (1 if inputs["mask"] else 0) + (1 if inputs["last_frame"] else 0)
@@ -444,6 +467,7 @@ def _resolve(request: ResolveRequest, ctx: Context,
                  "mode": (effective or raw).get("seed_mode", "increment"), "items": seeds},
         "finish": finish,
         "validation": [v.model_dump() for v in (preset.validation if preset else [])],
+        "validation_spec": _validation_spec(preset),
         "warnings": warnings,
         "readiness": _readiness(blockers, warnings),
         "capability_revision": capability,
@@ -864,12 +888,59 @@ def _finish(request: ResolveRequest, preset: contracts.PresetDefinition | None, 
     return steps
 
 
+def _reference_sets(request: ResolveRequest, preset: contracts.PresetDefinition | None,
+                    ctx: Context) -> dict[str, dict[str, Any]]:
+    """The reference set behind each role, at the revision this plan pins.
+
+    A request's binding replaces the preset's. A role filled with explicit
+    ids uses no set; naming both for one role is ambiguous and refused.
+    """
+    given = request.inputs
+    roles = {r.role: r for r in (preset.references if preset else [])}
+    for role in given.reference_sets:
+        if role not in roles:
+            raise _bad(f"this setup has no {role!r} reference role",
+                       f"inputs.reference_sets.{role}", valid_options=list(roles))
+        if role in given.references:
+            raise _bad(f"the {role} role was given both asset ids and a reference set; send one",
+                       f"inputs.reference_sets.{role}", code="ambiguous_request")
+    bound: dict[str, dict[str, Any]] = {}
+    for role, declared in roles.items():
+        if role in given.references:
+            continue
+        binding = given.reference_sets.get(role)
+        set_id, revision = ((binding.id, binding.revision) if binding is not None
+                            else (declared.reference_set, None))
+        if set_id is None:
+            continue
+        if ctx.reference_set is None:
+            raise _bad("reference sets are not available here", f"inputs.reference_sets.{role}")
+        bound[role] = {**ctx.reference_set(int(set_id), revision, role),
+                       "origin": "override" if binding is not None else "preset"}
+    return bound
+
+
+def _validation_spec(preset: contracts.PresetDefinition | None) -> dict[str, Any] | None:
+    """The preset's validator policy as the checks will run it, or None."""
+    if preset is None or not preset.validation:
+        return None
+    from .. import validators
+
+    try:
+        spec = validators.spec_from_policies([v.model_dump() for v in preset.validation])
+    except ValueError as error:
+        raise _bad(f"the preset's validation policy is invalid: {error}", "validation") from None
+    return spec.model_dump(exclude_defaults=True)
+
+
 def _inputs(request: ResolveRequest, preset: contracts.PresetDefinition | None,
-            kind: str | None, specs: dict[str, dict[str, Any]], ctx: Context
+            kind: str | None, specs: dict[str, dict[str, Any]], ctx: Context,
+            bound: dict[str, dict[str, Any]] | None = None,
             ) -> tuple[dict[str, Any], list[str], str | None, str | None]:
     from ..routers.job_api import inputs_for
 
     given = request.inputs
+    bound = bound or {}
     roles = {r.role: r for r in (preset.references if preset else [])}
     for role in given.references:
         if role not in roles:
@@ -878,15 +949,31 @@ def _inputs(request: ResolveRequest, preset: contracts.PresetDefinition | None,
     images = list(given.images)
     references: dict[str, list[dict[str, Any]]] = {}
     for role, declared in roles.items():
-        ids = list(given.references.get(role, []))
+        from_set = bound.get(role)
+        entries = (from_set["entries"] if from_set is not None
+                   else [{"asset_id": i} for i in given.references.get(role, [])])
+        ids = [int(e["asset_id"]) for e in entries]
         if not declared.min <= len(ids) <= declared.max:
             want = (str(declared.min) if declared.min == declared.max
                     else f"{declared.min}-{declared.max}")
-            raise _bad(f"{role} takes {want} reference(s); got {len(ids)}",
-                       f"inputs.references.{role}", code="missing_input" if not ids else
-                       "invalid_request")
-        references[role] = [_asset_entry(i, "image", f"inputs.references.{role}.{n}", ctx)
-                            for n, i in enumerate(ids)]
+            # A set is never truncated to fit: dropping references silently
+            # would run a different setup than the one chosen.
+            source = (f"reference set '{from_set['name']}' revision {from_set['revision']} has"
+                      if from_set is not None else "got")
+            raise _bad(f"{role} takes {want} reference(s); {source} {len(ids)}",
+                       f"inputs.reference_sets.{role}" if from_set is not None
+                       else f"inputs.references.{role}",
+                       code="missing_input" if not ids else "invalid_request")
+        role_entries = []
+        for n, entry in enumerate(entries):
+            item = _asset_entry(ids[n], "image", f"inputs.references.{role}.{n}", ctx)
+            if entry.get("mask_id"):
+                item["mask"] = _asset_entry(int(entry["mask_id"]), "image",
+                                            f"inputs.references.{role}.{n}.mask", ctx)
+            if entry.get("note"):
+                item["note"] = entry["note"]
+            role_entries.append(item)
+        references[role] = role_entries
         images.extend(ids)
     entries = [_asset_entry(i, "image", f"inputs.images.{n}", ctx)
                for n, i in enumerate(given.images)]
@@ -915,7 +1002,12 @@ def _inputs(request: ResolveRequest, preset: contracts.PresetDefinition | None,
         if last is not None and not spec.last_frame:
             raise _bad(f"{kind} does not take a last frame here", "inputs.last_frame")
     paths = [ctx.asset(i).path for i in images]
-    record = {"images": entries, "references": references, "mask": mask, "last_frame": last}
+    record: dict[str, Any] = {"images": entries, "references": references, "mask": mask,
+                              "last_frame": last}
+    if bound:
+        record["reference_sets"] = {
+            role: {k: b[k] for k in ("id", "name", "revision", "digest", "origin")}
+            for role, b in bound.items()}
     return (record, paths, ctx.asset(given.mask).path if given.mask else None,
             ctx.asset(given.last_frame).path if given.last_frame else None)
 

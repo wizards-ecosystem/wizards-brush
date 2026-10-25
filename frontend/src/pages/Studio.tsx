@@ -451,7 +451,9 @@ export function Studio() {
                   references={draft.references}
                   onImages={(images) => update({ images })}
                   onMask={(mask) => update({ mask })}
+                  referenceSets={draft.referenceSets}
                   onReferences={(references) => update({ references })}
+                  onReferenceSets={(referenceSets) => update({ referenceSets })}
                 />
                 {quick.length > 0 && (
                   <DynamicControls

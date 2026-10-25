@@ -215,3 +215,69 @@ def test_file_always_runs_first_and_a_buggy_check_cannot_crash(tmp_path, monkeyp
     verdict, results = validators.run(_opaque(tmp_path))
     assert results[0].validator == "file"
     assert verdict == "failed" and "could not run" in _by_name(results)["boom"].message
+
+
+# ---- required and optional ---------------------------------------------------------------
+def test_a_required_check_that_cannot_judge_fails_instead_of_warning(tmp_path):
+    # No alpha: margins cannot be measured. Unlisted, that is a warning ...
+    path = _opaque(tmp_path)
+    verdict, results = validators.run(path, {"safe_margin": 4})
+    assert verdict == "warned" and _by_name(results)["margins"].available is False
+    # ... but a required condition is never satisfied by "could not tell".
+    verdict, results = validators.run(path, {"safe_margin": 4, "required": ["margins"]})
+    margins = _by_name(results)["margins"]
+    assert verdict == "failed" and margins.status == "fail"
+    assert margins.message.startswith("required check could not run")
+    assert margins.as_dict()["available"] is False
+
+
+def test_a_required_identity_check_without_a_source_fails(tmp_path):
+    spec = {"face_identity_min": 0.5}
+    verdict, _ = validators.run(_opaque(tmp_path), spec)
+    assert verdict == "warned"
+    verdict, results = validators.run(_opaque(tmp_path), {**spec, "required": ["face_identity"]})
+    assert verdict == "failed" and _by_name(results)["face_identity"].status == "fail"
+
+
+def test_a_required_check_the_spec_never_configured_fails(tmp_path):
+    verdict, results = validators.run(_cutout(tmp_path), {"required": ["coverage"]})
+    assert verdict == "failed"
+    assert _by_name(results)["coverage"].message.startswith("required check did not run")
+
+
+def test_an_optional_failure_warns_and_remembers_it_failed(tmp_path):
+    verdict, results = validators.run(_opaque(tmp_path),
+                                      {"alpha": "required", "optional": ["alpha"]})
+    alpha = _by_name(results)["alpha"]
+    assert verdict == "warned" and alpha.status == "warn"
+    assert alpha.details["original_status"] == "fail"
+
+
+def test_policy_names_are_checked_and_cannot_be_both():
+    with pytest.raises(ValueError, match="unknown validator"):
+        ValidationSpec(required=["vibes"])
+    with pytest.raises(ValueError, match="both required and optional"):
+        ValidationSpec(required=["alpha"], optional=["alpha"])
+    assert ValidationSpec(required=["finishing"]).required == ["finishing"]
+
+
+def test_policy_application_is_idempotent(tmp_path):
+    spec = ValidationSpec(safe_margin=4, required=["margins", "coverage"], optional=["alpha"])
+    _, once = validators.run(_opaque(tmp_path), spec)
+    twice = validators.apply_policy(once, spec)
+    assert [r.as_dict() for r in twice] == [r.as_dict() for r in once]
+
+
+def test_preset_policies_compile_into_one_spec():
+    spec = validators.spec_from_policies([
+        {"validator": "alpha", "required": True, "options": {"alpha": "required"}},
+        {"validator": "coverage", "options": {"min_transparent_fraction": 0.1}},
+    ])
+    assert spec.alpha == "required" and spec.required == ["alpha"]
+    assert spec.optional == ["coverage"] and spec.min_transparent_fraction == 0.1
+    with pytest.raises(ValueError, match="not a validator option"):
+        validators.spec_from_policies([{"validator": "alpha", "options": {"required": ["x"]}}])
+    with pytest.raises(ValueError, match="conflicts"):
+        validators.spec_from_policies([
+            {"validator": "alpha", "options": {"alpha": "required"}},
+            {"validator": "alpha", "options": {"alpha": "forbidden"}}])

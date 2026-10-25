@@ -14,6 +14,7 @@ const workspaceLinks: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/variants", label: "Variants", icon: "layers" },
   { to: "/recipes", label: "Recipes", icon: "bookmark" },
   { to: "/tools", label: "Tools", icon: "tools" },
+  { to: "/references", label: "References", icon: "image" },
   { to: "/resources", label: "Resources", icon: "download" },
   { to: "/trash", label: "Trash", icon: "trash" },
   { to: "/settings", label: "Settings", icon: "settings" },
@@ -308,6 +309,7 @@ export function Layout() {
           <RailLink to="/recipes" label="Recipes" icon="bookmark" />
           <RailLink to="/tools" label="Tools" icon="tools" />
           <div className="mt-auto border-t border-edge pt-2">
+            <RailLink to="/references" label="References" icon="image" />
             <RailLink to="/resources" label="Resources" icon="download" />
             <RailLink to="/trash" label="Trash" icon="trash" />
             <RailLink to="/settings" label="Settings" icon="settings" />
