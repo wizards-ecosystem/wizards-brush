@@ -1197,6 +1197,73 @@ export interface ReferenceSetSummary {
   updated_at: string;
 }
 
+// ---- canvas ----------------------------------------------------------------------------------
+export interface CanvasTransform {
+  x: number;
+  y: number;
+  scale_x: number;
+  scale_y: number;
+  /** Degrees clockwise about the layer's centre, as CSS rotate(). */
+  rotation: number;
+}
+
+export interface CanvasLayer {
+  id: string;
+  name: string;
+  asset_id: number;
+  mask_id?: number | null;
+  transform: CanvasTransform;
+  opacity: number;
+  visible: boolean;
+  blend_mode: "normal" | "multiply" | "screen";
+  lineage?: { job_id?: number | null; from_layer?: string | null } | null;
+}
+
+/** A layered document; layers are bottom first. */
+export interface CanvasDocument {
+  schema_version: 1;
+  width: number;
+  height: number;
+  color_space: "srgb";
+  background: string;
+  layers: CanvasLayer[];
+}
+
+export interface CanvasRead {
+  id: number;
+  name: string;
+  revision: number;
+  head_revision: number;
+  digest: string;
+  archived: boolean;
+  document: CanvasDocument;
+  /** Asset ids no longer in the gallery; their layers stay as placeholders. */
+  missing: number[];
+  client: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanvasSummary {
+  id: number;
+  name: string;
+  head_revision: number;
+  width: number;
+  height: number;
+  archived: boolean;
+  updated_at: string;
+}
+
+export interface CanvasFlatten {
+  asset_id: number;
+  project_id: number;
+  revision: number;
+  width: number;
+  height: number;
+  missing: number[];
+  asset: Asset | null;
+}
+
 export interface ReferenceSetRead {
   id: number;
   name: string;

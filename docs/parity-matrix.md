@@ -25,7 +25,7 @@ named in the last column pin the MCP side.
 | Job cancellation | Supported | Supported (`/api/jobs/{id}/cancel`) | Supported (`cancel_job`, which separates requested from settled) | `test_mcp_studio.py` |
 | Targets and routing policy | Supported (Settings → Routing, Remote GPU panel) | Supported (`/api/targets`, `PUT /api/targets/policy`) | Read-only by design (`list_targets`): an agent cannot widen where inputs may go | `test_mcp_studio.py` |
 | Resources: inventory, local import, provider import, remote preparation | Supported (Resources page) | Supported (`/api/resources/*`); provider imports with P07 | Partial: `list_resources`, `get_resource`, `rescan_resources`, `prepare_resource_on_remote`; no file upload over MCP | — |
-| Canvas document operations | Not yet (P20) | Not yet (P20) | Not yet (P20) | — |
+| Canvas document operations | Supported (Canvas page; Open in canvas from the asset viewer) | Supported (`/api/canvas/*`) | Supported (`list_canvases`, `get_canvas`, `create_canvas`, `save_canvas`, `flatten_canvas`, `add_canvas_layer`); edits run through `run_preset`/`edit` and come back with `add_canvas_layer` | `test_canvas.py` |
 
 ## Client classes
 

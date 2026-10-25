@@ -120,6 +120,13 @@
   storage under `output/artifacts/<token>/`, MIME + SHA-256, a 7-day expiry swept at
   startup, downloaded through authenticated `/api/artifacts/{id}/file`. An artifact is
   not a gallery asset, and a frame never shifts index when an earlier one is missing
+- `backend/app/canvas.py` + `routers/canvas.py` - canvas projects (migration `0019`):
+  a layered document over gallery assets with **append-only revisions** behind a
+  `base_revision` compare-and-set. Layers only reference assets - deleting a project
+  never deletes one, and a trashed source is a placeholder listed under `missing`.
+  `render()` is the one Pillow renderer (transform: scale, then top-left at x/y, then
+  rotate clockwise about the box centre, as CSS); flatten writes a new `canvas` asset
+  with lineage. Editing a layer goes through the ordinary job API - no canvas job kind
 - `backend/app/exports.py` - the single ZIP writer for gallery and Variant Set exports; the
   `embed_metadata` privacy setting governs manifests, and server paths never enter one
 - `backend/app/routers/job_api.py` - **the API is a first-class client surface** (guide:

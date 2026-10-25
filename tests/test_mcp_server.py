@@ -39,6 +39,9 @@ _TOOLS = {
     "retry_variant_set", "rerun_variant_item",
     # P16: sprite sheets, atlases and artifacts.
     "preview_sprite_export", "create_sprite_export", "get_artifact", "fetch_artifact",
+    # P20: canvas.
+    "list_canvases", "get_canvas", "create_canvas", "save_canvas", "flatten_canvas",
+    "add_canvas_layer",
 }
 
 

@@ -31,6 +31,7 @@ from .queue import resume_queued, start_all
 from .routers import (
     artifacts,
     assets,
+    canvas,
     collections,
     grid,
     images,
@@ -424,7 +425,7 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router, recipes.router, studio.router, resources.router,
           resource_imports.router, targets.router, reference_sets.router,
-          artifacts.router, openai_router):
+          artifacts.router, canvas.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route
