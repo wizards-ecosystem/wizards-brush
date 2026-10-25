@@ -120,6 +120,8 @@ def test_nested_storage_symlink_cannot_escape(tmp_path):
         _ = candidate.images_dir
 
 
+@pytest.mark.skipif(os.name == "nt", reason="project-env.sh is the POSIX environment; "
+                    "Windows uses project-env.ps1")
 def test_sourcing_project_environment_repairs_path_overrides():
     script = (
         "source scripts/project-env.sh; "

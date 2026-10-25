@@ -50,7 +50,7 @@ def test_the_documented_round_trip_works(client, monkeypatch, tmp_path):
 
     assert result["status"] == "complete"
     assert [p.name for p in result["edited"]]
-    names = sorted(str(p.relative_to(tmp_path / "out" / "set")) for p in result["outputs"])
+    names = sorted(p.relative_to(tmp_path / "out" / "set").as_posix() for p in result["outputs"])
     assert names == ["moss-green/front.png", "moss-green/side.png",
                      "slate-blue/front.png", "slate-blue/side.png"]
     for path in result["outputs"]:

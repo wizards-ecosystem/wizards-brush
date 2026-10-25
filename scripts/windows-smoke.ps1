@@ -39,7 +39,9 @@ $report['host_ram'] = "$python"
 
 Step 'start' { & "$PSScriptRoot\start.ps1" -NoBrowser -Port $Port; $global:LASTEXITCODE = 0 }
 $system = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/system" -TimeoutSec 10
-$report['api/system host_ram'] = ($system.hardware.host_ram | ConvertTo-Json -Compress)
+$report['api/system version'] = "$($system.version)"
+$backends = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/backends" -TimeoutSec 10
+$report['api/backends host_ram'] = ($backends.hardware.host_ram | ConvertTo-Json -Compress)
 $running = @(Get-OwnProcesses)
 $report['processes while running'] = ($running | ForEach-Object { "$($_.ProcessId) $($_.Name)" }) -join ', '
 Step 'second start refused' {

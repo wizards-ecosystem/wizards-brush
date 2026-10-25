@@ -17,6 +17,32 @@ import subprocess
 from pathlib import Path
 
 
+def _oem_text(raw: bytes | None) -> str:
+    """Decode console-tool output. `icacls` writes in the OEM code page (cp850,
+    cp437...), not UTF-8, so a path with an accent would not decode under
+    PYTHONUTF8; an undecodable byte is replaced rather than raised."""
+    if not raw:
+        return ""
+    codepage = 0
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            codepage = int(ctypes.windll.kernel32.GetOEMCP())  # type: ignore[attr-defined]
+        except (AttributeError, OSError, ValueError):
+            codepage = 0
+    try:
+        return raw.decode(f"cp{codepage}" if codepage else "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _icacls(*args: str) -> tuple[int, str]:
+    done = subprocess.run(["icacls", *args], capture_output=True, check=False,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return done.returncode, _oem_text(done.stdout) + _oem_text(done.stderr)
+
+
 def _windows_principal() -> str:
     user = os.environ.get("USERNAME", "")
     domain = os.environ.get("USERDOMAIN", "")
@@ -33,14 +59,9 @@ def restrict(path: Path) -> None:
         principal = _windows_principal()
         if not principal:
             raise OSError("cannot tell which Windows account owns this process")
-        done = subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:(F)"],
-            capture_output=True, text=True, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if done.returncode != 0:
-            raise OSError(f"icacls could not restrict {path.name}: "
-                          f"{(done.stdout + done.stderr).strip()[:300]}")
+        code, output = _icacls(str(path), "/inheritance:r", "/grant:r", f"{principal}:(F)")
+        if code != 0:
+            raise OSError(f"icacls could not restrict {path.name}: {output.strip()[:300]}")
 
 
 def is_private(path: Path) -> bool | None:
@@ -50,14 +71,12 @@ def is_private(path: Path) -> bool | None:
     if os.name != "nt":
         return None
     try:
-        done = subprocess.run(["icacls", str(path)], capture_output=True, text=True,
-                              check=False,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        code, output = _icacls(str(path))
     except OSError:
         return None
-    if done.returncode != 0:
+    if code != 0:
         return None
-    return grants_only(done.stdout, str(path), _windows_principal())
+    return grants_only(output, str(path), _windows_principal())
 
 
 def grants_only(listing: str, path: str, principal: str) -> bool:

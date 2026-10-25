@@ -45,12 +45,41 @@ _JOB_HANDLE: Any = None          # kept alive for the life of the process
 
 
 # ---- process identity ---------------------------------------------------------------
+def _kernel32() -> Any:
+    """A private kernel32 with every prototype this module calls declared.
+
+    Without declared types ctypes passes and returns handles as C int, which
+    overflows on the 64-bit pseudo-handle GetCurrentProcess returns. A private
+    WinDLL keeps these prototypes from changing the shared windll.kernel32.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    handle, dword, boolean = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL
+    for name, args, result in (
+        ("OpenProcess", (dword, boolean, dword), handle),
+        ("GetExitCodeProcess", (handle, ctypes.POINTER(dword)), boolean),
+        ("QueryFullProcessImageNameW", (handle, dword, wintypes.LPWSTR, ctypes.POINTER(dword)),
+         boolean),
+        ("CloseHandle", (handle,), boolean),
+        ("CreateJobObjectW", (ctypes.c_void_p, wintypes.LPCWSTR), handle),
+        ("SetInformationJobObject", (handle, ctypes.c_int, ctypes.c_void_p, dword), boolean),
+        ("AssignProcessToJobObject", (handle, handle), boolean),
+        ("GetCurrentProcess", (), handle),
+    ):
+        function = getattr(k, name)
+        function.argtypes = list(args)
+        function.restype = result
+    return k
+
+
 def _windows_process(pid: int) -> tuple[bool, str]:
     """(alive, image path) for a Windows pid, through the Win32 API."""
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32 = _kernel32()
     query_limited = 0x1000
     handle = kernel32.OpenProcess(query_limited, False, pid)
     if not handle:
@@ -155,9 +184,7 @@ def _contain_children() -> None:
             ("PeakJobMemoryUsed", ctypes.c_size_t),
         ]
 
-    kernel32 = ctypes.windll.kernel32
-    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32 = _kernel32()
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
         print("warning: could not create a job object; children may outlive a crash",

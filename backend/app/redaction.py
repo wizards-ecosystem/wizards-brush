@@ -18,27 +18,47 @@ from .config import ROOT
 
 
 def _owner_home() -> str:
-    """The account's real home directory. The app runs with HOME redirected into
-    the project (scripts/project-env.sh), so the environment cannot answer."""
+    """The account's real home directory. The app runs with HOME (and on
+    Windows USERPROFILE) redirected into the project by project-env, so the
+    environment cannot answer; ask the account database instead."""
     try:
         import pwd
 
         return pwd.getpwuid(os.getuid()).pw_dir
     except (ImportError, KeyError, OSError):
-        return os.path.expanduser("~")
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(260)
+            # CSIDL_PROFILE: the profile folder from the registry, not from env.
+            if ctypes.windll.shell32.SHGetFolderPathW(  # type: ignore[attr-defined]
+                    None, 0x0028, None, 0, buffer) == 0 and buffer.value:
+                return buffer.value
+        except (AttributeError, OSError):
+            pass
+    return os.path.expanduser("~")
 
 
 # Longest first, so the app folder is made relative before the home it sits in
 # is shortened to `~`.
 _ROOTS = sorted({str(ROOT), os.path.realpath(ROOT)}, key=len, reverse=True)
-_HOME = _owner_home().rstrip(os.sep)
+_HOME = _owner_home().rstrip("\\/")
+# Windows accepts both separators, and a path built with "/" after a native
+# root ("C:\\app" + "/output") must not slip past as "./output".
+_SEPS = (os.sep, "/") if os.sep != "/" else ("/",)
 
 
 def redact_text(text: str) -> str:
     for root in _ROOTS:
-        text = text.replace(root + os.sep, "").replace(root, ".")
+        for sep in _SEPS:
+            text = text.replace(root + sep, "")
+        text = text.replace(root, ".")
     if len(_HOME) > 1:
-        text = text.replace(_HOME + os.sep, "~" + os.sep).replace(_HOME, "~")
+        for sep in _SEPS:
+            text = text.replace(_HOME + sep, "~" + sep)
+        text = text.replace(_HOME, "~")
     return text
 
 

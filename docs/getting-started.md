@@ -80,12 +80,22 @@ Vite), `browser`, `doctor` and `test`. It runs the PowerShell 5.1 scripts in
   administrator enable long paths; the doctor warns when a deep cache could
   pass 260 characters.
 
-**Not verified yet:** any of the above on real Windows hardware (it has been
-written and checked on Linux only so far; `scripts\windows-smoke.ps1` is the
-check, also run by CI on `windows-latest`), `-Deps full` (the CUDA torch stack
-and optional processors from Windows wheels), local GPU generation,
-bitsandbytes and Nunchaku quantization, matting, face restoration, FFmpeg
-video and a release bundle. Until those pass, use WSL2 for local generation.
+**Verified on real Windows** (Windows 11 build 26200, x64, PowerShell 5.1,
+2026-10-24), in a checkout whose path holds a space and an accented letter,
+by `scripts\windows-smoke.ps1`: the pinned uv and Node bootstrap, `setup -Deps
+test`, the whole backend test suite run natively, start, an API answer, a
+refused second start, a graceful stop leaving no process of the checkout
+behind, and the doctor (every writable path inside the checkout, `.env`
+owner-only). That first run found and fixed four Windows-only bugs: native
+command output decoded in the wrong code page, `icacls` output decoded as
+UTF-8, Win32 handles passed to ctypes without declared types, and path
+redaction that missed `/` after a Windows root and read the redirected
+profile instead of the real one. CI runs the same script on `windows-latest`.
+
+**Not verified yet:** `-Deps full` (the CUDA torch stack and optional
+processors from Windows wheels), local GPU generation, bitsandbytes and
+Nunchaku quantization, matting, face restoration, FFmpeg video and a release
+bundle. Until those pass, use WSL2 for local generation.
 
 ## Install
 

@@ -176,6 +176,13 @@ foreach ($file in @($env:PIP_CONFIG_FILE, $env:NPM_CONFIG_USERCONFIG)) {
     if (-not (Test-Path -LiteralPath $file)) { New-Item -ItemType File -Path $file | Out-Null }
 }
 
+# Native tools (uv, Python with PYTHONUTF8, node) write UTF-8. Windows
+# PowerShell 5.1 decodes their output in the OEM code page unless told
+# otherwise, which turned a checkout path such as "wb smoke <e-acute>" into
+# mojibake and made the containment check reject uv's own Python path.
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
 $wbVersions = Read-WbToolVersions
 $wbArch = Get-WbArch
 $script:WbNodeDir = Join-Path $WbToolsDir ("node-v{0}-win-{1}" -f $wbVersions['NODE_VERSION'], $wbArch.Node)

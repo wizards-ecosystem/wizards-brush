@@ -6,6 +6,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from backend.app.config import Settings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,8 @@ def test_public_release_files_exist():
 
 def test_tracked_sources_exclude_the_retired_label():
     """Keep the removed label out of code, docs, tests, and release metadata."""
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout (a release archive or an exported copy)")
     forbidden = "ns" + "fw"
     listed = subprocess.run(
         ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True,
