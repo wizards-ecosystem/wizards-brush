@@ -1124,6 +1124,48 @@ export interface ResourceView {
   updated_at: string;
 }
 
+// ---- sprite sheets, atlases and artifacts ----------------------------------------------------
+export interface SpriteProfile {
+  mode: "grid" | "atlas";
+  name?: string;
+  order?: "set" | "key";
+  columns?: number | null;
+  cell_width?: number | null;
+  cell_height?: number | null;
+  fit?: "require_match" | "pad" | "contain";
+  max_width?: number;
+  max_height?: number;
+  trim?: boolean;
+  allow_multiple_pages?: boolean;
+  padding?: number;
+  extrude?: number;
+  background?: string;
+  pixel_art?: boolean;
+  partial?: boolean;
+}
+
+export interface SpritePreview {
+  pages: { width: number; height: number }[];
+  frames: { index: number; key: string; page: number; x: number; y: number; w: number; h: number }[];
+  missing: { index: number; key: string; reason: string }[];
+  grid: { columns: number; cell_width: number; cell_height: number } | null;
+}
+
+/** A typed export output in managed storage, downloadable until it expires. */
+export interface ArtifactView {
+  id: number;
+  kind: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  source: string;
+  meta: Record<string, unknown>;
+  created_at: string;
+  expires_at: string | null;
+  file_url: string;
+}
+
 // ---- reference sets ---------------------------------------------------------------------------
 export interface ReferenceEntry {
   asset_id: number;
@@ -1153,6 +1195,73 @@ export interface ReferenceSetSummary {
   roles: { role: string; label: string; count: number }[];
   representatives: number[];
   updated_at: string;
+}
+
+// ---- canvas ----------------------------------------------------------------------------------
+export interface CanvasTransform {
+  x: number;
+  y: number;
+  scale_x: number;
+  scale_y: number;
+  /** Degrees clockwise about the layer's centre, as CSS rotate(). */
+  rotation: number;
+}
+
+export interface CanvasLayer {
+  id: string;
+  name: string;
+  asset_id: number;
+  mask_id?: number | null;
+  transform: CanvasTransform;
+  opacity: number;
+  visible: boolean;
+  blend_mode: "normal" | "multiply" | "screen";
+  lineage?: { job_id?: number | null; from_layer?: string | null } | null;
+}
+
+/** A layered document; layers are bottom first. */
+export interface CanvasDocument {
+  schema_version: 1;
+  width: number;
+  height: number;
+  color_space: "srgb";
+  background: string;
+  layers: CanvasLayer[];
+}
+
+export interface CanvasRead {
+  id: number;
+  name: string;
+  revision: number;
+  head_revision: number;
+  digest: string;
+  archived: boolean;
+  document: CanvasDocument;
+  /** Asset ids no longer in the gallery; their layers stay as placeholders. */
+  missing: number[];
+  client: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanvasSummary {
+  id: number;
+  name: string;
+  head_revision: number;
+  width: number;
+  height: number;
+  archived: boolean;
+  updated_at: string;
+}
+
+export interface CanvasFlatten {
+  asset_id: number;
+  project_id: number;
+  revision: number;
+  width: number;
+  height: number;
+  missing: number[];
+  asset: Asset | null;
 }
 
 export interface ReferenceSetRead {

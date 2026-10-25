@@ -160,6 +160,42 @@ async def rerun_variant_item(set_id: int, item_id: int, reseed: bool,
                                          routes.RerunBody(reseed=reseed, cascade=cascade)))
 
 
+async def preview_sprites(set_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.preview_sprites(set_id, routes.SpriteProfile.model_validate(profile)))
+
+
+async def export_sprites(set_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.export_sprites(set_id, routes.SpriteProfile.model_validate(profile)))
+
+
+# ---- artifacts ---------------------------------------------------------------------------------
+ARTIFACT_MAX_BYTES = 16 * 1024 * 1024
+
+
+async def artifact(artifact_id: int) -> dict[str, Any]:
+    from ..routers import artifacts as routes
+
+    return _json(await routes.read_artifact(artifact_id))
+
+
+def artifact_bytes(artifact_id: int) -> tuple[bytes, dict[str, Any]]:
+    """An artifact's bytes for clients that cannot fetch file_url, within a cap."""
+    from pathlib import Path
+
+    from .. import artifacts
+
+    row = artifacts.get(artifact_id)
+    if row.size_bytes > ARTIFACT_MAX_BYTES:
+        raise RequestError(413, f"artifact {artifact_id} is {row.size_bytes} bytes; fetch "
+                                f"{artifacts.view(row)['file_url']} with the API token instead",
+                           code="too_large", field="artifact_id")
+    return Path(row.path).read_bytes(), _json(artifacts.view(row))
+
+
 # ---- reference sets --------------------------------------------------------------------------
 async def reference_sets(include_archived: bool = False) -> list[dict[str, Any]]:
     from ..routers import reference_sets as routes
@@ -194,6 +230,51 @@ async def archive_reference_set(set_id: int, archived: bool) -> dict[str, Any]:
     if archived:
         return _json(await routes.archive_set(set_id))
     return _json(await routes.unarchive_set(set_id))
+
+
+# ---- canvas ----------------------------------------------------------------------------------
+async def canvases(include_archived: bool = False) -> list[dict[str, Any]]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.list_projects(include_archived))
+
+
+async def canvas(project_id: int, revision: int | None = None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.read_project(project_id, revision))
+
+
+async def create_canvas(name: str, document: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.create_project(routes.CanvasCreate(name=name, document=document)))
+
+
+async def save_canvas(project_id: int, document: dict[str, Any], base_revision: int,
+                      name: str | None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.save_project(project_id, routes.CanvasSave(
+        document=document, base_revision=base_revision, name=name)))
+
+
+async def flatten_canvas(project_id: int, revision: int | None,
+                         allow_missing: bool) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.flatten_project(project_id, routes.FlattenBody(
+        revision=revision, allow_missing=allow_missing)))
+
+
+async def add_canvas_layer(project_id: int, *, base_revision: int, asset_id: int | None,
+                           job_id: int | None, name: str, from_layer: str | None,
+                           mask_id: int | None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.add_layer(project_id, routes.LayerAdd(
+        base_revision=base_revision, asset_id=asset_id, job_id=job_id, name=name,
+        from_layer=from_layer, mask_id=mask_id)))
 
 
 async def archive_preset(preset_id: str, archived: bool) -> dict[str, Any]:

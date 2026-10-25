@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Asset, VariantItem, VariantSetDetail as SetDetail } from "../api/types";
 import { AssetModal } from "../components/AssetModal";
 import { Icon } from "../components/icons";
+import { SpriteExportDialog } from "../components/SpriteExportDialog";
 import {
   Button,
   ConfirmDialog,
@@ -68,6 +69,7 @@ export function VariantSetDetail() {
   const [open, setOpen] = useState<Asset | null>(null);
   const [busy, setBusy] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [spriteOpen, setSpriteOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [savingRecipe, setSavingRecipe] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -237,9 +239,16 @@ export function VariantSetDetail() {
                 Export ZIP
               </Button>
             )}
+            {(c.succeeded || 0) > 0 && (
+              <Button icon="layers" onClick={() => setSpriteOpen(true)}>
+                Sheet / atlas
+              </Button>
+            )}
           </>
         }
       />
+
+      {spriteOpen && <SpriteExportDialog setId={setId} onClose={() => setSpriteOpen(false)} />}
 
       <section className="mt-6 border-y border-edge py-4" aria-label="Set progress">
         <div className="flex flex-wrap gap-x-6 gap-y-3">

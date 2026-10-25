@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../api/client", () => ({
   authHeaders: () => ({}),
   api: {
+    // The stage editor offers studio presets per stage (P15).
+    studioPresets: vi.fn().mockResolvedValue([]),
     variantCapabilities: mocks.variantCapabilities,
     previewVariantSet: mocks.previewVariantSet,
     createVariantSet: mocks.createVariantSet,

@@ -29,7 +29,9 @@ from .generators.base import setup_hf_env
 from .problems import RequestError, error_body
 from .queue import resume_queued, start_all
 from .routers import (
+    artifacts,
     assets,
+    canvas,
     collections,
     grid,
     images,
@@ -92,6 +94,9 @@ def _warm_and_sweep() -> None:
 
         resource_catalogue.refresh()
         intake.sweep_uploads()
+        from . import artifacts as artifact_store
+
+        artifact_store.sweep()
     except Exception as e:  # noqa: BLE001 — the catalogue is advisory at startup
         logger.warning("resource catalogue refresh skipped: %s", e)
     # Detect the GPU once, here, where paying the torch import is already the
@@ -419,7 +424,8 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
           variant_sets.router, recipes.router, studio.router, resources.router,
-          resource_imports.router, targets.router, reference_sets.router, openai_router):
+          resource_imports.router, targets.router, reference_sets.router,
+          artifacts.router, canvas.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

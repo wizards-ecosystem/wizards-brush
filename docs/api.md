@@ -30,6 +30,8 @@ The test suite runs it against the real app, so it stays correct.
 - [Recipes](#recipes)
 - [Saved recipes](#saved-recipes)
 - [Reference sets](#reference-sets)
+- [Sprite sheets and atlases](#sprite-sheets-and-atlases)
+- [Canvas](#canvas)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
 
@@ -518,6 +520,57 @@ The manifest follows the app's privacy setting. With embedded metadata off,
 prompts and settings are redacted from it, just as they are from exported
 files.
 
+## Sprite sheets and atlases
+
+A finished set's final stage can be exported as a **grid sheet** (equal cells)
+or a **packed atlas** (shelf-packed rectangles, optionally trimmed, across one
+or more pages). Preview first; nothing is drawn or written:
+
+```http
+POST /api/variant-sets/12/sprites/preview
+{"mode": "atlas", "trim": true, "padding": 2, "extrude": 1, "max_width": 1024,
+ "max_height": 1024, "allow_multiple_pages": true}
+```
+
+The answer lists the pages and their sizes, every frame's page and rectangle,
+and the frames that are missing. `POST /api/variant-sets/12/sprites` with the
+same profile builds the PNG pages and `manifest.json`, checks them (every
+rectangle inside its page, none overlapping, every frame cut back out of the
+written PNG and compared with its source), zips them and publishes an
+**artifact**.
+
+| Profile field | Meaning |
+| --- | --- |
+| `mode` | `grid` or `atlas` |
+| `order` | `set` (the set's own order) or `key` |
+| `columns`, `cell_width`, `cell_height` | Grid layout; cells default to the largest frame |
+| `fit` | Grid only: `require_match` (refuse other sizes), `pad` (centre unscaled) or `contain` (shrink into a fixed cell). Frames are never stretched |
+| `max_width`, `max_height`, `allow_multiple_pages`, `trim` | Atlas layout |
+| `padding`, `extrude` | Clear pixels around each rectangle; edge pixels repeated outward (padding must be at least twice the extrusion) |
+| `background` | `transparent` or `#rrggbb` |
+| `pixel_art` | Nearest-neighbour scaling, never smoothing |
+| `pivot`, `durations` | Metadata written to the manifest; durations are never inferred |
+| `partial` | Export what exists and list omissions, instead of refusing |
+
+The manifest (`format: wizards-brush/atlas`, `format_version: 1`) records each
+frame's stable key, index, asset id, page, `x`/`y`/`w`/`h`, original size and
+trim offsets. Coordinates are top-left pixels; rectangles exclude padding and
+are never rotated. A missing frame keeps its index in `missing`. With the
+metadata privacy setting off, axis labels and the set name are left out.
+
+### Artifacts
+
+An artifact is a typed export output kept in managed storage. It has a MIME
+type, size and SHA-256, and stays downloadable until `expires_at` (seven days),
+not just for one response:
+
+- `GET /api/artifacts/{id}`: the record
+- `GET /api/artifacts/{id}/file`: the bytes (authenticated like every `/api` route; `X-Content-SHA256` header)
+- `DELETE /api/artifacts/{id}`: remove it. The assets it was made from are untouched.
+
+MCP: `preview_sprite_export`, `create_sprite_export`, `get_artifact`, and
+`fetch_artifact` (the bytes as an embedded resource, up to 16 MB).
+
 ## Recipes
 
 A Variant Set recipe is a saved definition of axes, templates and stages.
@@ -743,6 +796,45 @@ set, never both (`ambiguous_request`). A set with more or fewer references
 than the role accepts is refused, never trimmed. When the role has
 `notes_in_prompt` and the request sends no `notes`, the set's notes fill
 `{{notes}}`.
+
+## Canvas
+
+A canvas project is a layered document over gallery assets. Layers are listed
+bottom first; each points at an image (`asset_id`) and optionally a mask the
+same size as that image (`mask_id`, white keeps). The transform places it: the
+image is scaled by `scale_x`/`scale_y`, its top-left lands at `x`, `y` in
+canvas pixels (origin top-left), and it is rotated by `rotation` degrees
+clockwise about the centre of that scaled box, as CSS `rotate()` does.
+`opacity` multiplies alpha; `blend_mode` is `normal`, `multiply` or `screen`.
+
+```http
+POST /api/canvas
+{"name": "Poster", "document": {"schema_version": 1, "width": 1024, "height": 1024,
+  "color_space": "srgb", "background": "transparent",
+  "layers": [{"id": "bg", "asset_id": 41},
+             {"id": "logo", "asset_id": 57, "mask_id": 58,
+              "transform": {"x": 640, "y": 80, "scale_x": 0.5, "scale_y": 0.5, "rotation": 12},
+              "opacity": 0.9, "blend_mode": "normal"}]}}
+```
+
+Assets are only referenced: editing never changes a gallery file, and
+`DELETE /api/canvas/{id}` never deletes one. `PUT /api/canvas/{id}` takes
+`{document, base_revision}` and answers `409 revision_conflict` when another
+client saved first, so an autosave and an agent cannot overwrite each other.
+Every revision stays readable with `?revision=N`. A layer whose asset was
+trashed or purged stays as a placeholder and is listed under `missing`;
+restoring the asset from the trash brings it back.
+
+`POST /api/canvas/{id}/flatten` renders a revision with the server's renderer
+into a new gallery PNG whose metadata names the project and revision (the
+document is unchanged). It refuses with `missing_sources` while a source is
+missing, unless `allow_missing` is set.
+
+To edit part of a document, `POST /api/canvas/{id}/edit-inputs` with a
+`layer_id` (or none, to flatten first) and an optional `mask_id` returns the
+`inputs` for an ordinary `POST /api/jobs` request. When the job is done,
+`POST /api/canvas/{id}/layers` with `{base_revision, job_id, from_layer}` puts
+its output on top in that layer's place and records the lineage.
 
 ## Resources
 
@@ -1011,6 +1103,8 @@ tag:
 | `images`, `videos` | The UI's multipart routes |
 | `openai` | OpenAI-compatible image generation and edits (`/api/openai/v1`) |
 | `references` | Reference sets |
+| `artifacts` | Export outputs (sprite sheets, atlases) |
+| `canvas` | Canvas projects |
 | `resources`, `targets` | Models and adapters, imports, routing policy |
 | `system`, `settings`, `library`, `collections`, `loras`, `wildcards`, `grid` | Supporting routes |
 

@@ -6,8 +6,19 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+## [0.2.0] - 2026-10-25
+
 ### Added
 
+- Canvas: layered documents over gallery images, saved as revisions. Layers
+  have masks, position, scale, rotation, opacity, visibility, order and a
+  blend mode; edits are bounded undo/redo separate from autosave, and a save
+  from an old revision is refused instead of overwriting. Flatten renders a
+  revision into a new gallery image with the server's renderer, a layer can be
+  edited through an ordinary job and come back as a new layer, and a missing
+  source stays as a placeholder. Over HTTP (`/api/canvas`) and MCP
+  (`create_canvas`, `get_canvas`, `save_canvas`, `list_canvases`,
+  `flatten_canvas`, `add_canvas_layer`).
 - Saved recipes. A generation or edit setup can be saved under a name with a
   short list of exposed fields, then run from the Recipes page,
   `POST /api/recipes/{key}/run`, or the MCP tools `list_recipes`, `get_recipe`,
@@ -62,6 +73,69 @@ contributors know which user-facing changes need release notes.
   `plan_id` and a video's `duration_s`. `docs/parity-matrix.md` lists what the
   UI, HTTP and MCP each support.
 
+- A preset-first **Studio** is the home page: choose a preset, write the
+  subject, see the effective setup (model, adapters, settings with where each
+  came from, finishing and readiness) and run exactly the previewed plan. The
+  **Preset library** (`/presets`) edits presets with revisions and conflict
+  protection; the generator pages moved to **Processes**. On a phone the
+  Studio splits into Compose and Results panes, and every failed job shows
+  its reason.
+- **Resources** (`/resources`): the model and adapter inventory with licence
+  (an unknown one is flagged), state, verification and installs; local
+  upload in resumable chunks; provider import that inspects a link first and
+  installs only an explicit choice; and Prepare on Remote GPU for adapters.
+- Settings gains **Routing**: whether the Remote GPU may be used, whether Auto
+  may choose it, and whether inputs may be sent to it, with a summary of what
+  each target can run.
+- **Reference sets** (`/api/reference-sets`, `/references`): named, ordered
+  references by role (a character, a product, a style) with per-entry masks
+  and notes, saved as revisions. A preset role can bind a set and a request
+  can fill a role from one; the plan pins the revision, a set that does not
+  fit the role is refused rather than trimmed, and the Studio offers a set
+  per role. Reference material only: no model is promised to keep an
+  identity.
+- Validators can be **required** or **optional**. A required check that cannot
+  run (no source, no face, no transparency to measure) or did not run fails;
+  an optional failure warns and the variant advances. A preset's validation
+  policy carries into its plan and into Variant Set stages.
+- **Preset Variant Set stages**: a stage can run a studio preset revision;
+  the set pins the revision it resolved and keeps the expansion in its
+  snapshot, and explicit stage settings override the preset's.
+- **Sprite sheets and atlases** from a set's final stage: equal-cell grids or
+  shelf-packed atlases with trimming, padding, edge extrusion, pixel-art
+  scaling and several pages, a preview of pages and missing frames before
+  anything is written, and a versioned manifest. Exports are validated
+  against the written pages and published as **artifacts**
+  (`/api/artifacts`) with a SHA-256 and a seven-day download window.
+- MCP gains reference-set tools, Variant Set orchestration
+  (`preview_variant_set`, `create_variant_set`, `wait_variant_set`,
+  `cancel_variant_set`, `retry_variant_set`, `rerun_variant_item`), and sprite
+  and artifact tools (`preview_sprite_export`, `create_sprite_export`,
+  `get_artifact`, `fetch_artifact`).
+- The API describes itself to programs and AI agents: `GET /llms.txt` is a
+  plain-text guide addressed to the running server, and `GET /openapi.json`
+  declares the `X-API-Token` security scheme and the server's own address, so
+  API tools and agent frameworks can import it without editing. `/docs`
+  gains an **Authorize** button for the token.
+
+### Changed
+
+- The Remote GPU control keeps polling a running pod, applies only the newest
+  answer, and keeps a stop the provider did not confirm on screen as possibly
+  billing, with Retry stop and a pod-id-confirmed Forget.
+
+### Not yet qualified
+
+- No curated presets ship: each needs real GPU runs, an evaluation pack and
+  human review before it can be called curated (`studio/curated/LOCK.json`
+  is empty on purpose).
+- Native Windows: the source checkout was smoke-tested on Windows 11 build
+  26200 (setup, start, single instance, stop, restart, no orphan processes,
+  the backend suite). Local GPU generation on Windows, packaged installers and
+  the cross-platform timing comparison are not qualified.
+- Applying user adapters in Remote GPU jobs is not part of this release;
+  preparing them on the worker is.
+
 ### Fixed
 
 - A Runpod stop that is not confirmed no longer forgets the pod. A timeout, a
@@ -99,7 +173,7 @@ contributors know which user-facing changes need release notes.
   so no child process outlives the server. `.env` and runtime settings get an
   owner-only access list on Windows. The host-RAM guard reads Windows memory
   instead of reporting it unknown, and `/api/system` shows the probe with its
-  reason when it cannot tell. Not yet run on real Windows hardware; local GPU
+  reason when it cannot tell. Smoke-tested on Windows 11 build 26200; local GPU
   generation on Windows is not qualified. See `docs/getting-started.md`.
 
 ## [0.1.8] - 2026-10-21
@@ -287,11 +361,6 @@ contributors know which user-facing changes need release notes.
   this under the Prefix field.
 - The test suite no longer inherits `API_TOKEN` from a developer's `.env`, which
   turned every API test into a 401 on a machine with a token set.
-- The API describes itself to programs and AI agents: `GET /llms.txt` is a
-  plain-text guide addressed to the running server, and `GET /openapi.json`
-  declares the `X-API-Token` security scheme and the server's own address, so
-  API tools and agent frameworks can import it without editing. `/docs`
-  gains an **Authorize** button for the token.
 
 ## [0.1.2] - 2026-09-18
 
@@ -416,6 +485,7 @@ contributors know which user-facing changes need release notes.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.2.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.2.0
 [0.1.8]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.8
 [0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6

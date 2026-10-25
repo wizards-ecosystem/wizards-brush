@@ -21,6 +21,7 @@ from ..config import settings
 from ..models import AssetKind
 from ..queue import lane_for, on_job_terminal
 from ..redaction import redact
+from ..spritesheet import ExportProfile as SpriteProfile
 from ..variant_sets import expansion, operations, service, store
 from ..variant_sets.recipe import RecipeError, RecipeSpec, compile_recipe
 from ..variant_sets.schemas import ItemView, RecipeView, SetDetail, SetView, SetWait
@@ -493,6 +494,35 @@ class ExportBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include_intermediate: bool = False
+
+
+@router.post("/variant-sets/{set_id}/sprites/preview", responses=error_responses(400, 404, 409))
+async def preview_sprites(set_id: int, profile: SpriteProfile) -> dict[str, Any]:
+    """The pages, their sizes, the frame order and rectangles, and any missing
+    frames a sheet or atlas export would have. Draws and writes nothing."""
+    from ..variant_sets import sprites
+
+    try:
+        return await asyncio.to_thread(sprites.preview, set_id, profile)
+    except service.VariantSetError as error:
+        raise _http(error) from None
+
+
+@router.post("/variant-sets/{set_id}/sprites", responses=error_responses(400, 404, 409))
+async def export_sprites(set_id: int, profile: SpriteProfile) -> dict[str, Any]:
+    """Build a sprite sheet or atlas (PNG pages plus a versioned manifest, in a
+    ZIP), validate it, and publish it as an artifact. Download it from
+    `file_url`; it stays available until `expires_at`."""
+    from .. import client_tag
+    from ..variant_sets import sprites
+
+    try:
+        return await asyncio.to_thread(
+            sprites.export, set_id, profile,
+            include_generation=settings.effective_bool("embed_metadata"),
+            client=client_tag.current())
+    except service.VariantSetError as error:
+        raise _http(error) from None
 
 
 @router.get("/variant-sets/{set_id}/manifest", responses=error_responses(404))

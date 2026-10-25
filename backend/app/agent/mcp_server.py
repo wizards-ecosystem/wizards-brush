@@ -16,7 +16,13 @@ from fastapi import HTTPException
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ResourceLink,
+    TextContent,
+)
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute, Match, NoMatchFound
@@ -842,6 +848,73 @@ async def rerun_variant_item(
         raise _fail(exc) from None
 
 
+_SPRITE_PROFILE = (
+    "{mode: grid | atlas, name, order: set | key, columns, cell_width, cell_height, "
+    "fit: require_match | pad | contain, max_width, max_height, trim, allow_multiple_pages, "
+    "padding, extrude, background: transparent | #rrggbb, pixel_art, pivot, durations, "
+    "partial}. See docs/api.md#sprite-sheets-and-atlases.")
+
+
+@mcp.tool()
+async def preview_sprite_export(
+    variant_set: Annotated[int, Field(ge=1)],
+    profile: Annotated[dict[str, Any], Field(description=_SPRITE_PROFILE)],
+) -> dict[str, Any]:
+    """The pages, sizes, frame order and rectangles a sheet or atlas export of the
+    set's final stage would have, and any missing frames. No side effects."""
+    try:
+        return await studio_tools.preview_sprites(variant_set, profile)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def create_sprite_export(
+    variant_set: Annotated[int, Field(ge=1)],
+    profile: Annotated[dict[str, Any], Field(description=_SPRITE_PROFILE)],
+) -> dict[str, Any]:
+    """Side effect: build, validate and publish a sheet or atlas (PNG pages plus a
+    versioned manifest, zipped) as an artifact. Fetch it with fetch_artifact or
+    its file_url; it stays until expires_at."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.export_sprites(variant_set, profile)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def get_artifact(artifact: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
+    """An export artifact's type, size, SHA-256, source and expiry."""
+    try:
+        return await studio_tools.artifact(artifact)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def fetch_artifact(artifact: Annotated[int, Field(ge=1)]) -> CallToolResult:
+    """The artifact's bytes as an embedded resource, for clients that cannot fetch
+    file_url with the API token. Capped at 16 MB."""
+    import base64
+
+    try:
+        data, view = await asyncio.to_thread(studio_tools.artifact_bytes, artifact)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(view)),
+                 EmbeddedResource(type="resource", resource=BlobResourceContents(
+                     uri=f"brush://artifacts/{artifact}", mimeType=view["mime_type"],
+                     blob=base64.b64encode(data).decode()))],
+        structured_content={"artifact": view, "bytes": len(data)},
+    )
+
+
 # ---- reference sets ----------------------------------------------------------------------------
 _REFERENCE_DEFINITION = (
     "{description, notes, roles: [{role, label, entries: [{asset_id, mask_id, note}]}], "
@@ -909,6 +982,105 @@ async def archive_reference_set(
     """Side effect: hide (or restore) a set in pickers. Its revisions stay readable."""
     try:
         return await studio_tools.archive_reference_set(reference_set, archived)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+# ---- canvas ------------------------------------------------------------------------------------
+_CANVAS_DOCUMENT = (
+    "{schema_version: 1, width, height, color_space: \"srgb\", background: \"transparent\" | "
+    "\"#rrggbb\", layers (bottom first): [{id, name, asset_id, mask_id, transform: {x, y, "
+    "scale_x, scale_y, rotation (degrees clockwise about the layer centre)}, opacity, visible, "
+    "blend_mode: normal | multiply | screen}]}. Layers reference gallery assets; nothing is "
+    "copied.")
+
+
+@mcp.tool()
+async def list_canvases(include_archived: bool = False) -> dict[str, Any]:
+    """Canvas projects: layered documents over gallery assets."""
+    try:
+        return {"canvases": await studio_tools.canvases(include_archived)}
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def get_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    revision: Annotated[int | None, Field(ge=1, description="Omit for the latest.")] = None,
+) -> dict[str, Any]:
+    """One revision of a canvas document. `missing` lists assets that are no
+    longer in the gallery; their layers stay as placeholders."""
+    try:
+        return await studio_tools.canvas(canvas, revision)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def create_canvas(
+    name: Annotated[str, Field(min_length=1, max_length=80)],
+    document: Annotated[dict[str, Any], Field(description=_CANVAS_DOCUMENT)],
+) -> dict[str, Any]:
+    """Side effect: create a canvas project at revision 1."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.create_canvas(name, document)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def save_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    document: Annotated[dict[str, Any], Field(description=_CANVAS_DOCUMENT)],
+    base_revision: Annotated[int, Field(ge=1, description="The revision you edited.")],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Side effect: save the next revision. A stale base is revision_conflict, so
+    an edit made in the UI meanwhile is never overwritten."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.save_canvas(canvas, document, base_revision, name)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def flatten_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    revision: Annotated[int | None, Field(ge=1)] = None,
+    allow_missing: Annotated[bool, Field(description="Leave layers with missing assets out "
+                                                     "instead of refusing.")] = False,
+) -> dict[str, Any]:
+    """Side effect: render a revision into a new gallery PNG (the same renderer as
+    HTTP). The document is unchanged. Fetch the result with fetch_asset."""
+    try:
+        return await studio_tools.flatten_canvas(canvas, revision, allow_missing)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def add_canvas_layer(
+    canvas: Annotated[int, Field(ge=1)],
+    base_revision: Annotated[int, Field(ge=1)],
+    asset_id: Annotated[int | None, Field(ge=1)] = None,
+    job_id: Annotated[int | None, Field(ge=1, description="A finished job; its first output "
+                                                          "becomes the layer.")] = None,
+    name: str = "",
+    from_layer: Annotated[str | None, Field(description="Take this layer's transform and record "
+                                                        "it as lineage, e.g. after editing "
+                                                        "it.")] = None,
+    mask_id: Annotated[int | None, Field(ge=1)] = None,
+) -> dict[str, Any]:
+    """Side effect: put an asset (or a finished edit's output) on top as a new
+    layer, saving the next revision."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.add_canvas_layer(
+                canvas, base_revision=base_revision, asset_id=asset_id, job_id=job_id,
+                name=name, from_layer=from_layer, mask_id=mask_id)
     except HTTPException as exc:
         raise _fail(exc) from None
 

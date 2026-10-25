@@ -611,6 +611,29 @@ class ResourceImport(SQLModel, table=True):
         return _json_or(self.license_json, {})
 
 
+class Artifact(SQLModel, table=True):
+    """A typed export output in managed storage (0018). Not a gallery asset."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    token: str = Field(default="", index=True)          # random; part of the download path
+    kind: str = ""                                      # sprite_sheet | atlas | archive
+    filename: str = ""
+    mime_type: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
+    path: str = ""                                      # never shown in a view
+    source: str = ""                                    # e.g. variant_set:12
+    meta_json: str = "{}"
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    expires_at: datetime | None = Field(default=None, index=True)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return _json_or(self.meta_json, {})
+
+
 class ReferenceSet(SQLModel, table=True):
     """The head of a reference set (0017): its name and latest revision."""
     __table_args__ = {"sqlite_autoincrement": True}
@@ -641,6 +664,40 @@ class ReferenceSetRevision(SQLModel, table=True):
     @property
     def definition(self) -> dict[str, Any]:
         return _json_or(self.definition_json, {})
+
+
+class CanvasProject(SQLModel, table=True):
+    """The head of a canvas project (0019): its name and latest revision."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    revision: int = 1
+    digest: str = ""
+    width: int = 0
+    height: int = 0
+    client: str = ""
+    archived_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class CanvasRevision(SQLModel, table=True):
+    """One immutable revision of a canvas document (0019)."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="canvasproject.id", index=True)
+    revision: int
+    document_json: str = "{}"
+    digest: str = ""
+    based_on: int | None = None
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def document(self) -> dict[str, Any]:
+        return _json_or(self.document_json, {})
 
 
 class VariantRecipe(SQLModel, table=True):
