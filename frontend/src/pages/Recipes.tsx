@@ -100,6 +100,12 @@ export function Recipes() {
         title="Recipes"
         description="A saved setup with only the fields you want to change. Running it queues a normal job."
       />
+      <div className="mt-2 flex gap-3 text-xs">
+        <span className="text-ink">Saved generators</span>
+        <Link to="/presets" className="text-muted underline-offset-2 hover:underline">
+          Studio presets
+        </Link>
+      </div>
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
         <nav aria-label="Saved recipes" className="min-w-0">
           {rows === null ? null : rows.length === 0 ? (

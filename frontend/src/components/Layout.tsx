@@ -8,6 +8,7 @@ import { Toaster } from "./Toaster";
 
 const workspaceLinks: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/", label: "Studio", icon: "studio" },
+  { to: "/processes", label: "Processes", icon: "make" },
   { to: "/gallery", label: "Gallery", icon: "gallery" },
   { to: "/queue", label: "Queue", icon: "queue" },
   { to: "/variants", label: "Variants", icon: "layers" },
@@ -282,6 +283,7 @@ export function Layout() {
         </Link>
         <nav className="flex min-h-0 flex-1 flex-col py-2" aria-label="Primary navigation">
           <RailLink to="/" label="Studio" icon="studio" />
+          <RailLink to="/processes" label="Processes" icon="make" />
           <button
             className={`relative flex h-[58px] w-full flex-col items-center justify-center gap-0.5 text-[9px] font-medium tracking-wide transition-colors ${
               launcherOpen || pathname.startsWith("/g/")
