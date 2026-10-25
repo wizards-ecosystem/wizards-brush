@@ -42,6 +42,19 @@ contributors know which user-facing changes need release notes.
   still exists. Reuse from image metadata alone says it is partial and names
   what the file did not record.
 
+### Added (native Windows preview)
+
+- `wizards-brush.cmd` sets up, starts, stops, restarts and checks a source
+  checkout on native Windows without administrator rights, with every cache
+  and profile directory contained in the checkout and uv and Node verified by
+  SHA-256. `scripts/serve.py` gives every platform one recorded server, stale
+  record recovery after a crash, a graceful stop and, on Windows, a job object
+  so no child process outlives the server. `.env` and runtime settings get an
+  owner-only access list on Windows. The host-RAM guard reads Windows memory
+  instead of reporting it unknown, and `/api/system` shows the probe with its
+  reason when it cannot tell. Not yet run on real Windows hardware; local GPU
+  generation on Windows is not qualified. See `docs/getting-started.md`.
+
 ## [0.1.8] - 2026-10-21
 
 ### Fixed

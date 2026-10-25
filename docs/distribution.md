@@ -19,6 +19,12 @@ Python toolchain and locked runtime dependencies after extraction. Model
 downloads remain a separate, visible step because the starter profile is about
 32 GB and model licences are independent of Apache-2.0.
 
+There is no Windows bundle yet. A Windows source checkout installs with
+`wizards-brush.cmd setup` (see the getting-started guide); its tools come from
+the official uv and Node zips pinned by SHA-256 in `scripts/tool-versions.env`.
+A Windows release bundle waits on real-hardware qualification of the CUDA
+stack.
+
 `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` are deliberately present in
 the lean bundle. They are small, legally meaningful runtime distribution files,
 not development clutter, and must remain with redistributed copies.

@@ -38,10 +38,54 @@ Have these host tools available:
 - Enough host RAM for model loading and CPU offload. The app checks before a
   large load and reports a useful refusal instead of risking a machine-wide OOM.
 
-macOS, native Windows, AMD ROCm, Apple Metal, and CPU-only generation are not
-currently supported. A machine without a local NVIDIA GPU can run the web/API
-shell and connect to an operator-controlled Remote GPU, but that is an advanced
-deployment rather than the beginner path.
+macOS, AMD ROCm, Apple Metal, and CPU-only generation are not currently
+supported. A machine without a local NVIDIA GPU can run the web/API shell and
+connect to an operator-controlled Remote GPU, but that is an advanced
+deployment rather than the beginner path. Native Windows is in progress; the
+next section says exactly what works today.
+
+## Native Windows (preview)
+
+A source checkout runs on Windows 10/11 x64 without WSL, administrator rights
+or a developer shell. Everything stays inside the checkout, as on Linux:
+`scripts\project-env.ps1` points every cache, temp and profile directory
+(including `USERPROFILE`, `APPDATA` and `LOCALAPPDATA`) there for the app's
+own processes only, and refuses a junction or link that leads outside it.
+Nothing is added to your PATH or the registry. From a checkout at a short path
+such as `C:\wb`:
+
+```
+wizards-brush.cmd setup -Deps test -SkipModels   # app, API, tests; no torch
+wizards-brush.cmd start                          # background; opens Edge in a contained profile
+wizards-brush.cmd stop                           # graceful: the app's shutdown runs
+```
+
+`wizards-brush.cmd` also takes `restart`, `status`, `dev` (backend reload plus
+Vite), `browser`, `doctor` and `test`. It runs the PowerShell 5.1 scripts in
+`scripts\` with the execution policy bypassed for that one process.
+
+- **Tools.** uv and Node come from their official zips, checked against the
+  SHA-256 pins in `scripts/tool-versions.env` before they are unpacked.
+- **One instance.** `scripts/serve.py` records the running server. A second
+  start is refused; a record left by a crash or a reboot is recognised as
+  stale and replaced, and queued jobs resume as on Linux.
+- **Stopping.** Stop asks the server to shut down through the app, waits, and
+  only then ends that one recorded process after checking it is still this
+  checkout's interpreter. No process is ever stopped by name. The server runs
+  in a kill-on-close job object, so a child it started cannot outlive it.
+- **Credentials.** `.env` and `output\runtime_settings.json` get an owner-only
+  access list (the Windows form of `chmod 600`); the doctor checks it.
+- **Paths.** Spaces and non-ASCII characters in the checkout path are meant to
+  work. Model caches nest deeply, so keep the checkout short or have an
+  administrator enable long paths; the doctor warns when a deep cache could
+  pass 260 characters.
+
+**Not verified yet:** any of the above on real Windows hardware (it has been
+written and checked on Linux only so far; `scripts\windows-smoke.ps1` is the
+check, also run by CI on `windows-latest`), `-Deps full` (the CUDA torch stack
+and optional processors from Windows wheels), local GPU generation,
+bitsandbytes and Nunchaku quantization, matting, face restoration, FFmpeg
+video and a release bundle. Until those pass, use WSL2 for local generation.
 
 ## Install
 

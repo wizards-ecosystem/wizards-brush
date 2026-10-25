@@ -54,6 +54,25 @@ jobs:
       - name: pytest
         run: source scripts/project-env.sh && uv run --no-sync python -m pytest tests
 
+  # Native Windows: torch-free setup through the project's own scripts, the
+  # backend suite, start, an API answer, graceful stop and no leftover process
+  # (scripts/windows-smoke.ps1). Non-blocking until it has run green once; it
+  # proves platform plumbing only, never local GPU inference.
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      WARM_UP: "false"
+      LOG_LEVEL: "WARNING"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: windows smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
