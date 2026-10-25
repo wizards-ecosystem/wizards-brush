@@ -126,6 +126,17 @@ def by_repo(repo: str, lane: str = "local") -> Variant | None:
     return next((v for v in available(lane) if repo_of(v) == repo), None)
 
 
+def exact(name: str | None, lane: str = "local") -> Variant | None:
+    """The configured variant by name (or alias) on `lane`, or None.
+
+    Unlike `get`, never falls back: a strict plan or replay that names a slot
+    must learn that the slot is gone, not run the lane's default instead.
+    """
+    requested = str(name or "")
+    v = _BY_NAME.get((lane, requested)) or _BY_ALIAS.get((lane, requested))
+    return v if v is not None and repo_of(v) else None
+
+
 def available(lane: str = "local") -> list[Variant]:
     """Configured variants on `lane`, in picker order.
 

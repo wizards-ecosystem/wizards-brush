@@ -182,6 +182,10 @@ integers) with a domain tag so they can never collide:
   the concrete kind, the expected runtime and the resource and capability
   revisions. Submission compares it to refuse a plan that went stale.
 
+A third, the **material_hash**, is the execution hash without the capability
+revision. Submission compares it to tell a change in what would run (stale)
+from a change in what the target offers that leaves this plan alone.
+
 Observation timestamps are in neither. The runtime that actually executed is
 recorded on the job afterwards; a mismatch with the expected runtime is
 reported, never hidden under a strict-replay claim.
@@ -193,9 +197,10 @@ Ids are assigned here, centrally, as each packet lands. Taken:
 `0013_recipe_revisions` (P03: `schema_version`, `preset_id`, `revision`,
 `origin`, `definition_json`, `definition_hash` and `archived_at` on `recipe`,
 the append-only `reciperevision` table, and name uniqueness scoped to saved
-generators) and `0014_resources` (P06: `resource` and `resourceinstall`).
-Planned:
-`0015_execution_plans`, `0016_resource_imports`, `0017_reference_sets`,
+generators), `0014_resources` (P06: `resource` and `resourceinstall`) and
+`0015_execution_plans` (P05: the `executionplan` table; `plan_id`,
+`request_digest`, `backend_id` and `execution_json` on `job`). Planned:
+`0016_resource_imports`, `0017_reference_sets`,
 `0018_artifacts` and `0019_canvas_projects`. A packet that lands out of order takes the next free
 number and updates this list. Every migration is additive: new columns are
 nullable or have a safe historical default, and no migration hashes weights or

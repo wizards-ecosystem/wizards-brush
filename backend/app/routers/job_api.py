@@ -113,6 +113,9 @@ class JobInputs(BaseModel):
                               description="Source asset ids, in order (image_edit takes 1-3).")
     mask: int | None = Field(default=None, description="Mask asset id: white = change.")
     last_frame: int | None = Field(default=None, description="i2v only: a last-frame asset id.")
+    references: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description="Preset requests only: asset ids per reference role the preset declares.")
 
 
 class StyleFragmentIn(BaseModel):
@@ -145,7 +148,10 @@ class JobCreate(BaseModel):
         ]},
     )
 
-    kind: str = Field(description="A kind from GET /api/jobs/kinds.")
+    kind: str | None = Field(
+        default=None,
+        description="A kind from GET /api/jobs/kinds. Omit it to send a preset request "
+                    "(preset_id or operation) instead; the two forms cannot be mixed.")
     params: dict[str, Any] = Field(
         default_factory=dict,
         description="Settings; see the kind's `params` schema. Omitted ones take their defaults.")
@@ -161,6 +167,68 @@ class JobCreate(BaseModel):
         default=None,
         description="Instead of params.prompt: a subject and style fragments, composed "
                     "as subject, then each style text, joined by ', '.")
+    # ---- preset requests (no `kind`): resolved into an execution plan ----------------
+    preset_id: str | None = Field(default=None, max_length=96,
+                                  description="A studio preset; GET /api/studio/presets.")
+    revision: int | None = Field(default=None, ge=1,
+                                 description="A preset revision; the head when omitted.")
+    operation: str | None = Field(default=None, description="Without a preset: the logical "
+                                  "operation (text_to_image, edit, ...).")
+    model: str | None = Field(default=None, max_length=320,
+                              description="A model resource id; overrides the preset's.")
+    adapters: list[dict[str, Any]] | None = Field(
+        default=None, description="Ordered [{resource, strength}]; replaces the preset's list, "
+                                  "and [] means none.")
+    prompt: str | None = Field(default=None, max_length=8000,
+                               description="The subject prompt the preset template wraps.")
+    negative_prompt: str | None = Field(default=None, max_length=8000)
+    styles: list[str] | None = Field(default=None, description="The preset's style ids to use.")
+    style_fragments: list[dict[str, str]] | None = Field(
+        default=None, description="Without a preset: [{id, text}] composed after the prompt.")
+    enhance: bool | None = Field(default=None,
+                                 description="The preset's declared enhancement text, on or off.")
+    notes: str | None = Field(default=None, max_length=2000,
+                              description="Reference notes for a {{notes}} placeholder.")
+    settings: dict[str, Any] | None = Field(
+        default=None, description="Explicit overrides; validated strictly, never clamped.")
+    finish: list[dict[str, Any]] | None = Field(
+        default=None, description="Ordered finishing steps; replaces the preset's.")
+    target: Literal["local", "remote", "auto"] | None = Field(
+        default=None, description="Where to run: local, remote or auto (default).")
+    allow_remote: bool | None = Field(
+        default=None, description="Let auto routing use a connected remote worker. Never rents "
+                                  "hardware.")
+    seed: int | None = Field(default=None, ge=0, le=2**32 - 1,
+                             description="Omit for a random seed, chosen once on preparation.")
+    capability_revision: str | None = Field(
+        default=None, max_length=80, description="The capability revision of the plan you saw.")
+    expected_plan_hash: str | None = Field(
+        default=None, max_length=80,
+        description="The execution_plan_hash you previewed. A submission whose fresh plan "
+                    "would run differently is refused as plan_stale instead of queued.")
+
+    def plan_fields(self) -> list[str]:
+        """Names of the preset-request fields this body sets."""
+        return [name for name in _PLAN_FIELDS if getattr(self, name) is not None]
+
+
+_PLAN_FIELDS = ("preset_id", "revision", "operation", "model", "adapters", "prompt",
+                "negative_prompt", "styles", "style_fragments", "enhance", "notes", "settings",
+                "finish", "target", "allow_remote", "seed", "capability_revision",
+                "expected_plan_hash")
+_SUBMISSION_ONLY = frozenset({"expected_plan_hash"})
+
+
+class PreparedPlan(BaseModel):
+    """A preset request resolved into its execution plan, not queued."""
+
+    dry_run: Literal[True] = True
+    ready: bool = Field(description="False when readiness lists blockers; see plan.readiness.")
+    seed: int = Field(description="The base seed. Send it back to keep this exact request.")
+    plan: dict[str, Any]
+    duplicate: bool = False
+    job_id: int | None = None
+    job_ids: list[int] = Field(default_factory=list)
 
 
 class JobSubmission(BaseModel):
@@ -412,7 +480,7 @@ def _submission(result: dict[str, Any], *, duplicate: bool) -> JobSubmission:
 
 
 @router.post("/jobs", responses=error_responses(400, 404, 409, 503))
-async def create_job(body: JobCreate) -> JobSubmission | DryRunResult:
+async def create_job(body: JobCreate) -> JobSubmission | DryRunResult | PreparedPlan:
     """Queue one generation or tool job from asset ids and JSON settings.
 
     Settings are validated strictly against the kind's schema: an unknown name or
@@ -433,7 +501,25 @@ async def create_job(body: JobCreate) -> JobSubmission | DryRunResult:
         raise as_request_error(exc) from None
 
 
-async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult:
+async def _create_job(body: JobCreate) -> JobSubmission | DryRunResult | PreparedPlan:
+    planned = body.plan_fields()
+    if body.kind and planned:
+        raise RequestError(
+            400, f"a request names a job kind or a preset request, not both "
+                 f"(kind with {', '.join(planned)})",
+            code="ambiguous_request", field=planned[0],
+            suggestions=["Drop kind to send a preset request, or drop the preset fields."],
+        )
+    if not body.kind:
+        if not planned:
+            raise RequestError(
+                400, "send a kind, or a preset request (preset_id or operation)",
+                code="missing_input", field="kind",
+            )
+        return await _plan_job(body)
+    if body.inputs.references:
+        raise RequestError(400, "inputs.references are for preset requests",
+                           code="invalid_request", field="inputs.references")
     info = _require_known(body.kind)
     request_id, prior = duplicate_of(body.request_id, dry_run=body.dry_run)
     if prior is not None:
@@ -506,9 +592,61 @@ def _composed(body: JobCreate, known: dict[str, dict[str, Any]]) -> dict[str, An
 
     styles = [style.model_dump() for style in body.composition.styles]
     prompt = compose_prompt(body.composition.subject, styles)
-    _validated(body.kind, {"prompt": prompt}, known)  # the composed text obeys the same cap
+    _validated(str(body.kind), {"prompt": prompt}, known)  # the composed text obeys the same cap
     return {"prompt": prompt, "raw_prompt": body.composition.subject,
             "style_ids": [style["id"] for style in styles]}
+
+
+def plan_request(body: JobCreate, seed: int | None = None) -> Any:
+    """The resolver's input for a preset-form body, or a structured refusal."""
+    from pydantic import ValidationError
+
+    from ..studio.resolver import ResolveRequest
+
+    if body.params or body.composition is not None:
+        raise RequestError(400, "a preset request sends settings and prompt, not params or "
+                                "composition", code="ambiguous_request",
+                           field="params" if body.params else "composition")
+    fields: dict[str, Any] = {name: getattr(body, name) for name in _PLAN_FIELDS
+                              if getattr(body, name) is not None and name not in _SUBMISSION_ONLY}
+    if seed is not None:
+        fields["seed"] = seed
+    fields["inputs"] = body.inputs.model_dump()
+    try:
+        return ResolveRequest.model_validate(fields)
+    except ValidationError as error:
+        first = error.errors()[0]
+        path = ".".join(str(p) for p in first.get("loc", ()))
+        raise RequestError(400, f"{path}: {first.get('msg')}", code="invalid_request",
+                           field=path or None) from None
+
+
+async def _plan_job(body: JobCreate) -> PreparedPlan | JobSubmission:
+    import asyncio
+    import secrets
+
+    from ..studio.resolver import resolve
+
+    # A random seed is chosen once, here at the preparation boundary, and
+    # returned: sending it back keeps the same request on every preview.
+    seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
+    request = plan_request(body, seed)
+    origin: Literal["override", "runtime"] = "override" if body.seed is not None else "runtime"
+    from ..remote_gpu_client import last_health
+    from ..studio import submission
+    from ..studio.resolver import live
+
+    # The boundary reads the Remote GPU's state once (refreshed when older than
+    # 15 s, as every other gate does); the resolver itself never touches the
+    # network.
+    state = await remote_state()
+    context = live()
+    context.remote_state = lambda: {**last_health(), "connected": bool(state.get("connected"))}
+    plan = await asyncio.to_thread(resolve, request, context, seed_origin=origin)
+    if body.dry_run:
+        submission.remember(plan)
+        return PreparedPlan(ready=plan["readiness"]["ready"], seed=seed, plan=plan)
+    return await submission.submit_plan(body, plan, request)
 
 
 async def require_runnable(kind: str) -> None:
@@ -870,6 +1008,75 @@ async def _create_refine(body: JobCreate, info: JobKindInfo,
     if handler is None:
         raise HTTPException(status_code=500, detail=f"no handler for {kind}")
     return _submission(await submit(kind, params, handler), duplicate=False)
+
+
+# ---- plans and replay -----------------------------------------------------------------------
+class PlanRead(BaseModel):
+    id: int
+    plan: dict[str, Any]
+    request: dict[str, Any]
+    replay_of: int | None = None
+    created_at: Any
+
+
+class ReplayBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["exact", "latest"] = Field(
+        default="exact",
+        description="exact: the stored plan, resources and seed, or replay_resource_unavailable. "
+                    "latest: resolve the original request against the preset's current "
+                    "revision and today's resources (a new plan, recorded as an upgrade).")
+    request_id: str | None = None
+    dry_run: bool = False
+
+
+@router.get("/plans/{plan_id}", response_model=PlanRead, responses=error_responses(404))
+async def read_plan(plan_id: int) -> PlanRead:
+    """An execution plan and the request that produced it. Paths are not part of a plan."""
+    row = db.get_plan(plan_id)
+    if row is None or row.id is None:
+        raise RequestError(404, "plan not found", code="not_found", field="plan_id")
+    return PlanRead(id=row.id, plan=row.plan, request=row.request, replay_of=row.replay_of,
+                    created_at=row.created_at)
+
+
+@router.post("/jobs/{job_id}/replay", responses=error_responses(400, 404, 409, 503))
+async def replay(job_id: int, body: ReplayBody) -> JobSubmission | PreparedPlan:
+    """Run a preset job again. `exact` reproduces its plan or refuses;
+    `latest` makes a new plan from the same request and today's preset."""
+    from ..studio import submission
+
+    if body.mode == "exact":
+        if body.dry_run:
+            job = db.get_job(job_id)
+            if job is None or job.plan_id is None:
+                raise RequestError(409, "this job has no execution plan",
+                                   code="legacy_unverified", field="job_id")
+            row = db.get_plan(int(job.plan_id))
+            assert row is not None
+            problems = submission.replay_problems(row.plan)
+            if problems:
+                raise RequestError(409, problems[0]["message"],
+                                   code="replay_resource_unavailable", field=problems[0]["field"],
+                                   state={"problems": problems})
+            return PreparedPlan(ready=True, seed=int(row.plan["seed"]["base"]), plan=row.plan)
+        return await submission.replay_job(job_id, request_id=body.request_id)
+    job = db.get_job(job_id)
+    if job is None or job.plan_id is None:
+        raise RequestError(409, "only a preset job can be upgraded to the latest preset",
+                           code="legacy_unverified", field="job_id")
+    row = db.get_plan(int(job.plan_id))
+    if row is None:
+        raise RequestError(409, "the job's plan is missing", code="not_found", field="job_id")
+    original = dict(row.request)
+    original.pop("revision", None)
+    upgraded = JobCreate.model_validate({
+        **{k: v for k, v in original.items() if k != "inputs"},
+        "inputs": original.get("inputs") or {}, "dry_run": body.dry_run,
+        "request_id": body.request_id,
+    })
+    return await create_job(upgraded)  # type: ignore[return-value]
 
 
 # ---- waiting --------------------------------------------------------------------------------

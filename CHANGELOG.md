@@ -26,6 +26,15 @@ contributors know which user-facing changes need release notes.
   pickle-based formats and archives, validates the safetensors structure,
   refuses a checkpoint offered as a LoRA, deduplicates by content and promotes
   atomically. A LoRA file that disappears stays listed as missing.
+- Preset requests through `POST /api/jobs` (`preset_id` or `operation` and
+  `model`, with overrides). A dry run returns the execution plan: the composed
+  prompt, ordered adapters, each setting with its origin, the effective params
+  the job will store and every value the builder normalized, inputs with
+  hashes, readiness and three hashes. Submission queues an ordinary job of the
+  plan's kind, refuses a plan that is not ready or went stale since its
+  preview, rechecks the plan when the job starts and records the runtime that
+  ran it. `POST /api/jobs/{id}/replay` replays exactly or refuses, and can run
+  the latest preset revision instead.
 
 ### Fixed
 

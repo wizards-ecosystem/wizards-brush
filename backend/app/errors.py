@@ -80,6 +80,9 @@ class Failure:
 
 def classify(e: BaseException, kind: str = "") -> Failure:
     """Full classification of a failure. `tip_for` and `clears_gpu` wrap this."""
+    own = getattr(e, "tip", None)
+    if isinstance(own, str) and own:
+        return Failure(Severity.fatal, own)  # the raiser knew what to say
     for match, tip, clears, severity in _RULES:
         if match(e, kind):
             return Failure(severity, tip, clears)

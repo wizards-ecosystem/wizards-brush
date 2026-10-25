@@ -484,6 +484,107 @@ a short form, is a different resource: see [Saved recipes](#saved-recipes).
 | `POST /api/variant-recipes/{id}/clone` | Copy one |
 | `DELETE /api/variant-recipes/{id}` | Delete one |
 
+## Preset requests and execution plans
+
+`POST /api/jobs` takes a second request form: a preset (or an operation and a
+model) plus overrides, instead of a `kind` and its `params`. The two forms
+cannot be mixed in one request (`ambiguous_request`); kind-form requests are
+unchanged.
+
+```
+POST /api/jobs
+{
+  "preset_id": "custom/storybook",
+  "prompt": "a lantern festival",
+  "styles": ["watercolor"],
+  "settings": {"aspect": "16:9"},
+  "inputs": {"images": [], "references": {"character": [41]}},
+  "target": "auto",
+  "dry_run": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `preset_id`, `revision` | The preset and revision (the head when omitted). |
+| `operation`, `model` | Without a preset: `text_to_image`, `image_to_image`, `inpaint`, `outpaint`, `edit`, `control`, `text_to_video`, `image_to_video` or `long_video`, and a model resource id. With a preset, `model` overrides the preset's. |
+| `adapters` | Ordered `[{"resource", "strength"}]`; replaces the preset's list, and `[]` means none. |
+| `prompt`, `negative_prompt` | The subject the preset's template wraps; the negative replaces the preset's. |
+| `styles`, `enhance`, `notes` | The preset's style ids to use; its declared enhancement text on or off; text for a `{{notes}}` placeholder. Without a preset, `style_fragments` (`[{id, text}]`) follow the prompt. |
+| `settings` | Explicit overrides, named like the kind's controls. Validated strictly and never clamped. |
+| `finish` | Ordered finishing steps; replaces the preset's. |
+| `inputs` | `images`, `mask`, `last_frame` and `references` (asset ids per role the preset declares). |
+| `target`, `allow_remote` | `local`, `remote` or `auto` (default). Auto prefers a ready local target and uses a connected remote worker only when `allow_remote` is true. Nothing here ever starts or rents hardware. |
+| `seed` | Omit for a random seed. |
+| `expected_plan_hash` | On submit: the `execution_plan_hash` you previewed. |
+
+**Preparing.** With `dry_run: true` the answer is the execution plan, and
+nothing is queued, downloaded, uploaded or started. A random seed is chosen
+once here and returned as `seed`; send it back to keep the same request on
+every preview. The plan holds:
+
+- the preset revision and its definition hash, the logical operation, and the
+  resolved target with the reason it was chosen;
+- the persisted job kind it maps to, the model (resource id, revision,
+  verification) and the ordered adapters with their status;
+- the composed prompt (raw subject, styles, triggers, notes, enhancement
+  applied, positive and negative);
+- `settings` with each value's origin in `provenance` (`registry_default`,
+  `dependent_default`, `preset`, `override`, `runtime`);
+- `effective_params`: exactly what the job will store. They come from the same
+  builders the form routes use, and every value the builder changed is listed
+  in `normalized`: quality overriding steps, an aspect overriding a size,
+  batch capped by the pixel budget, speed-mode recipes;
+- inputs with content hashes, the seed and per-item seeds, ordered finishing
+  and the validation policy;
+- `readiness` (`ready`, `blockers`, `actions`), `warnings`, and
+  `capability_revision`;
+- `hashes`: `creative_request_hash` (what is asked: operation, resources,
+  prompts, settings, inputs, seed and finishing, never the target or ids),
+  `execution_plan_hash` (that request on a concrete target, kind and slot,
+  with the effective params and capabilities), and `material_hash` (the
+  execution hash without capabilities).
+
+Validity and readiness are separate. A malformed or invalid request is a 400
+naming the field (`settings.guidance`, `styles.1`,
+`inputs.references.character`). A valid plan that cannot run yet comes back
+with `ready: false` and blockers such as `resource_not_ready`,
+`target_unavailable`, `access_required`, `incompatible_resource` (an adapter
+for another model family, kept in the plan with `status: blocked`),
+`adapters_unsupported_on_target` (the Remote GPU does not apply your adapters,
+so they are refused instead of dropped) or `remote_not_allowed`. No model is
+ever substituted to make a plan runnable.
+
+**Submitting.** The same body without `dry_run` resolves the request again and
+queues an ordinary job of the plan's kind, with exactly its effective params:
+
+- A `request_id` already used for the same request returns that job
+  (`duplicate: true`), even if capabilities changed since. Used for a
+  different request, it is 409 `request_conflict`.
+- With `expected_plan_hash`, a submission whose fresh plan would run
+  differently is 409 `plan_stale`, with `state.changes` listing what changed
+  when the preview is still known to this server. A capability change that
+  changes nothing about what runs is not stale.
+- A plan that is not ready creates no job: 503 (retryable) for an offline
+  target or a missing download, 409 otherwise.
+- When the job starts, its plan is checked once more. If the model slot now
+  serves a different model, an adapter file moved or changed, or the Remote
+  GPU worker is a different build, the job fails as `plan_stale` without
+  running. The runtime that executed it (app and library versions, or the
+  worker build) is recorded on the job.
+
+`GET /api/jobs/{id}` shows `plan_id`; `GET /api/plans/{id}` returns the plan and
+the request that produced it.
+
+**Replaying.** `POST /api/jobs/{id}/replay` with `{"mode": "exact"}` queues the
+stored plan again, with the same resources and seed, or answers 409
+`replay_resource_unavailable` naming what is gone. It never runs a substitute.
+`{"mode": "latest"}` resolves the original request against the preset's
+current revision and today's resources, which is a new plan. A job made the
+kind-based way has no plan and answers `legacy_unverified`; `rerun` still
+queues its stored params. The same plan and seed are controlled inputs, not a
+promise of identical pixels on different hardware or kernels.
+
 ## Studio presets
 
 A studio preset is a named, versioned creative setup: a model and ordered

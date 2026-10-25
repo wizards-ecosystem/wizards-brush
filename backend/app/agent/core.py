@@ -55,7 +55,7 @@ async def describe(kind: str) -> dict[str, Any]:
     )
 
 
-async def submit(body: JobCreate) -> JobSubmission | DryRunResult:
+async def submit(body: JobCreate) -> JobSubmission | DryRunResult | job_api.PreparedPlan:
     return await job_api.create_job(body)
 
 

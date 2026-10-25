@@ -171,6 +171,17 @@ class Job(SQLModel, table=True):
     # Human-readable guidance for a failure, kept apart from `error` so the UI
     # can lead with what to do and put the traceback behind a disclosure.
     tip: str = ""
+    # ---- preset jobs (0015); NULL on every job made the kind-based way --------------
+    # The immutable plan this job executes, the digest of the request that
+    # produced it (idempotency compares this, not the params), and the target
+    # that runs it ("local", or the remote worker's identity).
+    plan_id: int | None = Field(default=None, index=True)
+    request_digest: str | None = None
+    backend_id: str | None = None
+    # What actually executed, recorded when the job starts: runtime and library
+    # versions, the worker build. Kept apart from the plan's expectation so a
+    # mismatch is visible rather than folded into a replay claim.
+    execution_json: str = "{}"
     created_at: datetime = Field(default_factory=_now, index=True)
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -182,6 +193,46 @@ class Job(SQLModel, table=True):
     @property
     def result(self) -> dict[str, Any]:
         return json.loads(self.result_json or "{}")
+
+    @property
+    def execution(self) -> dict[str, Any]:
+        return _json_or(self.execution_json, {})
+
+
+class ExecutionPlan(SQLModel, table=True):
+    """The immutable effective request behind a preset job (0015).
+
+    Written once, before its job, and never updated. `plan_json` is what the
+    preview showed (model and adapter identities, composed prompts, effective
+    settings, inputs with hashes, seed, finishing); `request_json` is the
+    resolve input that produced it, kept for "run with the latest preset".
+    """
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    request_id: str | None = None
+    request_digest: str = ""
+    creative_hash: str = Field(default="", index=True)
+    execution_hash: str = ""
+    material_hash: str = ""
+    schema_version: int = 1
+    resolver_version: str = ""
+    preset_id: str | None = Field(default=None, index=True)
+    preset_revision: int | None = None
+    kind: str = ""
+    target: str = ""
+    plan_json: str = "{}"
+    request_json: str = "{}"
+    replay_of: int | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def plan(self) -> dict[str, Any]:
+        return _json_or(self.plan_json, {})
+
+    @property
+    def request(self) -> dict[str, Any]:
+        return _json_or(self.request_json, {})
 
 
 class AssetContent(SQLModel, table=True):
@@ -673,6 +724,9 @@ class JobRead(BaseModel):
     group_id: str | None = None
     model_key: str | None = None
     client: str = ""
+    # Preset jobs only: the plan they execute and where they run.
+    plan_id: int | None = None
+    backend_id: str | None = None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -686,7 +740,7 @@ class JobRead(BaseModel):
             message=redact_text(j.message or ""), params=redact(j.params),
             result=redact(j.result), error=redact_text(j.error or ""), tip=j.tip or "",
             priority=j.priority or 0, group_id=j.group_id, model_key=j.model_key,
-            client=j.client or "",
+            client=j.client or "", plan_id=j.plan_id, backend_id=j.backend_id,
             created_at=j.created_at, started_at=j.started_at, finished_at=j.finished_at,
         )
 

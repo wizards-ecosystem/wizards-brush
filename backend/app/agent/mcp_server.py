@@ -262,6 +262,7 @@ async def _submit(body: JobCreate, *, wait: bool, inline: bool, ctx: Context) ->
             result = await core.submit(body)
     except HTTPException as exc:
         raise _fail(exc) from None
+    assert not isinstance(result, core.job_api.PreparedPlan)  # these tools send kind-form bodies
     return await _present(result, wait=wait, inline=inline, ctx=ctx)
 
 

@@ -21,6 +21,7 @@ from .job_api import (
     JobCreate,
     JobInputs,
     JobSubmission,
+    PreparedPlan,
     PromptComposition,
     create_job,
 )
@@ -270,6 +271,7 @@ async def run_recipe(key: str, body: RecipeRunBody) -> RecipeRun:
         kind=row.kind, params=params, inputs=JobInputs.model_validate(inputs),
         dry_run=body.dry_run, request_id=body.request_id, composition=composition,
     ))
+    assert not isinstance(result, PreparedPlan)  # a kind-form request never prepares a plan
     return _run_view(row, result)
 
 

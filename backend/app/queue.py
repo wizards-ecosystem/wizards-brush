@@ -513,6 +513,13 @@ class JobQueue:
             return result
 
         try:
+            if job is not None and job.plan_id is not None:
+                # A preset job runs only the setup it was planned with: recheck
+                # the bound model slot, adapter files and worker build now, and
+                # record the runtime that executes it.
+                from .studio.submission import admit_at_dispatch
+
+                await asyncio.to_thread(admit_at_dispatch, job)
             for attempt in range(1, TRANSIENT_ATTEMPTS + 1):
                 try:
                     result = await asyncio.to_thread(handler, job_id, params, progress_cb)

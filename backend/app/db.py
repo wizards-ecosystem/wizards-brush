@@ -21,6 +21,7 @@ from .models import (
     AssetKind,
     Collection,
     CollectionItem,
+    ExecutionPlan,
     Job,
     JobStatus,
     PromptHistory,
@@ -206,6 +207,9 @@ def create_job_once(
     model_key: str | None = None,
     request_id: str | None = None,
     client: str | None = None,
+    plan_id: int | None = None,
+    request_digest: str | None = None,
+    backend_id: str | None = None,
 ) -> tuple[Job, bool]:
     """Create a job, or return the row already owning ``request_id``.
 
@@ -218,7 +222,8 @@ def create_job_once(
 
         job = Job(kind=kind, params_json=json.dumps(stamp_params(params)), group_id=group_id,
                   model_key=model_key, request_id=request_id,
-                  client=current_client() if client is None else client)
+                  client=current_client() if client is None else client,
+                  plan_id=plan_id, request_digest=request_digest, backend_id=backend_id)
         s.add(job)
         try:
             s.commit()
@@ -1360,6 +1365,35 @@ def find_recipe(key: str) -> Recipe | None:
     if row is not None and (row.schema_version or 1) == 1:
         return row
     return recipe_by_name(text)
+
+
+# ---- execution plans ---------------------------------------------------------------------
+def insert_plan(**fields: Any) -> ExecutionPlan:
+    with session() as s:
+        row = ExecutionPlan(**fields)
+        s.add(row)
+        s.commit()
+        s.refresh(row)
+        s.expunge(row)
+        return row
+
+
+def get_plan(plan_id: int) -> ExecutionPlan | None:
+    with session() as s:
+        row = s.get(ExecutionPlan, plan_id)
+        if row is not None:
+            s.expunge(row)
+        return row
+
+
+def set_execution(job_id: int, snapshot: dict[str, Any]) -> None:
+    with session() as s:
+        job = s.get(Job, job_id)
+        if job is None:
+            return
+        job.execution_json = json.dumps(snapshot)
+        s.add(job)
+        s.commit()
 
 
 # ---- studio presets (schema v2 recipe rows + reciperevision) -----------------------------
