@@ -447,6 +447,81 @@ class RecipeRevision(SQLModel, table=True):
         return _json_or(self.definition_json, {})
 
 
+class Resource(SQLModel, table=True):
+    """An immutable identity for model weights or an adapter (0014).
+
+    `id` is the provider identity plus an exact version (studio.contracts
+    resource_id): "hf:<repo>@<commit>", "civitai:model/../file/..",
+    "local:sha256:<hash>". Facts are kept apart on purpose: `state` is the
+    lifecycle, `verification` whether bytes were checked against the identity,
+    `compat_json` what probes observed, `license_json` what the provider said.
+    None of them implies another.
+    """
+    id: str = Field(primary_key=True)
+    kind: str = Field(default="model", index=True)   # model | adapter | component
+    family: str = "unknown"
+    provider: str = ""
+    provider_ref: str = ""
+    revision: str = ""
+    content_hash: str = Field(default="", index=True)  # "sha256:<hex>" or ""
+    format: str = ""
+    size_bytes: int = 0
+    label: str = ""
+    files_json: str = "[]"
+    license_json: str = "{}"
+    access: str = "unknown"                           # public | gated | unknown
+    state: str = "known"
+    verification: str = "unverified"
+    compat_json: str = "{}"
+    constraints_json: str = "{}"
+    error: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+    @property
+    def files(self) -> list[dict[str, Any]]:
+        return [f for f in _json_or(self.files_json, []) if isinstance(f, dict)]
+
+    @property
+    def license(self) -> dict[str, Any]:
+        return _json_or(self.license_json, {})
+
+    @property
+    def compat(self) -> dict[str, Any]:
+        return _json_or(self.compat_json, {})
+
+    @property
+    def constraints(self) -> dict[str, Any]:
+        return _json_or(self.constraints_json, {})
+
+
+class ResourceInstall(SQLModel, table=True):
+    """One copy of a resource on one target (0014).
+
+    `location` is private: relative to the managed root it lives under
+    ("loras/imported/x.safetensors", "hf-cache:<repo>"), never an absolute path
+    and never shown to API clients as one. A missing file stays a row with
+    state "missing" so the adapter remains visible instead of vanishing.
+    """
+    __table_args__ = (
+        Index("ux_resourceinstall_target_location", "target", "location", unique=True),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    resource_id: str = Field(index=True)
+    target: str = "local"
+    location: str = ""
+    state: str = "installed"                     # installed | verified | missing | failed
+    size_bytes: int = 0
+    mtime_ns: int | None = None
+    verified_hash: str = ""
+    verified_at: datetime | None = None
+    error: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
 class VariantRecipe(SQLModel, table=True):
     """A reusable Variant Set definition: configuration only.
 

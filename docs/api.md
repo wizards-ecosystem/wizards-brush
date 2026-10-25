@@ -522,6 +522,52 @@ Storage checks the schema only. A preset whose model is not installed here,
 or needs a larger device, still saves: readiness is a separate question,
 answered when the preset is resolved.
 
+## Resources
+
+Models and adapters are resources: an identity that never changes, plus the
+installs that hold it. A Hugging Face model is `hf:<repo>@<commit>` (or
+`@unpinned` for a custom slot that follows its configured identifier); an
+imported file is `local:sha256:<hash>` of its bytes. A storage location is an
+install, never the identity, so two copies of one LoRA are one resource with
+two installs, and installs are shown as a managed root and a relative path,
+never as a path on this machine.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/resources` | Every resource: `state`, `verification`, `license`, `compat` observations and installs. Filter with `kind`, `family`, `state`. |
+| `GET /api/resources/{id}` | One resource. |
+| `POST /api/resources/rescan` | Re-register configured models and bring the LoRA library up to date. |
+| `POST /api/resources/uploads` | `{"filename", "size", "kind", "sha256"}`: start a resumable upload. The format is checked here, before any bytes. |
+| `PUT /api/resources/uploads/{id}?offset=N` | Append the body (at most `chunk_bytes`, 32 MB) at `offset`. A wrong offset is a 409 whose `state.received` says where to resume. |
+| `POST /api/resources/uploads/{id}/complete` | Verify size and hash. The upload id is then a receipt. |
+| `DELETE /api/resources/uploads/{id}` | Abandon an upload. Unfinished uploads are removed after a day. |
+| `POST /api/resources/import` | `{"receipt", "kind", "label"}`: validate and install a completed upload. |
+
+Importing checks four separate things, and only claims what it checked:
+
+- **Safe handling.** Only `.safetensors` is imported. `.ckpt`, `.pt`, `.pth`,
+  `.bin` and `.pkl` can run code when loaded and are refused as
+  `unsafe_format`; archives are refused rather than expanded. Bytes wait in a
+  quarantine directory beside their destination and are promoted with one
+  atomic rename, so a refusal leaves nothing behind.
+- **Structure and family.** The header is read with a bounded read and checked:
+  known dtypes, shapes that match their byte ranges, ranges inside the file and
+  not overlapping (`invalid_safetensors` otherwise). The tensor names give the
+  family. A checkpoint imported as an adapter is `not_an_adapter`, an adapter
+  imported as a model `not_a_model`.
+- **Duplicates.** Content already installed is not imported again; the answer
+  is `"status": "already_present"` with the existing resource.
+- **What it does not claim.** An import does not prove the file will load or
+  look good. A single-file checkpoint is catalogued with an error saying no
+  loader runs it yet. Licence metadata from the file is recorded with
+  `"reviewed": false`, and an absent licence is `unknown`.
+
+`GET /api/loras` items carry `resource_id` once the library scan has hashed the
+file, and `null` until then. Each start hashes at most a few GB of new files;
+`POST /api/resources/rescan` finishes the rest. On this machine,
+`scripts/import_resource.py <file>` imports a local file through the same
+checks.
+
 ## Saved recipes
 
 A saved recipe freezes one job kind and the settings that should stay put,

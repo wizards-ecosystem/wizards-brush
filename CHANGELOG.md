@@ -19,6 +19,13 @@ contributors know which user-facing changes need release notes.
   immutable revision made from a stated base revision; a stale save conflicts
   without losing either version, curated presets are never edited in place
   (an edit becomes a custom copy), and archiving keeps every revision readable.
+- A resource catalogue (`/api/resources`). Configured models and the LoRA
+  library are recorded by identity (`hf:<repo>@<commit>`, or `local:sha256:`
+  for a file), with installs, licence and compatibility observations kept as
+  separate facts. Local import uploads in resumable chunks and refuses
+  pickle-based formats and archives, validates the safetensors structure,
+  refuses a checkpoint offered as a LoRA, deduplicates by content and promotes
+  atomically. A LoRA file that disappears stays listed as missing.
 
 ### Fixed
 

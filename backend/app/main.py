@@ -38,6 +38,7 @@ from .routers import (
     library,
     loras,
     recipes,
+    resources,
     studio,
     system,
     tools,
@@ -80,6 +81,16 @@ def _warm_and_sweep() -> None:
             logger.info("pruned %d old job row(s)", pruned)
     except Exception as e:  # noqa: BLE001 — housekeeping never blocks startup
         logger.warning("job history prune skipped: %s", e)
+    try:
+        # Bounded: hashes at most a few GB of new LoRA files per start, so a
+        # large library is verified over several starts or a rescan.
+        from .resources import catalogue as resource_catalogue
+        from .resources import intake
+
+        resource_catalogue.refresh()
+        intake.sweep_uploads()
+    except Exception as e:  # noqa: BLE001 — the catalogue is advisory at startup
+        logger.warning("resource catalogue refresh skipped: %s", e)
     # Detect the GPU once, here, where paying the torch import is already the
     # plan. health() then reads a cache instead of importing anything, so the
     # settings page never pulls the heavy stack into the request path.
@@ -271,6 +282,8 @@ _API_TAGS = [
                                             "finishing, validation and export."},
     {"name": "presets", "description": "Studio presets: curated and custom creative setups, "
                                        "by immutable revision."},
+    {"name": "resources", "description": "Models and adapters: identity, installs, licence, "
+                                         "and safe local import."},
     {"name": "assets", "description": "The gallery: import, search, download, export."},
     {"name": "images", "description": "Multipart image generation routes used by the UI."},
     {"name": "videos", "description": "Multipart video generation routes used by the UI."},
@@ -385,7 +398,7 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
-          variant_sets.router, recipes.router, studio.router, openai_router):
+          variant_sets.router, recipes.router, studio.router, resources.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

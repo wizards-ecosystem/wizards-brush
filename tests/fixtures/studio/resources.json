@@ -14,7 +14,7 @@
     {
       "id": "hf:Qwen/Qwen-Image-Edit-2511@6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",
       "kind": "model",
-      "family": "qwen_image",
+      "family": "qwen",
       "provider": "hf",
       "provider_ref": "Qwen/Qwen-Image-Edit-2511",
       "revision": "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9",

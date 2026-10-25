@@ -133,7 +133,10 @@ A resource id is the provider identity plus an exact version:
 | Local import | `local:sha256:<64 hex>` (content addressed) |
 | Shipped code | `builtin:<name>` |
 
-Storage locations are installations of a resource, never its identity.
+Storage locations are installations of a resource, never its identity. An
+install's location is private: `<root>:<relative path>` under a managed root
+(`loras`, `weights`) or `hf:<repo>` for a Hub cache snapshot, resolved with a
+containment check that refuses traversal and symlinks leaving the root.
 Lifecycle states are `known`, `access_required`, `downloading`, `installed`,
 `verified`, `runnable`, `unavailable` and `failed`. Verification is separate:
 `legacy_unverified` (registered from an older install, never hashed),
@@ -190,7 +193,8 @@ Ids are assigned here, centrally, as each packet lands. Taken:
 `0013_recipe_revisions` (P03: `schema_version`, `preset_id`, `revision`,
 `origin`, `definition_json`, `definition_hash` and `archived_at` on `recipe`,
 the append-only `reciperevision` table, and name uniqueness scoped to saved
-generators). Planned: `0014_resources`,
+generators) and `0014_resources` (P06: `resource` and `resourceinstall`).
+Planned:
 `0015_execution_plans`, `0016_resource_imports`, `0017_reference_sets`,
 `0018_artifacts` and `0019_canvas_projects`. A packet that lands out of order takes the next free
 number and updates this list. Every migration is additive: new columns are
