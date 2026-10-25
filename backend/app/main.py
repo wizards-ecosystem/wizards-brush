@@ -38,6 +38,7 @@ from .routers import (
     library,
     loras,
     recipes,
+    resource_imports,
     resources,
     studio,
     system,
@@ -145,6 +146,14 @@ async def lifespan(app: FastAPI):
         ensure_shipped()
     except Exception as e:  # noqa: BLE001 — missing recipes must not stop startup
         logger.warning("shipped variant recipes skipped: %s", e)
+    try:
+        from .resources.imports import recover_on_startup
+
+        if interrupted := recover_on_startup():
+            logger.info("%d provider import(s) were interrupted; retry them to resume",
+                        interrupted)
+    except Exception as e:  # noqa: BLE001 — an import ledger must not stop startup
+        logger.warning("provider import recovery skipped: %s", e)
     try:
         from .studio.catalogue import ensure_curated
 
@@ -401,8 +410,8 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
-          variant_sets.router, recipes.router, studio.router, resources.router, targets.router,
-          openai_router):
+          variant_sets.router, recipes.router, studio.router, resources.router,
+          resource_imports.router, targets.router, openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

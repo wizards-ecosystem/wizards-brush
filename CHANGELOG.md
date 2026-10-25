@@ -19,6 +19,12 @@ contributors know which user-facing changes need release notes.
   immutable revision made from a stated base revision; a stale save conflicts
   without losing either version, curated presets are never edited in place
   (an edit becomes a custom copy), and archiving keeps every revision readable.
+- Hugging Face and Civitai imports (`/api/resource-imports`). Inspecting a
+  link pins an exact commit or version and lists every file with its hash and
+  whether it can be imported, without downloading; an import is an explicit
+  durable task that resumes, checks the published sha256, runs the local
+  intake checks, needs an acknowledgement for an unknown licence, and only
+  fetches over https from public addresses with tokens kept to their provider.
 - A resource catalogue (`/api/resources`). Configured models and the LoRA
   library are recorded by identity (`hf:<repo>@<commit>`, or `local:sha256:`
   for a file), with installs, licence and compatibility observations kept as

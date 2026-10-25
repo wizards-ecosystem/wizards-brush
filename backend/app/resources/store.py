@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from .. import db
@@ -52,7 +53,18 @@ def listing(kind: str | None = None) -> list[Resource]:
 
 
 def upsert(resource_id: str, **facts: Any) -> Resource:
-    """Insert the resource or update the given facts on the existing row."""
+    """Insert the resource or update the given facts on the existing row.
+
+    A library scan and an import can register the same new file at once;
+    the one that loses the insert race retries as an update.
+    """
+    try:
+        return _upsert(resource_id, facts)
+    except IntegrityError:
+        return _upsert(resource_id, facts)
+
+
+def _upsert(resource_id: str, facts: dict[str, Any]) -> Resource:
     with db.session() as s:
         row = s.get(Resource, resource_id)
         if row is None:
@@ -90,7 +102,16 @@ def install_at(target: str, location: str) -> ResourceInstall | None:
 
 def upsert_install(resource_id: str, target: str, location: str, **facts: Any) -> ResourceInstall:
     """One install per (target, location). A location that now holds different
-    content is re-pointed at the new resource rather than duplicated."""
+    content is re-pointed at the new resource rather than duplicated. A lost
+    insert race (scan and import at once) retries as an update."""
+    try:
+        return _upsert_install(resource_id, target, location, facts)
+    except IntegrityError:
+        return _upsert_install(resource_id, target, location, facts)
+
+
+def _upsert_install(resource_id: str, target: str, location: str,
+                    facts: dict[str, Any]) -> ResourceInstall:
     with db.session() as s:
         row = s.exec(select(ResourceInstall).where(ResourceInstall.target == target,
                                                    ResourceInstall.location == location)).first()
