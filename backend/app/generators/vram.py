@@ -222,20 +222,14 @@ def model_download_shortfall(model: str) -> tuple[int, int] | None:
 def free_host_ram_bytes() -> int | None:
     """Host RAM genuinely available right now, or None if it cannot be read.
 
-    MemAvailable, not MemFree: the kernel's own estimate of what a new
-    allocation can get without swapping, which already accounts for reclaimable
-    page cache. MemFree would read as almost nothing on a warm machine and make
-    us refuse every load.
+    MemAvailable on Linux, ullAvailPhys on Windows: the operating system's own
+    estimate of what a new allocation can get without paging, which already
+    counts reclaimable cache. A raw "free" figure would read as almost nothing
+    on a warm machine and make us refuse every load. See utils/hostmem.py.
     """
-    from pathlib import Path
+    from ..utils.hostmem import probe
 
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) * 1024
-    except Exception:  # noqa: BLE001 — a probe must never raise
-        pass
-    return None
+    return probe().available_bytes
 
 
 def _snapshot_weight_bytes(

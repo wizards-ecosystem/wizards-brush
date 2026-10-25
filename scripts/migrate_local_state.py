@@ -89,6 +89,10 @@ def _local_python() -> Path | None:
 
 
 def _relink_venv() -> None:
+    # A Windows venv holds a launcher copy (Scripts\\python.exe), not a symlink,
+    # and uv rewrites pyvenv.cfg itself; there is nothing to repoint.
+    if os.name == "nt":
+        return
     venv = ROOT / ".venv"
     python = _local_python()
     if not venv.exists() or python is None:

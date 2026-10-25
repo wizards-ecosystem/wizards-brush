@@ -247,7 +247,16 @@ def test_bootstrap_and_native_installers_use_reviewed_immutable_inputs():
     worker = "\n".join(path.read_text(encoding="utf-8")
                        for path in sorted((ROOT / "worker").glob("*.py")))
     assert "astral.sh/uv" not in bootstrap and "SHASUMS256.txt" not in bootstrap
-    assert versions.count("UV_SHA256_") == 4 and versions.count("NODE_SHA256_") == 4
+    # Four POSIX pins and two native Windows pins per tool.
+    assert versions.count("UV_SHA256_") == 6 and versions.count("NODE_SHA256_") == 6
+    # The Windows installer follows the same rules: pinned versions, hashes
+    # from the reviewed file (never fetched beside the download), checked
+    # before anything is unpacked.
+    windows = (ROOT / "scripts" / "bootstrap-tools.ps1").read_text(encoding="utf-8")
+    assert "astral.sh/uv" not in windows and "SHASUMS256.txt" not in windows
+    assert "releases/latest" not in windows
+    assert "UV_SHA256_WINDOWS_" in windows and "NODE_SHA256_WIN_" in windows
+    assert windows.index("Get-FileHash") < windows.index("Expand-Archive")
     assert "NUNCHAKU_WHEEL_SHA256" in nunchaku and "releases/latest" not in nunchaku
     assert "releases/latest" not in dockerfile and "releases/latest" not in worker
     assert "--require-hashes" in dockerfile and "--only-binary=:all:" in dockerfile
@@ -261,6 +270,9 @@ def test_both_launchers_refuse_tokenless_non_loopback_binding():
         launcher = (ROOT / name).read_text(encoding="utf-8")
         assert "api_token_set=" in launcher
         assert "Refusing non-loopback HOST=" in launcher
+    # The Windows launchers go through scripts/serve.py, which refuses the same.
+    serve = (ROOT / "scripts" / "serve.py").read_text(encoding="utf-8")
+    assert "refusing non-loopback HOST=" in serve and "not token" in serve
 
 
 def test_windows_lan_helper_is_port_and_subnet_scoped_and_reversible():
