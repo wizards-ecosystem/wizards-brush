@@ -37,6 +37,8 @@ _TOOLS = {
     # P15: Variant Sets.
     "preview_variant_set", "create_variant_set", "wait_variant_set", "cancel_variant_set",
     "retry_variant_set", "rerun_variant_item",
+    # P16: sprite sheets, atlases and artifacts.
+    "preview_sprite_export", "create_sprite_export", "get_artifact", "fetch_artifact",
 }
 
 

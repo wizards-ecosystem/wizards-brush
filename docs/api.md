@@ -30,6 +30,7 @@ The test suite runs it against the real app, so it stays correct.
 - [Recipes](#recipes)
 - [Saved recipes](#saved-recipes)
 - [Reference sets](#reference-sets)
+- [Sprite sheets and atlases](#sprite-sheets-and-atlases)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
 
@@ -517,6 +518,57 @@ Each item carries its `state`, `state_reason`, `values`, `key`, `job_id`,
 The manifest follows the app's privacy setting. With embedded metadata off,
 prompts and settings are redacted from it, just as they are from exported
 files.
+
+## Sprite sheets and atlases
+
+A finished set's final stage can be exported as a **grid sheet** (equal cells)
+or a **packed atlas** (shelf-packed rectangles, optionally trimmed, across one
+or more pages). Preview first; nothing is drawn or written:
+
+```http
+POST /api/variant-sets/12/sprites/preview
+{"mode": "atlas", "trim": true, "padding": 2, "extrude": 1, "max_width": 1024,
+ "max_height": 1024, "allow_multiple_pages": true}
+```
+
+The answer lists the pages and their sizes, every frame's page and rectangle,
+and the frames that are missing. `POST /api/variant-sets/12/sprites` with the
+same profile builds the PNG pages and `manifest.json`, checks them (every
+rectangle inside its page, none overlapping, every frame cut back out of the
+written PNG and compared with its source), zips them and publishes an
+**artifact**.
+
+| Profile field | Meaning |
+| --- | --- |
+| `mode` | `grid` or `atlas` |
+| `order` | `set` (the set's own order) or `key` |
+| `columns`, `cell_width`, `cell_height` | Grid layout; cells default to the largest frame |
+| `fit` | Grid only: `require_match` (refuse other sizes), `pad` (centre unscaled) or `contain` (shrink into a fixed cell). Frames are never stretched |
+| `max_width`, `max_height`, `allow_multiple_pages`, `trim` | Atlas layout |
+| `padding`, `extrude` | Clear pixels around each rectangle; edge pixels repeated outward (padding must be at least twice the extrusion) |
+| `background` | `transparent` or `#rrggbb` |
+| `pixel_art` | Nearest-neighbour scaling, never smoothing |
+| `pivot`, `durations` | Metadata written to the manifest; durations are never inferred |
+| `partial` | Export what exists and list omissions, instead of refusing |
+
+The manifest (`format: wizards-brush/atlas`, `format_version: 1`) records each
+frame's stable key, index, asset id, page, `x`/`y`/`w`/`h`, original size and
+trim offsets. Coordinates are top-left pixels; rectangles exclude padding and
+are never rotated. A missing frame keeps its index in `missing`. With the
+metadata privacy setting off, axis labels and the set name are left out.
+
+### Artifacts
+
+An artifact is a typed export output kept in managed storage. It has a MIME
+type, size and SHA-256, and stays downloadable until `expires_at` (seven days),
+not just for one response:
+
+- `GET /api/artifacts/{id}`: the record
+- `GET /api/artifacts/{id}/file`: the bytes (authenticated like every `/api` route; `X-Content-SHA256` header)
+- `DELETE /api/artifacts/{id}`: remove it. The assets it was made from are untouched.
+
+MCP: `preview_sprite_export`, `create_sprite_export`, `get_artifact`, and
+`fetch_artifact` (the bytes as an embedded resource, up to 16 MB).
 
 ## Recipes
 
@@ -1011,6 +1063,7 @@ tag:
 | `images`, `videos` | The UI's multipart routes |
 | `openai` | OpenAI-compatible image generation and edits (`/api/openai/v1`) |
 | `references` | Reference sets |
+| `artifacts` | Export outputs (sprite sheets, atlases) |
 | `resources`, `targets` | Models and adapters, imports, routing policy |
 | `system`, `settings`, `library`, `collections`, `loras`, `wildcards`, `grid` | Supporting routes |
 

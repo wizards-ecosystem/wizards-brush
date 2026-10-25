@@ -33,11 +33,14 @@ import type {
   RemoteSession,
   ImportInspection,
   ImportTask,
+  ArtifactView,
   ReferenceSetDefinition,
   ReferenceSetRead,
   ReferenceSetSummary,
   RemotePrepare,
   ResourceView,
+  SpritePreview,
+  SpriteProfile,
   UploadSession,
   RoutingPolicy,
   Stats,
@@ -547,6 +550,23 @@ export const api = {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = name || `variant-set-${id}.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+  previewSprites: (id: number, profile: SpriteProfile) =>
+    postJson(`/api/variant-sets/${id}/sprites/preview`, profile).then((r) => j<SpritePreview>(r)),
+  exportSprites: (id: number, profile: SpriteProfile) =>
+    postJson(`/api/variant-sets/${id}/sprites`, profile).then((r) =>
+      j<ArtifactView & { manifest: Record<string, unknown> }>(r),
+    ),
+  /** Save an artifact through an authenticated fetch (the link needs the token). */
+  downloadArtifact: async (artifact: ArtifactView) => {
+    const r = await safeFetch(artifact.file_url, { headers: authHeaders() });
+    if (!r.ok) throw new Error(await errorDetail(r));
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = artifact.filename;
     a.click();
     URL.revokeObjectURL(a.href);
   },

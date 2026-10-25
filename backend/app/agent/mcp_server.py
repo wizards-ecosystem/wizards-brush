@@ -16,7 +16,13 @@ from fastapi import HTTPException
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ResourceLink,
+    TextContent,
+)
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute, Match, NoMatchFound
@@ -840,6 +846,73 @@ async def rerun_variant_item(
         return await studio_tools.rerun_variant_item(variant_set, item, reseed, cascade)
     except HTTPException as exc:
         raise _fail(exc) from None
+
+
+_SPRITE_PROFILE = (
+    "{mode: grid | atlas, name, order: set | key, columns, cell_width, cell_height, "
+    "fit: require_match | pad | contain, max_width, max_height, trim, allow_multiple_pages, "
+    "padding, extrude, background: transparent | #rrggbb, pixel_art, pivot, durations, "
+    "partial}. See docs/api.md#sprite-sheets-and-atlases.")
+
+
+@mcp.tool()
+async def preview_sprite_export(
+    variant_set: Annotated[int, Field(ge=1)],
+    profile: Annotated[dict[str, Any], Field(description=_SPRITE_PROFILE)],
+) -> dict[str, Any]:
+    """The pages, sizes, frame order and rectangles a sheet or atlas export of the
+    set's final stage would have, and any missing frames. No side effects."""
+    try:
+        return await studio_tools.preview_sprites(variant_set, profile)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def create_sprite_export(
+    variant_set: Annotated[int, Field(ge=1)],
+    profile: Annotated[dict[str, Any], Field(description=_SPRITE_PROFILE)],
+) -> dict[str, Any]:
+    """Side effect: build, validate and publish a sheet or atlas (PNG pages plus a
+    versioned manifest, zipped) as an artifact. Fetch it with fetch_artifact or
+    its file_url; it stays until expires_at."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.export_sprites(variant_set, profile)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def get_artifact(artifact: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
+    """An export artifact's type, size, SHA-256, source and expiry."""
+    try:
+        return await studio_tools.artifact(artifact)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def fetch_artifact(artifact: Annotated[int, Field(ge=1)]) -> CallToolResult:
+    """The artifact's bytes as an embedded resource, for clients that cannot fetch
+    file_url with the API token. Capped at 16 MB."""
+    import base64
+
+    try:
+        data, view = await asyncio.to_thread(studio_tools.artifact_bytes, artifact)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(view)),
+                 EmbeddedResource(type="resource", resource=BlobResourceContents(
+                     uri=f"brush://artifacts/{artifact}", mimeType=view["mime_type"],
+                     blob=base64.b64encode(data).decode()))],
+        structured_content={"artifact": view, "bytes": len(data)},
+    )
 
 
 # ---- reference sets ----------------------------------------------------------------------------

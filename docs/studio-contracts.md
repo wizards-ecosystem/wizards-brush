@@ -202,7 +202,8 @@ generators), `0014_resources` (P06: `resource` and `resourceinstall`),
 `request_digest`, `backend_id` and `execution_json` on `job`) and
 `0016_resource_imports` (P07: the `resourceimport` task table) and
 `0017_reference_sets` (P14: `referenceset` and the append-only
-`referencesetrevision`). Planned: `0018_artifacts` and `0019_canvas_projects`. A packet
+`referencesetrevision`) and `0018_artifacts` (P16: the `artifact` table for
+typed export outputs). Planned: `0019_canvas_projects`. A packet
 that lands out of order takes the next free number and updates this list. Every migration is additive: new columns are
 nullable or have a safe historical default, and no migration hashes weights or
 downloads anything.

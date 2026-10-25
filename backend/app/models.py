@@ -611,6 +611,29 @@ class ResourceImport(SQLModel, table=True):
         return _json_or(self.license_json, {})
 
 
+class Artifact(SQLModel, table=True):
+    """A typed export output in managed storage (0018). Not a gallery asset."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    token: str = Field(default="", index=True)          # random; part of the download path
+    kind: str = ""                                      # sprite_sheet | atlas | archive
+    filename: str = ""
+    mime_type: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
+    path: str = ""                                      # never shown in a view
+    source: str = ""                                    # e.g. variant_set:12
+    meta_json: str = "{}"
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    expires_at: datetime | None = Field(default=None, index=True)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return _json_or(self.meta_json, {})
+
+
 class ReferenceSet(SQLModel, table=True):
     """The head of a reference set (0017): its name and latest revision."""
     __table_args__ = {"sqlite_autoincrement": True}

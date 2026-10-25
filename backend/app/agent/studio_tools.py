@@ -160,6 +160,42 @@ async def rerun_variant_item(set_id: int, item_id: int, reseed: bool,
                                          routes.RerunBody(reseed=reseed, cascade=cascade)))
 
 
+async def preview_sprites(set_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.preview_sprites(set_id, routes.SpriteProfile.model_validate(profile)))
+
+
+async def export_sprites(set_id: int, profile: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.export_sprites(set_id, routes.SpriteProfile.model_validate(profile)))
+
+
+# ---- artifacts ---------------------------------------------------------------------------------
+ARTIFACT_MAX_BYTES = 16 * 1024 * 1024
+
+
+async def artifact(artifact_id: int) -> dict[str, Any]:
+    from ..routers import artifacts as routes
+
+    return _json(await routes.read_artifact(artifact_id))
+
+
+def artifact_bytes(artifact_id: int) -> tuple[bytes, dict[str, Any]]:
+    """An artifact's bytes for clients that cannot fetch file_url, within a cap."""
+    from pathlib import Path
+
+    from .. import artifacts
+
+    row = artifacts.get(artifact_id)
+    if row.size_bytes > ARTIFACT_MAX_BYTES:
+        raise RequestError(413, f"artifact {artifact_id} is {row.size_bytes} bytes; fetch "
+                                f"{artifacts.view(row)['file_url']} with the API token instead",
+                           code="too_large", field="artifact_id")
+    return Path(row.path).read_bytes(), _json(artifacts.view(row))
+
+
 # ---- reference sets --------------------------------------------------------------------------
 async def reference_sets(include_archived: bool = False) -> list[dict[str, Any]]:
     from ..routers import reference_sets as routes

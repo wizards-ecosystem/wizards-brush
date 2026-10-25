@@ -1124,6 +1124,48 @@ export interface ResourceView {
   updated_at: string;
 }
 
+// ---- sprite sheets, atlases and artifacts ----------------------------------------------------
+export interface SpriteProfile {
+  mode: "grid" | "atlas";
+  name?: string;
+  order?: "set" | "key";
+  columns?: number | null;
+  cell_width?: number | null;
+  cell_height?: number | null;
+  fit?: "require_match" | "pad" | "contain";
+  max_width?: number;
+  max_height?: number;
+  trim?: boolean;
+  allow_multiple_pages?: boolean;
+  padding?: number;
+  extrude?: number;
+  background?: string;
+  pixel_art?: boolean;
+  partial?: boolean;
+}
+
+export interface SpritePreview {
+  pages: { width: number; height: number }[];
+  frames: { index: number; key: string; page: number; x: number; y: number; w: number; h: number }[];
+  missing: { index: number; key: string; reason: string }[];
+  grid: { columns: number; cell_width: number; cell_height: number } | null;
+}
+
+/** A typed export output in managed storage, downloadable until it expires. */
+export interface ArtifactView {
+  id: number;
+  kind: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  source: string;
+  meta: Record<string, unknown>;
+  created_at: string;
+  expires_at: string | null;
+  file_url: string;
+}
+
 // ---- reference sets ---------------------------------------------------------------------------
 export interface ReferenceEntry {
   asset_id: number;

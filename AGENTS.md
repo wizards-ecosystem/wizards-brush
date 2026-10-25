@@ -113,6 +113,13 @@
   image and goes to `warnings`, never to `post`), and Pillow-only output checks. A Variant
   Set stage has its own `finishing` list, so `finish_steps` is in `SET_CONTROLLED`. Background removal is BiRefNet-lite ONNX (MIT, pinned + SHA-256, in NOTICE);
   BRIA RMBG weights are non-commercial and must not be used
+- `backend/app/spritesheet.py` + `variant_sets/sprites.py` + `backend/app/artifacts.py` -
+  grid sheets and shelf-packed atlases from a set's final stage (Pillow only, never under
+  `GPU_LOCK`), validated by cutting every frame back out of the **written** PNG, then
+  published as an **artifact** (table `artifact`, migration `0018_artifacts`): managed
+  storage under `output/artifacts/<token>/`, MIME + SHA-256, a 7-day expiry swept at
+  startup, downloaded through authenticated `/api/artifacts/{id}/file`. An artifact is
+  not a gallery asset, and a frame never shifts index when an earlier one is missing
 - `backend/app/exports.py` - the single ZIP writer for gallery and Variant Set exports; the
   `embed_metadata` privacy setting governs manifests, and server paths never enter one
 - `backend/app/routers/job_api.py` - **the API is a first-class client surface** (guide:
