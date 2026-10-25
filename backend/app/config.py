@@ -483,11 +483,14 @@ class Settings(BaseSettings):
                 os.fsync(tmp.fileno())
                 pending = Path(tmp.name)
             try:
+                if os.name != "posix":
+                    # Restrict before the rename, which keeps the file's own
+                    # access list: the settings file is never visible with the
+                    # directory's inherited one, even briefly.
+                    _restrict_quietly(pending)
                 os.replace(pending, self.runtime_overrides_path)
                 if os.name == "posix":
                     os.chmod(self.runtime_overrides_path, 0o600)
-                else:
-                    _restrict_quietly(self.runtime_overrides_path)
             finally:
                 pending.unlink(missing_ok=True)
 
