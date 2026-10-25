@@ -6,6 +6,27 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+### Security
+
+- certifi 2026.10.23: earlier bundles trusted emSign root CAs whose
+  intermediate keys were compromised (GHSA-6q48-6c7w-9gw2, critical). Every
+  release up to 0.2.0 shipped an affected certifi.
+- Pillow 13.0.0 closes the open Pillow advisories (several critical and high);
+  filelock 4.2.2 and setuptools 84.1.0 close theirs.
+- Development-only: zod 4.6.7 (memory exhaustion, GHSA-mrhx-c7xc-m3w5) and
+  undici 8.12.3 in the frontend toolchain. Neither ships in the app bundle.
+
+### Changed
+
+- Dependencies moved forward together: Pillow 13.0, FastAPI 0.146, Starlette
+  1.9, tokenizers 0.23.3, filelock 4.2.2, imageio 2.38.1, certifi 2026.10.23,
+  setuptools 84.1.0 (the torch override is smoke-tested again by
+  `make optional-check`), React 19.3.1, the frontend tooling group and CodeQL
+  4.39.1. The Remote GPU worker's lock is re-resolved from the app's, so the
+  next release publishes a new worker image.
+- The changelog no longer presents 0.1.8 as a release: it was prepared but
+  never published, and its changes shipped in 0.2.0.
+
 ## [0.2.0] - 2026-10-25
 
 ### Added
@@ -176,7 +197,10 @@ contributors know which user-facing changes need release notes.
   reason when it cannot tell. Smoke-tested on Windows 11 build 26200; local GPU
   generation on Windows is not qualified. See `docs/getting-started.md`.
 
-## [0.1.8] - 2026-10-21
+## 0.1.8 - not released
+
+Prepared on 2026-10-21 but never tagged or published; these changes first
+shipped in 0.2.0.
 
 ### Fixed
 
@@ -486,7 +510,6 @@ contributors know which user-facing changes need release notes.
   invariants, reportability criteria, accepted risks, and known limitations.
 
 [0.2.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.2.0
-[0.1.8]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.8
 [0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
 [0.1.5]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.5
