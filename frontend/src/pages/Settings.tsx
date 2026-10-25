@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, saveBrowserSession } from "../api/client";
-import type { AppSettings, UserPreset } from "../api/types";
+import type { AppSettings, RoutingPolicy, TargetsView, UserPreset } from "../api/types";
 import { Icon, type IconName } from "../components/icons";
 import { WildcardManager } from "../components/WildcardManager";
 import { Button, EmptyState, PageHeader, Spinner, fmtBytes } from "../components/ui";
@@ -183,6 +183,7 @@ export function Settings() {
         <nav className="sticky top-6 hidden border-l border-edge lg:block" aria-label="Settings sections">
           {[
             ["connections", "Connections"],
+            ["routing", "Routing"],
             ["presets", "Presets"],
             ["wildcards", "Wildcards"],
             ["files", "File metadata"],
@@ -264,6 +265,8 @@ export function Settings() {
               )}
             </div>
           </SettingsSection>
+
+          <RoutingSection />
 
           <SettingsSection
             id="presets"
@@ -389,6 +392,126 @@ export function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+const POLICY_TOGGLES: Array<{ key: keyof RoutingPolicy; label: string; description: string }> = [
+  {
+    key: "remote_enabled",
+    label: "Use the Remote GPU",
+    description:
+      "Off refuses any job that would run on the Remote GPU. Nothing is moved to this machine silently.",
+  },
+  {
+    key: "auto_may_use_remote",
+    label: "Auto may choose the Remote GPU",
+    description:
+      "Off means Auto picks the Remote GPU only for a request that allows it (Allow remote in the Studio).",
+  },
+  {
+    key: "send_inputs_to_remote",
+    label: "Send input images to the Remote GPU",
+    description:
+      "Off refuses remote jobs that would upload a source image, mask or reference, unless the request allows it.",
+  },
+];
+
+/** Where jobs may run, and what each place reports it can do. Changing the
+ *  policy never starts, stops or rents anything. */
+function RoutingSection() {
+  const toast = useStore((s) => s.toast);
+  const refreshControls = useStore((s) => s.refreshControls);
+  const [view, setView] = useState<TargetsView | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .targets()
+      .then((v) => alive && setView(v))
+      .catch((e) => alive && setError(`${e}`));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const change = async (key: keyof RoutingPolicy, value: boolean) => {
+    if (!view) return;
+    const before = view;
+    setView({ ...view, policy: { ...view.policy, [key]: value } });
+    try {
+      const policy = await api.setRoutingPolicy({ [key]: value });
+      setView(await api.targets().catch(() => ({ ...before, policy })));
+      await refreshControls();
+      toast("Routing policy saved", "success");
+    } catch (e) {
+      setView(before);
+      toast(`${e}`, "error");
+    }
+  };
+
+  return (
+    <SettingsSection
+      id="routing"
+      icon="gpu"
+      title="Routing"
+      description="Where a preset on Auto may run, and whether your inputs may leave this machine."
+    >
+      {error && <div className="text-xs text-danger">Could not read the targets: {error}</div>}
+      {!view && !error && (
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <Spinner /> Reading targets…
+        </div>
+      )}
+      {view && (
+        <>
+          <div>
+            {POLICY_TOGGLES.map((toggle) => (
+              <PrivacyToggle
+                key={toggle.key}
+                label={toggle.label}
+                description={toggle.description}
+                checked={view.policy[toggle.key]}
+                onChange={(value) => void change(toggle.key, value)}
+              />
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2" data-testid="target-summary">
+            {[view.local, view.remote].map((report) => (
+              <div key={report.target} className="border border-edge p-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {report.target === "local" ? "This machine" : "Remote GPU"}
+                  </span>
+                  <span className="technical text-[10px] uppercase text-muted">{report.confidence}</span>
+                </div>
+                <div className="technical mt-1 break-all text-[10px] text-muted">{report.identity}</div>
+                {report.unavailable_reason ? (
+                  <div className="mt-2 text-warn">{report.unavailable_reason}</div>
+                ) : report.connected === false ? (
+                  <div className="mt-2 text-muted">
+                    Not connected · {report.configured_operations?.length ?? 0} operations configured
+                  </div>
+                ) : (
+                  <div className="mt-2 text-muted">
+                    {report.operations.length} operations · {report.models.length} models
+                    {report.models.some((m) => m.installed === false)
+                      ? ` · ${report.models.filter((m) => m.installed === false).length} not installed`
+                      : ""}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
+            <span className="technical">capability revision {view.capability_revision.slice(0, 12)}</span>
+            <Link className="text-accent underline hover:text-ink" to="/resources">
+              Manage models and adapters
+            </Link>
+          </div>
+        </>
+      )}
+    </SettingsSection>
   );
 }
 

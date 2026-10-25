@@ -846,7 +846,7 @@ export interface RemoteSession {
   /** This install may rent hardware at all. False for the self-hosted default. */
   can_provision: boolean;
   running: boolean;
-  state: "off" | "starting" | "ready" | "stopping" | "error";
+  state: "off" | "starting" | "ready" | "stopping" | "stop_unconfirmed" | "stop_failed" | "error";
   detail: string;
   pod_id: string;
   base_url: string;
@@ -856,6 +856,13 @@ export interface RemoteSession {
   /** Compute only, and an estimate — the provider bills from its own clock. */
   cost_estimate_usd: number | null;
   worker_connected: boolean;
+  /** Recorded hardware may still be billing: running, or a stop not confirmed. */
+  possibly_billing?: boolean;
+  stop_error?: string;
+  stop_attempts?: number;
+  /** Unix seconds of the provider's last answer; 0 = never observed by this process. */
+  observed_at?: number;
+  observe_error?: string;
 }
 
 // ---- studio presets, plans, resources and targets ------------------------------------------
@@ -1067,7 +1074,7 @@ export interface ResourceView {
   format: string;
   size_bytes: number;
   label: string;
-  license: { id?: string; source?: string; reviewed?: boolean; [key: string]: unknown };
+  license: ResourceLicense;
   access: string;
   state: string;
   verification: string;
@@ -1085,6 +1092,93 @@ export interface ResourceView {
   updated_at: string;
 }
 
+export interface UploadSession {
+  upload_id: string;
+  filename: string;
+  kind: "adapter" | "model";
+  size: number;
+  received: number;
+  state: string;
+  sha256: string | null;
+  chunk_bytes: number;
+}
+
+export interface ResourceLicense {
+  id?: string | null;
+  name?: string;
+  url?: string;
+  source?: string;
+  reviewed?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ImportCandidate {
+  id: string;
+  type: string;
+  name: string;
+  kind: string | null;
+  size?: number | null;
+  sha256?: string | null;
+  supported: boolean;
+  reason: string;
+  [key: string]: unknown;
+}
+
+/** What a provider link points at. Reading it downloads nothing. */
+export interface ImportInspection {
+  provider: string;
+  provider_ref: string;
+  revision: string;
+  url: string;
+  name: string;
+  license: ResourceLicense;
+  access: string;
+  family: string;
+  candidates: ImportCandidate[];
+  selection_required: boolean;
+  default_selection: string | null;
+  license_needs_acknowledgement: boolean;
+  notes: string[];
+}
+
+export type ImportState = "queued" | "running" | "canceling" | "canceled" | "failed" | "interrupted" | "done";
+
+export interface ImportTask {
+  id: number;
+  provider: string;
+  provider_ref: string;
+  revision: string;
+  source_url: string;
+  selection: string;
+  kind: string;
+  filename: string;
+  expected_size: number | null;
+  expected_sha256: string | null;
+  state: ImportState;
+  progress: number;
+  bytes_done: number;
+  bytes_total: number | null;
+  error: string;
+  error_code: string;
+  resource_id: string | null;
+  license: ResourceLicense;
+  license_acknowledged: boolean;
+  client: string;
+  retryable: boolean;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+/** Copying an adapter to the Remote GPU worker, by content. */
+export interface RemotePrepare {
+  resource_id: string;
+  state: "running" | "verified" | "present" | "failed" | "canceled" | string;
+  sent: number;
+  size: number;
+  error: string;
+}
+
 export interface RoutingPolicy {
   remote_enabled: boolean;
   auto_may_use_remote: boolean;
@@ -1098,6 +1192,8 @@ export interface TargetReport {
   confidence: "measured" | "advertised" | "unknown";
   hardware: Record<string, unknown>;
   operations: Operation[];
+  /** Remote only: what the configured slots would offer once a worker answers. */
+  configured_operations?: Operation[];
   kinds: string[];
   models: {
     resource: string;

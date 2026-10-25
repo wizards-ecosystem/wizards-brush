@@ -31,7 +31,11 @@ import type {
   Presets,
   PromptHistoryItem,
   RemoteSession,
+  ImportInspection,
+  ImportTask,
+  RemotePrepare,
   ResourceView,
+  UploadSession,
   RoutingPolicy,
   Stats,
   SystemStatus,
@@ -206,6 +210,9 @@ export const api = {
   remoteSession: () => get("/api/remote-gpu/session").then((r) => j<RemoteSession>(r)),
   startRemoteSession: () => postJson("/api/remote-gpu/session", {}).then((r) => j<RemoteSession>(r)),
   stopRemoteSession: () => del("/api/remote-gpu/session").then((r) => j<RemoteSession>(r)),
+  /** Drop the recorded session without asking the provider; the pod id is the confirmation. */
+  forgetRemoteSession: (podId: string) =>
+    postJson("/api/remote-gpu/session/forget", { pod_id: podId }).then((r) => j<RemoteSession>(r)),
   models: () => get("/api/models").then((r) => j<GeneratorSpec[]>(r)),
   presets: () => get("/api/presets").then((r) => j<Presets>(r)),
   stats: () => get("/api/stats").then((r) => j<Stats>(r)),
@@ -410,6 +417,49 @@ export const api = {
     postJson(`/api/jobs/${jobId}/replay`, { mode }).then((r) => j<{ job_id: number; job_ids: number[] }>(r)),
   resources: (kind?: "model" | "adapter") =>
     get(`/api/resources${kind ? `?kind=${kind}` : ""}`).then((r) => j<ResourceView[]>(r)),
+  rescanResources: () => postJson("/api/resources/rescan", {}).then((r) => j<Record<string, number>>(r)),
+  createUpload: (body: { filename: string; size: number; kind: "adapter" | "model"; sha256?: string }) =>
+    postJson("/api/resources/uploads", body).then((r) => j<UploadSession>(r)),
+  /** Append one chunk at `offset`. A wrong offset is an ApiError whose state says where to resume. */
+  uploadChunk: (uploadId: string, offset: number, chunk: Blob, signal?: AbortSignal) =>
+    safeFetch(`/api/resources/uploads/${encodeURIComponent(uploadId)}?offset=${offset}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/octet-stream" },
+      body: chunk,
+      signal,
+    }).then((r) => j<UploadSession>(r)),
+  completeUpload: (uploadId: string) =>
+    postJson(`/api/resources/uploads/${encodeURIComponent(uploadId)}/complete`, {}).then((r) =>
+      j<UploadSession>(r),
+    ),
+  cancelUpload: (uploadId: string) =>
+    del(`/api/resources/uploads/${encodeURIComponent(uploadId)}`).then((r) => j<OkResponse>(r)),
+  importUpload: (receipt: string, label = "") =>
+    postJson("/api/resources/import", { receipt, label }).then((r) =>
+      j<{ status: "imported" | "already_present"; resource: ResourceView }>(r),
+    ),
+  inspectImport: (link: string) =>
+    postJson("/api/resource-imports/inspect", { link }).then((r) => j<ImportInspection>(r)),
+  createImport: (body: {
+    link: string;
+    selection?: string | null;
+    kind?: "adapter" | "model" | null;
+    acknowledge_license?: boolean;
+  }) => postJson("/api/resource-imports", body).then((r) => j<ImportTask>(r)),
+  imports: () => get("/api/resource-imports").then((r) => j<ImportTask[]>(r)),
+  cancelImport: (id: number) =>
+    postJson(`/api/resource-imports/${id}/cancel`, {}).then((r) => j<ImportTask>(r)),
+  retryImport: (id: number) =>
+    postJson(`/api/resource-imports/${id}/retry`, {}).then((r) => j<ImportTask>(r)),
+  prepareRemote: (resourceId: string) =>
+    postJson(`/api/resources/${encodeURIComponent(resourceId)}/prepare`, {}).then((r) => j<RemotePrepare>(r)),
+  /** null when no preparation has run for it in this app process. */
+  prepareStatus: (resourceId: string) =>
+    get(`/api/resources/${encodeURIComponent(resourceId)}/prepare`).then((r) =>
+      r.status === 404 ? null : j<RemotePrepare>(r),
+    ),
+  cancelPrepare: (resourceId: string) =>
+    del(`/api/resources/${encodeURIComponent(resourceId)}/prepare`).then((r) => j<OkResponse>(r)),
   targets: () => get("/api/targets").then((r) => j<TargetsView>(r)),
   setRoutingPolicy: (changes: Partial<RoutingPolicy>) =>
     safeFetch("/api/targets/policy", {
