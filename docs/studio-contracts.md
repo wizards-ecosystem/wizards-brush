@@ -199,8 +199,9 @@ Ids are assigned here, centrally, as each packet lands. Taken:
 the append-only `reciperevision` table, and name uniqueness scoped to saved
 generators), `0014_resources` (P06: `resource` and `resourceinstall`) and
 `0015_execution_plans` (P05: the `executionplan` table; `plan_id`,
-`request_digest`, `backend_id` and `execution_json` on `job`). Planned:
-`0016_resource_imports`, `0017_reference_sets`,
+`request_digest`, `backend_id` and `execution_json` on `job`) and
+`0016_resource_imports` (P07: the `resourceimport` task table). Planned:
+`0017_reference_sets`,
 `0018_artifacts` and `0019_canvas_projects`. A packet that lands out of order takes the next free
 number and updates this list. Every migration is additive: new columns are
 nullable or have a safe historical default, and no migration hashes weights or

@@ -669,6 +669,85 @@ file, and `null` until then. Each start hashes at most a few GB of new files;
 `scripts/import_resource.py <file>` imports a local file through the same
 checks.
 
+## Provider imports
+
+Hugging Face and Civitai links are imported in two named steps with different
+side effects. Inspecting a link reads provider metadata and nothing else;
+creating an import binds one exact file or repository commit and queues a
+durable download task. Nothing downloads on a preview, and the general image
+import never fetches a URL.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/resource-imports/inspect` | `{"link"}`: what the link points at. No row, no download. |
+| `POST /api/resource-imports` | `{"link", "selection", "kind", "acknowledge_license"}`: queue one download. |
+| `GET /api/resource-imports`, `GET /api/resource-imports/{id}` | Tasks with state, progress and the resource each produced. |
+| `POST /api/resource-imports/{id}/cancel`, `.../retry` | Stop one; run a failed, interrupted or canceled one again. |
+
+Accepted links: `https://huggingface.co/<org>/<repo>` (also `/tree/<rev>`,
+`/blob/<rev>/<file>`, `/resolve/<rev>/<file>`), `hf:<org>/<repo>[@<rev>]`,
+`https://civitai.com/models/<id>[?modelVersionId=<id>]`,
+`https://civitai.com/api/download/models/<version>` and
+`civitai:model/<id>[/version/<id>[/file/<id>]]`. Only https is accepted.
+
+**Inspection** answers with the exact `revision` (a Hugging Face link without a
+revision is pinned to the default branch's current commit), the `license`,
+`access` (`public`, `gated`, `private`) and `candidates`. Each candidate has an
+`id` to send back as `selection`, its size and published sha256, and
+`supported` with a `reason` when it cannot be imported: pickle-based formats,
+archives, non-model Civitai files and Diffusers components that only ship
+pickle weights are refused. A Hugging Face repository with a `model_index.json`
+offers itself as one `repo` candidate (a Diffusers pipeline); its top-level
+`.safetensors` files are offered one by one. Civitai candidates carry their
+version, base model and the family it maps to. When more than one candidate is
+usable, `selection_required` is true and creating an import without a
+selection answers `selection_required` with the options; nothing picks
+"latest" for you.
+
+**Creating an import** refuses before anything is written:
+
+- `selection_required` / `invalid_option`, and `unsafe_format` or
+  `unsupported_format` for a refused candidate;
+- `missing_input` on `kind` for a single Hugging Face file: say `adapter` or
+  `model` (Civitai types say it themselves);
+- `access_required` for a gated or private repository while `HF_TOKEN` is not
+  set;
+- `license_unreviewed` (409) when the licence is unknown, until the request
+  carries `acknowledge_license: true`. Civitai publishes permission flags
+  rather than a licence, so its licence stays `unknown` with those flags
+  recorded (`commercial_use`, `derivatives`, `credit_required`), and the
+  acknowledgement is stored with who gave it. Brush records licences; it does
+  not give a legal guarantee;
+- `insufficient_disk` (507) and `too_large`.
+
+Content already installed is not downloaded again: the task is `done` at once
+with `error_code: "already_present"`.
+
+**Tasks** run on a small I/O worker, never the GPU lane. A single file streams
+into the intake quarantine, resumes with a ranged request after an
+interruption when the provider supports it, must match the published size and
+sha256 (`size_mismatch`, `hash_mismatch` otherwise, and the bytes are
+discarded), and then goes through the same checks as a local upload: the
+safetensors structure, `not_an_adapter` for a checkpoint offered as a LoRA,
+deduplication and an atomic promotion that never overwrites a resource. The
+imported file's identity is its content (`local:sha256:`), with the provider,
+exact version, licence statement and source recorded on the resource. A
+Diffusers repository downloads file by file at the inspected commit into the
+managed Hugging Face cache, each weight checked against its LFS hash, and is
+registered as `hf:<repo>@<commit>`; configure it in a model slot to use it.
+States are `queued`, `running`, `canceling`, `canceled`, `failed`,
+`interrupted` and `done`. A task that was running when the app stopped becomes
+`interrupted` and waits for a retry; it is never marked done.
+
+**Network rules.** Every request and every redirect hop must be https to a
+host whose every resolved address is publicly routable: loopback, private,
+link-local, carrier-grade NAT and cloud metadata addresses are refused as
+`unsafe_destination`. Redirects are followed by hand, at most five. The
+Hugging Face token is sent only to huggingface.co and `CIVITAI_API_TOKEN` only
+to civitai.com, never to a download host a redirect names. Tokens and signed
+query strings never appear in task rows, responses or logs. A task row holds
+no credential and stores its source URL without a query string.
+
 ## Saved recipes
 
 A saved recipe freezes one job kind and the settings that should stay put,
