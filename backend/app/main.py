@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import client_tag, enrichment, log, notify
+from . import client_tag, discovery, enrichment, log, notify
 from .agent.mcp_server import exact_route as mcp_exact_route
 from .agent.mcp_server import http_app as mcp_http_app
 from .agent.mcp_server import open_sessions
@@ -274,6 +274,10 @@ Everything the app does is available here; the web UI is one client of this API.
 **Authentication.** When `API_TOKEN` is set, send `X-API-Token: <token>` with every
 `/api` request. With it unset (the default) the API is open to this machine only.
 
+**Start here if you are a program or an AI agent:** `GET /llms.txt` is a plain-text
+guide addressed to this server, and this document declares the token header and
+this server's address, so API tools can import it as-is.
+
 **The short path.** `GET /api/jobs/kinds` lists what can run and each kind's settings
 schema. Bring inputs in with `POST /api/assets/import`, queue work with
 `POST /api/jobs`, block on `GET /api/jobs/{id}/wait`, then fetch outputs with
@@ -304,8 +308,11 @@ _API_TAGS = [
     {"name": "openai", "description": "OpenAI-compatible image generation and edits."},
 ]
 
+# The OpenAPI document and its explorers are served by `discovery`, which adds
+# the auth scheme and this server's own address to what FastAPI generates.
 app = FastAPI(title="The Wizard's Brush", version=get_version(), lifespan=lifespan,
-              description=_API_DESCRIPTION, openapi_tags=_API_TAGS)
+              description=_API_DESCRIPTION, openapi_tags=_API_TAGS,
+              openapi_url=None, docs_url=None, redoc_url=None)
 
 
 @app.exception_handler(RequestError)
@@ -420,6 +427,9 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
 # Both are registered before that catch-all.
 app.router.routes.append(mcp_exact_route)
 app.mount("/api/mcp", mcp_http_app)
+# Public, data-free self-description (/openapi.json, /docs, /redoc, /llms.txt).
+# Registered before the SPA catch-all below, which would otherwise answer them.
+app.include_router(discovery.router)
 
 # Cache policy for generated media.
 #

@@ -287,6 +287,11 @@ contributors know which user-facing changes need release notes.
   this under the Prefix field.
 - The test suite no longer inherits `API_TOKEN` from a developer's `.env`, which
   turned every API test into a 401 on a machine with a token set.
+- The API describes itself to programs and AI agents: `GET /llms.txt` is a
+  plain-text guide addressed to the running server, and `GET /openapi.json`
+  declares the `X-API-Token` security scheme and the server's own address, so
+  API tools and agent frameworks can import it without editing. `/docs`
+  gains an **Authorize** button for the token.
 
 ## [0.1.2] - 2026-09-18
 

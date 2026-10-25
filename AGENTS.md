@@ -129,6 +129,13 @@
   its answer is older than 15 s): unavailable in `/kinds`, 503 on submit, a preview
   warning and a refused Variant Set create. The suite treats the worker as connected
   (conftest `_remote_gpu_answers`); request `remote_gpu_offline` to test the opposite
+- `backend/app/discovery.py` - public, **data-free** self-description outside `/api`:
+  `/llms.txt` (a guide addressed to the live base URL, then `docs/api.md` with its relative
+  links made absolute) and `/openapi.json` (FastAPI's document plus the `X-API-Token`
+  `securitySchemes` and a per-request absolute `servers` URL, which OpenAPI-importing tools
+  and agents require), with `/docs` and `/redoc` over it. FastAPI's own routes are disabled
+  (`openapi_url=None`); the router is included **before** the SPA catch-all. Never serve
+  library data or anything from `output/` here - it answers without the token
 - `backend/app/recipes.py` + `routers/recipes.py` - a saved generation recipe
   (table `recipe`, migration `0010_recipes`, `defaulted_json` in `0011`): frozen
   kind settings plus the exposed fields as one JSON Schema. Values left at the
