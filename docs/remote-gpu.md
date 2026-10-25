@@ -139,3 +139,15 @@ hashes, or commit revisions. Optional SageAttention is never downloaded by the
 worker; enable it only after provisioning a reviewed build in the CUDA base
 environment. A custom model slot is an explicit operator-controlled trust
 decision and follows the update policy of the supplied repository.
+
+## Resource transfer
+
+Workers from this release advertise `resources` in `/health` (protocol
+`{"jobs": 1, "resources": 1}`) and accept a content-addressed upload of
+imported adapters: `POST /resources/ensure` with the sha256, size and kind;
+`PUT /resources/{sha256}/chunk?offset=N` (at most 32 MB a chunk); `POST
+/resources/{sha256}/complete`, which verifies the full hash and promotes the
+file to `REMOTE_GPU_ROOT/models/resources/<aa>/<sha256>.safetensors`; and
+`GET /resources/manifest`. Every route needs the shared secret. No path is
+ever accepted: the hash is the only name. Storing an adapter does not make
+jobs apply it; that is a separate capability the worker does not advertise yet.

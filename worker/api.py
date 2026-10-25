@@ -22,6 +22,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
 from . import build_id, config, pipelines, runtime
+from . import resources as resource_store
 
 # ---- API ------------------------------------------------------------------
 app = FastAPI(title="The Wizard's Brush Remote GPU Server")
@@ -413,7 +414,9 @@ def health(x_gen_secret: str | None = Header(default=None)):
     # Lightning LoRA is configured; whether it truly loaded is per-pipe and only
     # known after that pipe exists, so `speed_loaded` reports the live state and
     # the generate path refuses a speed request the pipe cannot honour.
-    features = ["preview", "cancel", "cancel_client", "edit", "ack"]
+    # "resources": the manifest/ensure/receive protocol below. It stores files;
+    # it does not by itself mean jobs apply them (no user-adapter feature yet).
+    features = ["preview", "cancel", "cancel_client", "edit", "ack", "resources"]
     if pipelines._supports_flf2v(config.VIDEO_MODEL):
         features.append("flf2v")
     if config.IMAGE_LIGHTNING_LORA:
@@ -487,6 +490,7 @@ def health(x_gen_secret: str | None = Header(default=None)):
         "image_loaded": pipelines._PIPES["image"] is not None,
         "video_mode": pipelines._PIPES["video_mode"],
         "features": features,
+        "protocol": {"jobs": 1, "resources": 1},
         "build": build_id(),
         "speed_loaded": {
             "image": bool(pipelines._PIPES.get("image_speed")),
@@ -494,6 +498,11 @@ def health(x_gen_secret: str | None = Header(default=None)):
             "video": bool(pipelines._PIPES.get("video_speed")),
         },
     }
+
+
+# ---- resources (content-addressed, prepared before any job needs them) -----
+_RESOURCES = resource_store.Store(runtime.MODELS / "resources")
+resource_store.install_routes(app, _RESOURCES, _auth)
 
 
 def _cfg_call(sig, call: dict, guidance: float, negative: str) -> None:

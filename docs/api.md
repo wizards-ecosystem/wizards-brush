@@ -694,6 +694,18 @@ Importing checks four separate things, and only claims what it checked:
   loader runs it yet. Licence metadata from the file is recorded with
   `"reviewed": false`, and an absent licence is `unknown`.
 
+**Preparing a resource on the Remote GPU.** `POST /api/resources/{id}/prepare`
+copies an imported adapter to the connected worker, in the background (`GET`
+the same path for progress, `DELETE` to cancel). Only the bytes and their
+sha256 cross: the worker stores the file under its hash, a transfer that was
+interrupted resumes at the offset the worker reports, the full hash is checked
+before the file counts, and a file already there is not sent again. The
+worker's copy then shows as an install with target `remote:<build>`. This is
+preparation, not inference: until a worker advertises that it applies user
+adapters, a plan that needs adapters on the remote target stays blocked
+(`adapters_unsupported_on_target`). Hub models are not transferred; the
+worker fetches those from their provider.
+
 `GET /api/loras` items carry `resource_id` once the library scan has hashed the
 file, and `null` until then. Each start hashes at most a few GB of new files;
 `POST /api/resources/rescan` finishes the rest. On this machine,

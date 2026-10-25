@@ -272,6 +272,16 @@ def _base_and_secret() -> tuple[str, str]:
     return url, secret
 
 
+def connection() -> tuple[str, str]:
+    """(base URL, shared secret) the app uses for the worker right now."""
+    return _base_and_secret()
+
+
+def redacted(text: str) -> str:
+    """`text` with the configured shared secret removed."""
+    return _redact(text, _base_and_secret()[1])
+
+
 # Last successful /health payload, refreshed by every remote_gpu_health() call.
 # The generator registry is built synchronously (GET /api/models) but needs to
 # know what the remote GPU can actually do, so it reads this cache rather than

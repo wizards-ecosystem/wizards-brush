@@ -120,6 +120,40 @@ async def import_resource(body: ImportBody) -> dict[str, Any]:
                                    label=body.label)
 
 
+@router.post("/resources/{resource_id:path}/prepare", responses=error_responses(400, 404, 409, 503))
+async def prepare_remote(resource_id: str) -> dict[str, Any]:
+    """Copy an imported adapter to the connected Remote GPU worker, by content.
+
+    Runs in the background; GET this path for progress, DELETE to cancel. A
+    prepared adapter is stored on the worker; applying it in jobs is a separate
+    worker capability.
+    """
+    from ..resources import remote
+
+    return await asyncio.to_thread(remote.start, resource_id)
+
+
+@router.get("/resources/{resource_id:path}/prepare", responses=error_responses(404))
+async def prepare_status(resource_id: str) -> dict[str, Any]:
+    from ..resources import remote
+
+    state = remote.status(resource_id)
+    if state is None:
+        raise RequestError(404, "no preparation has run for this resource",
+                           code="not_found", field="resource_id")
+    return state
+
+
+@router.delete("/resources/{resource_id:path}/prepare", responses=error_responses(404))
+async def cancel_prepare(resource_id: str) -> dict[str, bool]:
+    from ..resources import remote
+
+    if not remote.cancel(resource_id):
+        raise RequestError(404, "no preparation is running for this resource",
+                           code="not_found", field="resource_id")
+    return {"ok": True}
+
+
 @router.get("/resources/{resource_id:path}", responses=error_responses(404))
 async def read_resource(resource_id: str) -> dict[str, Any]:
     row = store.get(resource_id)

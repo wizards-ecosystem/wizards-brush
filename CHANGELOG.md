@@ -41,6 +41,12 @@ contributors know which user-facing changes need release notes.
   inputs may be sent there. Plans report readiness as ready, needs resources,
   needs check or blocked; unmeasured hardware is never reported as ready, and
   a planned job's model affinity and lane follow its plan.
+- Remote resource preparation (`POST /api/resources/{id}/prepare`): an imported
+  adapter is copied to the Remote GPU worker by content, resumed at the
+  worker's offset after an interruption, verified by sha256 before it counts,
+  and recorded as a remote install. The worker stores it under its hash and
+  never takes a path. Applying user adapters in remote jobs is not part of
+  this release.
 
 ### Fixed
 
