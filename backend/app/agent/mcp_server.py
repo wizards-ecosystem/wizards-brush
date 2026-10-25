@@ -736,6 +736,112 @@ async def archive_preset(
         raise _fail(exc) from None
 
 
+# ---- variant sets ------------------------------------------------------------------------------
+_RECIPE = ("A Variant Set recipe: {sources, masks, content, seed: {mode, value}, stages: [{name, "
+           "operation | preset: {id, revision?, target, allow_remote}, axes: [{name, values}], "
+           "prompt, negative_prompt, params, value_params, mask, references, finishing, "
+           "validation, naming}]}. See docs/api.md#variant-sets.")
+
+
+def _validation_error(exc: Exception) -> RequestError:
+    from pydantic import ValidationError
+
+    if isinstance(exc, ValidationError):
+        first = exc.errors()[0]
+        path = ".".join(str(p) for p in first.get("loc", ()))
+        return RequestError(400, f"{path}: {first.get('msg')}", code="invalid_request",
+                            field=path or None)
+    raise exc
+
+
+@mcp.tool()
+async def preview_variant_set(
+    recipe: Annotated[dict[str, Any] | None, Field(description=_RECIPE)] = None,
+    recipe_id: Annotated[int | None, Field(description="A saved variant recipe instead.")] = None,
+    sources: Annotated[list[int] | None, Field(description="Replaces the recipe's sources.")] = None,
+    limit: Annotated[int, Field(ge=0, le=1000)] = 100,
+) -> dict[str, Any]:
+    """Every variant a set would make: count, names, prompts, seeds, preset stages'
+    pinned revisions and readiness. No side effects."""
+    try:
+        return await studio_tools.preview_variant_set(recipe, recipe_id, sources, limit)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def create_variant_set(
+    recipe: Annotated[dict[str, Any] | None, Field(description=_RECIPE)] = None,
+    recipe_id: int | None = None,
+    sources: list[int] | None = None,
+    name: str = "",
+    request_id: Annotated[str | None, Field(
+        description="Idempotency key: resending it returns the same set.")] = None,
+) -> dict[str, Any]:
+    """Side effect: create a set and queue its first stage through the ordinary
+    queue. Preset stages are pinned to the revision they resolved."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.create_variant_set(recipe, recipe_id, sources, name,
+                                                         request_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    except ValueError as exc:
+        raise _fail(_validation_error(exc)) from None
+
+
+@mcp.tool()
+async def wait_variant_set(
+    variant_set: Annotated[int, Field(ge=1)],
+    timeout: Annotated[float, Field(ge=0.0, le=60.0)] = 30.0,
+    items: bool = False,
+) -> dict[str, Any]:
+    """The set's status, waiting up to `timeout` seconds for it to settle
+    (complete, incomplete or canceled). `settled: false` means wait again."""
+    try:
+        return await studio_tools.wait_variant_set(variant_set, timeout, items)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def cancel_variant_set(variant_set: Annotated[int, Field(ge=1)]) -> dict[str, Any]:
+    """Side effect: cancel waiting variants and tell running ones to stop."""
+    try:
+        return await studio_tools.cancel_variant_set(variant_set)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def retry_variant_set(
+    variant_set: Annotated[int, Field(ge=1)],
+    include_canceled: bool = False,
+) -> dict[str, Any]:
+    """Side effect: run failed, invalid and blocked variants again with their
+    stored params (canceled ones too when asked). Never rewrites a prompt."""
+    try:
+        return await studio_tools.retry_variant_set(variant_set, include_canceled)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def rerun_variant_item(
+    variant_set: Annotated[int, Field(ge=1)],
+    item: Annotated[int, Field(ge=1)],
+    reseed: Annotated[bool, Field(description="A new seed; otherwise the stored one.")] = False,
+    cascade: Annotated[bool, Field(description="Also rerun the variants built from it.")] = False,
+) -> dict[str, Any]:
+    """Side effect: run one variant again from its stored params."""
+    try:
+        return await studio_tools.rerun_variant_item(variant_set, item, reseed, cascade)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
 # ---- reference sets ----------------------------------------------------------------------------
 _REFERENCE_DEFINITION = (
     "{description, notes, roles: [{role, label, entries: [{asset_id, mask_id, note}]}], "

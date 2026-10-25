@@ -408,6 +408,29 @@ The recipe fields, in order:
   name exactly as written, so end it with `/` for a folder (`catalogue/`) or
   with `-` for a name prefix.
 
+### Preset stages
+
+A stage can run a studio preset instead of naming an operation and settings:
+
+```json
+{"stages": [{"preset": {"id": "custom/watercolor", "revision": 2},
+             "prompt": "a {{pose}} fox",
+             "axes": [{"name": "pose", "values": ["sitting", "running"]}]}]}
+```
+
+The set resolves the preset once, with the same resolver a single run uses,
+and writes the result into the stage: the kind it runs, the preset's settings
+and adapters as `params`, its composed prompt (the stage prompt fills
+`{{prompt}}` as written, so axis placeholders survive), its finishing and its
+validation policy. Omit `revision` for the latest; the snapshot pins the
+revision and definition hash it used, so a later preset edit never changes an
+existing set. Explicit stage `params`, `value_params`, a non-empty `finishing`
+and a non-empty `validation` override the preset's. Preview lists each preset
+stage under `presets` with its pinned revision, target and readiness. A preset
+that runs on the Remote GPU and would receive images needs
+`"allow_remote": true` on the stage, or the routing policy's permission to
+send inputs.
+
 ### Lifecycle
 
 ```

@@ -56,6 +56,11 @@ export interface StageDraft {
   /** Ordered finishing processors; see FinishingStepsEditor. */
   finishing: VariantFinishingStep[];
   validation: ValidationDraft;
+  /** Check names whose condition must hold (an unavailable check fails) and
+   *  ones whose failure only warns. Carried exactly through a round trip. */
+  validationPolicy: { required: string[]; optional: string[] };
+  /** A studio preset this stage runs instead of an operation and settings. */
+  preset: { id: string; revision: number | null; operation: string | null; allowRemote: boolean } | null;
   naming: { template: string; prefix: string };
 }
 
@@ -99,6 +104,8 @@ export function newStage(operation: string, name = ""): StageDraft {
       maxTransparent: "",
       margin: "",
     },
+    validationPolicy: { required: [], optional: [] },
+    preset: null,
     naming: { template: "", prefix: "" },
   };
 }
@@ -277,13 +284,39 @@ export function normalizeDraft(raw: unknown): SetDraft | null {
         finishing,
         valueParams: stage.valueParams ?? {},
         references: stage.references ?? [],
+        validationPolicy: stage.validationPolicy ?? { required: [], optional: [] },
+        preset: stage.preset ?? null,
       };
     }),
   };
 }
 
-function validationSpec(validation: ValidationDraft): VariantValidationSpec {
+/** The check names a draft's validation configures (as the server names them). */
+export function configuredChecks(validation: ValidationDraft, finishing: unknown[] = []): string[] {
+  const names: string[] = [];
+  if (validation.png) names.push("format");
+  if (validation.exactSize) names.push("dimensions");
+  if (validation.alpha !== "any") names.push("alpha");
+  if (validation.corners) names.push("corners");
+  if (validation.minTransparent !== "" || validation.maxTransparent !== "") names.push("coverage");
+  if (validation.margin !== "") names.push("margins");
+  if (finishing.length) names.push("finishing");
+  return names;
+}
+
+function validationSpec(
+  validation: ValidationDraft,
+  policy: StageDraft["validationPolicy"] = { required: [], optional: [] },
+  finishing: unknown[] = [],
+): VariantValidationSpec {
   const spec: VariantValidationSpec = { alpha: validation.alpha };
+  // Only checks this stage still configures: a required name whose check was
+  // switched off would otherwise fail every variant.
+  const live = new Set([...configuredChecks(validation, finishing), "unmasked_match", "face_identity"]);
+  const required = policy.required.filter((name) => live.has(name));
+  const optional = policy.optional.filter((name) => live.has(name) && !required.includes(name));
+  if (required.length) spec.required = required;
+  if (optional.length) spec.optional = optional;
   if (validation.png) spec.format = "PNG";
   if (validation.exactSize) {
     spec.width = validation.width;
@@ -298,6 +331,23 @@ function validationSpec(validation: ValidationDraft): VariantValidationSpec {
 
 export const MASK_NAME = "region";
 
+/** The set operation a preset's logical operation runs as, for the form's own
+ *  hints (sources, mask, lane). The server resolves the real kind and target;
+ *  its preview is the authority. */
+const PRESET_KINDS: Record<string, string> = {
+  text_to_image: "image_local",
+  image_to_image: "img2img",
+  edit: "image_edit",
+  inpaint: "inpaint",
+  outpaint: "outpaint",
+  control: "control_local",
+};
+
+export function effectiveKind(stage: Pick<StageDraft, "operation" | "preset">): string {
+  if (!stage.preset) return stage.operation;
+  return PRESET_KINDS[stage.preset.operation ?? ""] ?? "";
+}
+
 /** The recipe the backend compiles. `maskOps` are operations that need a mask. */
 export function toRecipe(draft: SetDraft, maskOps: Set<string>): VariantRecipeSpec {
   const content: Record<string, Record<string, string>> = {};
@@ -310,19 +360,28 @@ export function toRecipe(draft: SetDraft, maskOps: Set<string>): VariantRecipeSp
       if (described.length) content[axis.name] = Object.fromEntries(described);
     }
   }
-  const needsMask = draft.stages.some((stage) => maskOps.has(stage.operation));
+  const needsMask = draft.stages.some((stage) => maskOps.has(effectiveKind(stage)));
   const stages: VariantStageSpec[] = draft.stages.map((stage) => ({
     name: stage.name,
-    operation: stage.operation,
+    operation: stage.preset ? "" : stage.operation,
+    ...(stage.preset
+      ? {
+          preset: {
+            id: stage.preset.id,
+            revision: stage.preset.revision,
+            allow_remote: stage.preset.allowRemote,
+          },
+        }
+      : {}),
     axes: stage.axes.map((axis) => ({ name: axis.name, values: axis.values })),
     prompt: stage.prompt,
     negative_prompt: stage.negative,
     params: stage.params,
     value_params: stage.valueParams,
     references: stage.references,
-    mask: maskOps.has(stage.operation) ? MASK_NAME : null,
+    mask: maskOps.has(effectiveKind(stage)) ? MASK_NAME : null,
     finishing: stage.finishing,
-    validation: validationSpec(stage.validation),
+    validation: validationSpec(stage.validation, stage.validationPolicy, stage.finishing),
     naming: { template: stage.naming.template, prefix: stage.naming.prefix },
   }));
   return {
@@ -366,6 +425,15 @@ export function fromRecipe(recipe: VariantRecipeSpec, name = ""): SetDraft {
       maxTransparent: v.max_transparent_fraction != null ? Math.round(v.max_transparent_fraction * 100) : "",
       margin: v.safe_margin ?? "",
     };
+    stage.validationPolicy = { required: [...(v.required ?? [])], optional: [...(v.optional ?? [])] };
+    stage.preset = spec.preset
+      ? {
+          id: spec.preset.id,
+          revision: spec.preset.revision ?? null,
+          operation: null,
+          allowRemote: !!spec.preset.allow_remote,
+        }
+      : null;
     stage.naming = { template: spec.naming?.template || "", prefix: spec.naming?.prefix || "" };
     return stage;
   });

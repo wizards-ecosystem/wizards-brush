@@ -100,9 +100,20 @@ def _refresh(set_id: int) -> VariantSet | None:
 
 
 # ---- compiling --------------------------------------------------------------------------
-def compile_spec(spec: RecipeSpec) -> CompiledRecipe:
+def compile_spec(spec: RecipeSpec, context: Any = None) -> CompiledRecipe:
+    return compile_with_presets(spec, context)[0]
+
+
+def compile_with_presets(spec: RecipeSpec, context: Any = None
+                         ) -> tuple[CompiledRecipe, list[dict[str, Any]]]:
+    """Expand preset stages (pinning their revisions), then compile. The
+    compiled spec, and so the snapshot, carries the expansion."""
+    from . import presets
+
+    specs = operations.registry_specs()
     try:
-        return compile_recipe(spec, specs=operations.registry_specs())
+        expanded, reports = presets.expand(spec, specs=specs, context=context)
+        return compile_recipe(expanded, specs=specs), reports
     except RecipeError as error:
         raise VariantSetError(400, str(error)) from None
 
@@ -121,9 +132,10 @@ def _referenced_axes(recipe: CompiledRecipe) -> set[str]:
     return used
 
 
-def preview(spec: RecipeSpec, *, limit: int = 100) -> dict[str, Any]:
-    """Everything a set would do, without creating anything."""
-    recipe = compile_spec(spec)
+def preview(spec: RecipeSpec, *, limit: int = 100, context: Any = None) -> dict[str, Any]:
+    """Everything a set would do, without creating anything. `context` is the
+    resolver's, for preset stages; the live one by default."""
+    recipe, preset_reports = compile_with_presets(spec, context)
     base = spec.seed.value if spec.seed.value >= 0 else None
     try:
         planned, collisions = materialize(recipe, base_seed=base)
@@ -149,6 +161,7 @@ def preview(spec: RecipeSpec, *, limit: int = 100) -> dict[str, Any]:
         "collisions": [{"stage": stage, "name": name, "keys": keys}
                        for stage, found in collisions.items() for name, keys in found.items()],
         "warnings": warnings,
+        "presets": preset_reports,
         "recipe": recipe.snapshot(),
         "eta": _preview_eta(recipe, planned),
     }
@@ -182,7 +195,8 @@ def _preview_eta(recipe: Any, planned: Sequence[Any]) -> dict[str, Any]:
 def _stage_view(stage: Any) -> dict[str, Any]:
     return {"index": stage.index, "name": stage.name, "operation": stage.operation.kind,
             "axes": [{"name": a.name, "values": list(a.values)} for a in stage.axes],
-            "count": stage.count, "total": stage.total, "naming": stage.naming_template}
+            "count": stage.count, "total": stage.total, "naming": stage.naming_template,
+            "validation": stage.validation.model_dump(exclude_defaults=True)}
 
 
 # ---- assets a recipe depends on ------------------------------------------------------------

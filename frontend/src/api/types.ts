@@ -689,9 +689,20 @@ export interface VariantValidationSpec {
   optional?: string[];
 }
 
+export interface VariantStagePreset {
+  id: string;
+  /** Omit for the latest; a set pins the revision it resolved. */
+  revision?: number | null;
+  target?: Target;
+  allow_remote?: boolean;
+  definition_hash?: string;
+}
+
 export interface VariantStageSpec {
   name?: string;
+  /** Empty when `preset` supplies it. */
   operation: string;
+  preset?: VariantStagePreset | null;
   axes: VariantAxisSpec[];
   prompt: string;
   negative_prompt?: string;
@@ -768,7 +779,20 @@ export interface VariantPreview {
   items: VariantPreviewItem[];
   collisions: { stage: number; name: string; keys: string[] }[];
   warnings: string[];
+  presets?: VariantPresetReport[];
   eta?: { seconds: number | null; confidence: string; label: string };
+}
+
+/** A preset stage as the set would run it: the pinned revision and readiness. */
+export interface VariantPresetReport {
+  stage: number;
+  preset: { id: string; revision: number; definition_hash: string; origin: string };
+  kind: string;
+  target: { requested: string; resolved: string | null; reason: string };
+  model: string;
+  adapters: string[];
+  readiness: { state: string; ready: boolean; submittable: boolean; actions: string[] };
+  warnings: string[];
 }
 
 export type VariantItemState =

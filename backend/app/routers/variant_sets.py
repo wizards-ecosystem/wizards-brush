@@ -177,14 +177,22 @@ def _recipe_view(row: Any) -> dict[str, Any]:
             "recipe": row.config, "created_at": row.created_at, "updated_at": row.updated_at}
 
 
-def _validate_definition(spec: RecipeSpec) -> dict[str, Any]:
+def _validate_definition(spec: RecipeSpec, context: Any = None) -> dict[str, Any]:
     """A recipe is checked on save like a set, except that its sources may be
     left for the set to supply."""
+    from ..variant_sets import presets
+
+    specs = operations.registry_specs()
     try:
-        probe = spec if spec.sources else _with_placeholder_sources(spec)
-        compiled = compile_recipe(probe, specs=operations.registry_specs())
+        expanded, _reports = presets.expand(spec, specs=specs, context=context)
+        probe = expanded if expanded.sources else _with_placeholder_sources(expanded)
+        compiled = compile_recipe(probe, specs=specs)
     except RecipeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    if any(stage.preset is not None for stage in spec.stages):
+        # A saved recipe keeps its preset stages as written: a stage without a
+        # revision follows the preset, and each set pins what it ran.
+        return spec.model_dump(mode="json")
     snapshot = compiled.snapshot()
     snapshot["sources"] = list(spec.sources)
     return snapshot
@@ -203,7 +211,8 @@ async def list_recipes() -> list[dict[str, Any]]:
 
 @router.post("/variant-recipes", response_model=RecipeView, responses=error_responses(400))
 async def create_recipe(body: RecipeBody) -> dict[str, Any]:
-    row = store.save_recipe(body.name.strip(), body.description, _validate_definition(body.recipe))
+    row = store.save_recipe(body.name.strip(), body.description, _validate_definition(
+        body.recipe, await _preset_context(body.recipe)))
     return _recipe_view(row)
 
 
@@ -222,7 +231,9 @@ async def update_recipe(recipe_id: int, body: RecipeBody) -> dict[str, Any]:
     """Edit a definition. Sets made from it keep their own snapshot, so their
     meaning never changes."""
     row = store.save_recipe(body.name.strip(), body.description,
-                            _validate_definition(body.recipe), recipe_id=recipe_id)
+                            _validate_definition(
+                                body.recipe, await _preset_context(body.recipe)),
+                            recipe_id=recipe_id)
     if row is None:
         raise HTTPException(status_code=404, detail="recipe not found")
     return _recipe_view(row)
@@ -253,13 +264,33 @@ async def preview_set(body: PreviewBody) -> dict[str, Any]:
     creating anything. Naming collisions are reported, not raised, so the form
     can show them."""
     spec, _ = _recipe_from(body.recipe, body.recipe_id, body.sources)
+    context = await _preset_context(spec)
     try:
-        result = await asyncio.to_thread(service.preview, spec, limit=body.limit)
+        result = await asyncio.to_thread(service.preview, spec, limit=body.limit, context=context)
     except service.VariantSetError as error:
         raise _http(error) from None
-    if blocker := await _remote_blocker(spec):
+    if blocker := await _remote_blocker(RecipeSpec.model_validate(result["recipe"])):
         result["warnings"] = [*result.get("warnings", []), blocker]
     return result
+
+
+async def _preset_context(spec: RecipeSpec) -> Any:
+    """The resolver context for preset stages, with a fresh Remote GPU state."""
+    if not any(stage.preset is not None for stage in spec.stages):
+        return None
+    from .job_api import plan_context
+
+    return await plan_context()
+
+
+def _expanded(spec: RecipeSpec, context: Any) -> RecipeSpec:
+    """Preset stages expanded and pinned, so lane checks see real operations."""
+    from ..variant_sets import presets
+
+    try:
+        return presets.expand(spec, specs=operations.registry_specs(), context=context)[0]
+    except RecipeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
 
 
 @router.post("/variant-sets", response_model=SetDetail, response_model_exclude_unset=True,
@@ -274,6 +305,8 @@ async def create_set(body: CreateSetBody) -> dict[str, Any]:
     request_id = normalize_request_id(body.request_id)
     if body.collection.mode == "existing" and body.collection.id is None:
         raise HTTPException(status_code=400, detail="choose the collection to add results to")
+    if not (request_id and store.set_for_request(request_id)):
+        spec = await asyncio.to_thread(_expanded, spec, await _preset_context(spec))
     _local_requirements(spec)
     # The editor refuses a set whose stages need an offline Remote GPU; so does
     # the API - except a resubmitted request_id, which always returns its set.

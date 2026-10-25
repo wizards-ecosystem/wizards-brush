@@ -288,6 +288,24 @@ def _render(template: str, slots: Mapping[str, str]) -> str:
 
 
 # ---- resolve -------------------------------------------------------------------------------
+def resolve_stage(request: ResolveRequest, context: Context | None = None) -> dict[str, Any]:
+    """A preset request resolved up to, but not including, its inputs.
+
+    What a Variant Set stage needs from a preset: the kind and target it runs
+    on, the effective settings with provenance, the composed prompt (the
+    request's prompt is inserted as written, so a set's ``{{axis}}``
+    placeholders survive for per-variant rendering), the adapters, finishing,
+    validation and readiness. Each variant's own inputs and seed are attached
+    by the set, and every child is still built by the route's own builder.
+    """
+    if request.seed is None:
+        request = request.model_copy(update={"seed": 0})
+    try:
+        return _resolve(request, context or live(), "runtime", stage_only=True)
+    except contracts.ContractError as error:
+        raise _bad(str(error), error.field or "request", code=error.code) from None
+
+
 def resolve(request: ResolveRequest, context: Context | None = None, *,
             seed_origin: Literal["override", "runtime"] = "override") -> dict[str, Any]:
     """The complete candidate plan for `request`. Raises ResolveError when the
@@ -299,7 +317,8 @@ def resolve(request: ResolveRequest, context: Context | None = None, *,
 
 
 def _resolve(request: ResolveRequest, ctx: Context,
-             seed_origin: Literal["override", "runtime"]) -> dict[str, Any]:
+             seed_origin: Literal["override", "runtime"], *,
+             stage_only: bool = False) -> dict[str, Any]:
     if request.seed is None:
         raise _bad("resolve needs a concrete seed; prepare the request first so a random seed "
                    "is chosen once and kept", "seed", code="seed_required")
@@ -369,6 +388,17 @@ def _resolve(request: ResolveRequest, ctx: Context,
     adapters, loras = _adapters(request, preset, ctx, model_facts, slot, target, known, blockers,
                                 warnings)
     finish = _finish(request, preset, ctx, warnings)
+    if stage_only:
+        return {
+            "preset": preset_ref, "operation": operation, "kind": kind,
+            "target": {"requested": request.target, "resolved": target, "reason": why},
+            "model": {**model_facts, "variant": slot.variant if slot else None,
+                      "origin": model_origin},
+            "settings": values, "provenance": origins, "prompt": prompt,
+            "adapters": adapters, "loras": loras, "finish": finish,
+            "validation_spec": _validation_spec(preset),
+            "warnings": warnings, "readiness": _readiness(blockers, warnings),
+        }
     inputs, paths, mask_path, last_path = _inputs(request, preset, kind, specs, ctx, bound)
     origins["seed"] = seed_origin
     sent = len(inputs["images"]) + sum(len(v) for v in inputs["references"].values()) + \

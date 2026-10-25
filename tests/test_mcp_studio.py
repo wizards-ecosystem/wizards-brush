@@ -272,3 +272,28 @@ def test_reference_sets_through_mcp_match_http_and_conflicts_lose_nothing(client
     _call("archive_reference_set", {"reference_set": saved["id"]})
     listed = _call("list_reference_sets", {}).structured_content["reference_sets"]
     assert saved["id"] not in [s["id"] for s in listed]
+
+
+# ---- variant sets (P15) ----------------------------------------------------------------------
+def test_variant_sets_through_mcp_match_http(client, enqueued, local_ready, monkeypatch):
+    from backend.app.routers import images
+
+    monkeypatch.setattr(images, "require_local_gpu", lambda: None)
+    monkeypatch.setattr(images, "require_model_access", lambda params: None)
+    saved = _call("save_preset", {"definition": _definition()}).structured_content
+    recipe = {"seed": {"mode": "per_variant", "value": 9}, "stages": [{
+        "preset": {"id": saved["id"]}, "prompt": "a {{animal}}",
+        "axes": [{"name": "animal", "values": ["fox", "owl"]}]}]}
+    mcp_preview = _call("preview_variant_set", {"recipe": recipe}).structured_content
+    http_preview = client.post("/api/variant-sets/preview", json={"recipe": recipe}).json()
+    assert mcp_preview["items"] == http_preview["items"]
+    assert mcp_preview["presets"][0]["preset"]["revision"] == 1
+    bad = _call("preview_variant_set", {"recipe": {"stages": []}})
+    assert bad.is_error
+    made = _call("create_variant_set", {"recipe": recipe, "name": "mcp set",
+                                        "request_id": f"vs-{uuid.uuid4().hex}"}).structured_content
+    assert made["created"] is True and len(enqueued) == 2
+    waited = _call("wait_variant_set", {"variant_set": made["id"], "timeout": 0}).structured_content
+    assert waited["settled"] is False
+    canceled = _call("cancel_variant_set", {"variant_set": made["id"]}).structured_content
+    assert canceled["canceled"] == 2

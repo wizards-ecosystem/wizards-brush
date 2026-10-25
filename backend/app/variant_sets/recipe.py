@@ -59,11 +59,33 @@ class NamingSpec(BaseModel):
     prefix: str = Field(default="", max_length=naming.MAX_PREFIX_CHARS)
 
 
+class StagePreset(BaseModel):
+    """A studio preset a stage runs, pinned to one revision.
+
+    The set expands it once, at creation, into the stage's operation, params,
+    prompt template, finishing and validation (see `variant_sets.presets`);
+    the snapshot keeps both the pin and that expansion, so editing the preset
+    later never changes a set halfway through.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(max_length=96)
+    revision: int | None = Field(default=None, ge=1,
+                                 description="Omit for the latest; the set pins the one it used.")
+    target: Literal["local", "remote", "auto"] = "auto"
+    allow_remote: bool = False
+    # Set by expansion. A stage that carries it is already expanded.
+    definition_hash: str = Field(default="", max_length=80)
+
+
 class StageSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(default="", max_length=80)
-    operation: str = Field(max_length=40)
+    # Empty when `preset` supplies it.
+    operation: str = Field(default="", max_length=40)
+    preset: StagePreset | None = None
     axes: list[AxisSpec] = Field(default_factory=list, max_length=expansion.MAX_AXES_PER_STAGE)
     prompt: str = Field(default="", max_length=MAX_PROMPT_CHARS)
     negative_prompt: str = Field(default="", max_length=MAX_PROMPT_CHARS)
@@ -224,6 +246,8 @@ def compile_recipe(
     known: list[str] = []
     for index, (stage, axes) in enumerate(zip(spec.stages, stage_axes, strict=True)):
         where = _stage_label(index, stage)
+        if not stage.operation:
+            raise RecipeError(f"{where}: choose an operation or a preset")
         op = OPERATIONS.get(stage.operation)
         if op is None or stage.operation not in specs:
             offered = ", ".join(k for k in OPERATIONS if k in specs)

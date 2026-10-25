@@ -34,6 +34,9 @@ _TOOLS = {
     # P14: reference sets.
     "list_reference_sets", "get_reference_set", "save_reference_set", "update_reference_set",
     "archive_reference_set",
+    # P15: Variant Sets.
+    "preview_variant_set", "create_variant_set", "wait_variant_set", "cancel_variant_set",
+    "retry_variant_set", "rerun_variant_item",
 }
 
 

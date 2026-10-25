@@ -115,6 +115,51 @@ async def clone_preset(preset_id: str, *, revision: int | None, name: str | None
         preset_id, studio.PresetClone(revision=revision, name=name, id=new_id)))
 
 
+# ---- variant sets ----------------------------------------------------------------------------
+async def preview_variant_set(recipe: dict[str, Any] | None, recipe_id: int | None,
+                              sources: list[int] | None, limit: int) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.preview_set(routes.PreviewBody.model_validate(
+        {"recipe": recipe, "recipe_id": recipe_id, "sources": sources, "limit": limit})))
+
+
+async def create_variant_set(recipe: dict[str, Any] | None, recipe_id: int | None,
+                             sources: list[int] | None, name: str,
+                             request_id: str | None) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.create_set(routes.CreateSetBody.model_validate(
+        {"recipe": recipe, "recipe_id": recipe_id, "sources": sources, "name": name,
+         "request_id": request_id})))
+
+
+async def wait_variant_set(set_id: int, timeout: float, items: bool) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.wait_set(set_id, timeout=timeout, items=items))
+
+
+async def cancel_variant_set(set_id: int) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.cancel(set_id))
+
+
+async def retry_variant_set(set_id: int, include_canceled: bool) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.retry(set_id, routes.RetryBody(include_canceled=include_canceled)))
+
+
+async def rerun_variant_item(set_id: int, item_id: int, reseed: bool,
+                             cascade: bool) -> dict[str, Any]:
+    from ..routers import variant_sets as routes
+
+    return _json(await routes.rerun_item(set_id, item_id,
+                                         routes.RerunBody(reseed=reseed, cascade=cascade)))
+
+
 # ---- reference sets --------------------------------------------------------------------------
 async def reference_sets(include_archived: bool = False) -> list[dict[str, Any]]:
     from ..routers import reference_sets as routes

@@ -20,6 +20,7 @@ import { apiRequestText, jobFailure, runJob } from "../lib/jobApi";
 import {
   axisProblems,
   countCombinations,
+  effectiveKind,
   formula,
   fromRecipe,
   newDraft,
@@ -190,6 +191,8 @@ export function VariantSetCreate() {
         {
           ...current,
           stages: current.stages.map((stage) => {
+            // A preset stage sends only explicit overrides; the preset supplies the rest.
+            if (stage.preset) return stage;
             const controls = operationControls(specByKind.get(stage.operation), caps);
             const { values } = coerceValues(controls, stage.params);
             delete values.style_ids;
@@ -205,8 +208,8 @@ export function VariantSetCreate() {
   const counts = useMemo(() => (draft ? countCombinations(draft.stages) : null), [draft]);
   const problems = useMemo(() => (draft ? axisProblems(draft.stages) : []), [draft]);
   const cap = caps?.cap ?? 1000;
-  const firstOp = draft ? opByKind.get(draft.stages[0].operation) : undefined;
-  const needsMask = !!draft && draft.stages.some((stage) => maskOps.has(stage.operation));
+  const firstOp = draft ? opByKind.get(effectiveKind(draft.stages[0])) : undefined;
+  const needsMask = !!draft && draft.stages.some((stage) => maskOps.has(effectiveKind(stage)));
 
   // Server-checked preview, debounced. The backend is the authority on every
   // rule; this is where unknown placeholders, collisions and caps surface.
@@ -261,10 +264,10 @@ export function VariantSetCreate() {
 
   const remoteBlocked =
     !!draft &&
-    draft.stages.some((stage) => opByKind.get(stage.operation)?.lane === "remote") &&
+    draft.stages.some((stage) => !stage.preset && opByKind.get(stage.operation)?.lane === "remote") &&
     !system?.remote_gpu?.connected;
   const unavailable = draft?.stages
-    .map((stage) => specByKind.get(stage.operation)?.unavailable_reason)
+    .map((stage) => (stage.preset ? undefined : specByKind.get(stage.operation)?.unavailable_reason))
     .find(Boolean);
   const blockedReason =
     unavailable ||
@@ -735,6 +738,19 @@ export function VariantSetCreate() {
               {w}
             </div>
           ))}
+
+          {previewable &&
+            (preview?.presets ?? []).map((report) => (
+              <div
+                key={report.stage}
+                className="border-l-2 border-accent pl-3 text-xs text-muted"
+                data-testid="preview-preset"
+              >
+                Stage {report.stage + 1}: {report.preset.id} revision {report.preset.revision} · {report.kind}{" "}
+                on {report.target.resolved ?? "no target"} · {report.readiness.state.replace("_", " ")}
+                {report.warnings.length > 0 && <div className="text-warn">{report.warnings.join(" ")}</div>}
+              </div>
+            ))}
 
           <div>
             <div className="flex items-center justify-between">

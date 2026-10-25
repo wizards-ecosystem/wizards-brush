@@ -1,8 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../api/client";
 import type {
   Asset,
   Control,
   GeneratorSpec,
+  PresetSummary,
   Presets,
   VariantCapabilities,
   VariantOperation,
@@ -11,6 +13,7 @@ import { applyDependentDefaults } from "../lib/generators";
 import {
   addValues,
   availableAxes,
+  configuredChecks,
   formula,
   insertAt,
   newAxis,
@@ -24,6 +27,34 @@ import { FinishingStepsEditor } from "./FinishingStepsEditor";
 import { GalleryPicker } from "./GalleryPicker";
 import { Icon } from "./icons";
 import { IconButton, SegmentedControl } from "./ui";
+
+/** Preset operations a set stage can run: image operations only. A later
+ *  stage must take the previous output, so text-only presets are first-stage. */
+const FIRST_STAGE_OPS = new Set([
+  "text_to_image",
+  "image_to_image",
+  "edit",
+  "inpaint",
+  "outpaint",
+  "control",
+]);
+const LATER_STAGE_OPS = new Set(["image_to_image", "edit", "inpaint", "outpaint", "control"]);
+
+/** Studio presets this stage could run, fetched once per editor. */
+function useStagePresets(): PresetSummary[] {
+  const [presets, setPresets] = useState<PresetSummary[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api
+      .studioPresets()
+      .then((rows) => alive && setPresets(rows))
+      .catch(() => alive && setPresets([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return presets;
+}
 
 /** The controls a set may set for an operation: the registry's, minus the ones
  *  the set supplies itself (prompt, negative, batch, seeds). */
@@ -247,6 +278,17 @@ export function VariantStageEditor({
 }) {
   const [simple, setSimple] = useState(true);
   const [pickingReference, setPickingReference] = useState(false);
+  const studioPresets = useStagePresets();
+  const allowedOps = index === 0 ? FIRST_STAGE_OPS : LATER_STAGE_OPS;
+  const presetChoices = studioPresets.filter((p) => p.operation && allowedOps.has(p.operation));
+  const chosenPreset = stage.preset ? studioPresets.find((p) => p.id === stage.preset?.id) : undefined;
+  // A recipe loaded from storage names its preset without the operation; fill
+  // it in once the list arrives, so an inpaint preset still gets its mask.
+  useEffect(() => {
+    if (stage.preset && stage.preset.operation === null && chosenPreset?.operation) {
+      onChange({ ...stage, preset: { ...stage.preset, operation: chosenPreset.operation } });
+    }
+  }, [stage, chosenPreset, onChange]);
   const controls = operationControls(spec, caps);
   const axes = availableAxes(stages, index);
   const choices = index === 0 ? operations : operations.filter((op) => op.takes_source);
@@ -272,6 +314,7 @@ export function VariantStageEditor({
       },
     });
   const v = stage.validation;
+  const checks = configuredChecks(v, stage.finishing);
   const limits = caps?.limits;
 
   return (
@@ -286,8 +329,61 @@ export function VariantStageEditor({
         {onRemove && <IconButton icon="trash" label={`Remove stage ${index + 1}`} onClick={onRemove} />}
       </div>
 
+      <div>
+        <label className="label" htmlFor={`preset-${stage.uid}`}>
+          Preset
+        </label>
+        <select
+          id={`preset-${stage.uid}`}
+          className="input"
+          value={stage.preset?.id ?? ""}
+          onChange={(e) => {
+            const picked = presetChoices.find((p) => p.id === e.target.value);
+            onChange({
+              ...stage,
+              params: {},
+              preset: picked
+                ? {
+                    id: picked.id,
+                    revision: picked.head_revision,
+                    operation: picked.operation,
+                    allowRemote: false,
+                  }
+                : null,
+            });
+          }}
+        >
+          <option value="">None: choose an operation and settings</option>
+          {stage.preset && !chosenPreset && <option value={stage.preset.id}>{stage.preset.id}</option>}
+          {presetChoices.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        {stage.preset && (
+          <div className="mt-1 space-y-1 text-[11px] text-muted" data-testid="stage-preset">
+            <div>
+              Revision {stage.preset.revision ?? "latest"}: the preset supplies the model, adapters, settings
+              and prompt template; this stage's prompt fills its {"{{prompt}}"}. The set pins this revision.
+            </div>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={stage.preset.allowRemote}
+                onChange={(e) =>
+                  stage.preset &&
+                  onChange({ ...stage, preset: { ...stage.preset, allowRemote: e.target.checked } })
+                }
+              />
+              Allow the Remote GPU, and sending this stage's images there
+            </label>
+          </div>
+        )}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
-        <div>
+        <div hidden={!!stage.preset}>
           <label className="label" htmlFor={`op-${stage.uid}`}>
             Operation
           </label>
@@ -413,46 +509,61 @@ export function VariantStageEditor({
         />
       </Section>
 
-      <Section title="Operation settings" open={index === 0}>
-        <SegmentedControl
-          className="w-full"
-          label="How many settings to show"
-          value={simple ? "simple" : "full"}
-          onChange={(next) => setSimple(next === "simple")}
-          options={[
-            { value: "simple", label: "Simple" },
-            { value: "full", label: "Full controls" },
-          ]}
-        />
-        {controls.length ? (
-          <DynamicControls
-            controls={controls}
-            values={stage.params}
-            onChange={setParam}
-            presets={presets}
-            simple={simple}
-          />
-        ) : (
-          <div className="text-xs text-muted">This operation has no further settings.</div>
-        )}
-        {perValue.length > 0 && (
-          <div className="border-l-2 border-edge pl-3 text-[11px] text-muted">
-            <div className="text-ink/80">Per-value settings from the recipe (kept as they are):</div>
-            {perValue.map((line) => (
-              <div key={line} className="technical">
-                {line}
-              </div>
-            ))}
-            <button
-              type="button"
-              className="mt-1 text-accent underline"
-              onClick={() => onChange({ ...stage, valueParams: {} })}
-            >
-              Remove them
-            </button>
+      {stage.preset ? (
+        <Section title="Operation settings" open={false}>
+          <div className="text-xs text-muted">
+            Settings come from the preset. Per-value settings below still apply on top of it.
           </div>
-        )}
-      </Section>
+          {perValue.length > 0 && (
+            <div className="technical text-[11px] text-muted">
+              {perValue.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </div>
+          )}
+        </Section>
+      ) : (
+        <Section title="Operation settings" open={index === 0}>
+          <SegmentedControl
+            className="w-full"
+            label="How many settings to show"
+            value={simple ? "simple" : "full"}
+            onChange={(next) => setSimple(next === "simple")}
+            options={[
+              { value: "simple", label: "Simple" },
+              { value: "full", label: "Full controls" },
+            ]}
+          />
+          {controls.length ? (
+            <DynamicControls
+              controls={controls}
+              values={stage.params}
+              onChange={setParam}
+              presets={presets}
+              simple={simple}
+            />
+          ) : (
+            <div className="text-xs text-muted">This operation has no further settings.</div>
+          )}
+          {perValue.length > 0 && (
+            <div className="border-l-2 border-edge pl-3 text-[11px] text-muted">
+              <div className="text-ink/80">Per-value settings from the recipe (kept as they are):</div>
+              {perValue.map((line) => (
+                <div key={line} className="technical">
+                  {line}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="mt-1 text-accent underline"
+                onClick={() => onChange({ ...stage, valueParams: {} })}
+              >
+                Remove them
+              </button>
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Finishing">
         <FinishingStepsEditor
@@ -556,6 +667,28 @@ export function VariantStageEditor({
             />
           </label>
         </div>
+        {checks.length > 0 && (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={checks.every((name) => stage.validationPolicy.required.includes(name))}
+              onChange={(e) =>
+                onChange({
+                  ...stage,
+                  validationPolicy: e.target.checked
+                    ? { required: checks, optional: [] }
+                    : { required: [], optional: [] },
+                })
+              }
+            />
+            <span>
+              Required: a check that cannot run fails the variant
+              <span className="block text-[11px] text-muted">
+                Otherwise an unmeasurable check only warns, and the variant can advance.
+              </span>
+            </span>
+          </label>
+        )}
       </Section>
 
       <Section title="Output names">

@@ -635,6 +635,22 @@ def plan_request(body: JobCreate, seed: int | None = None) -> Any:
                            field=path or None) from None
 
 
+async def plan_context() -> Any:
+    """The resolver's live context with the Remote GPU's state read once here
+    (refreshed when older than 15 s, as every other gate does): the resolver
+    itself never touches the network."""
+    from ..remote_gpu_client import last_health
+    from ..studio import targets
+    from ..studio.resolver import live
+
+    state = await remote_state()
+    context = live()
+    context.remote_state = lambda: {**last_health(), "connected": bool(state.get("connected"))}
+    context.capability_revision = lambda: targets.reports(
+        connected=bool(state.get("connected")))["capability_revision"]
+    return context
+
+
 async def _plan_job(body: JobCreate) -> PreparedPlan | JobSubmission:
     import asyncio
     import secrets
@@ -646,20 +662,9 @@ async def _plan_job(body: JobCreate) -> PreparedPlan | JobSubmission:
     seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
     request = plan_request(body, seed)
     origin: Literal["override", "runtime"] = "override" if body.seed is not None else "runtime"
-    from ..remote_gpu_client import last_health
     from ..studio import submission
-    from ..studio.resolver import live
 
-    # The boundary reads the Remote GPU's state once (refreshed when older than
-    # 15 s, as every other gate does); the resolver itself never touches the
-    # network.
-    state = await remote_state()
-    from ..studio import targets
-
-    context = live()
-    context.remote_state = lambda: {**last_health(), "connected": bool(state.get("connected"))}
-    context.capability_revision = lambda: targets.reports(
-        connected=bool(state.get("connected")))["capability_revision"]
+    context = await plan_context()
     plan = await asyncio.to_thread(resolve, request, context, seed_origin=origin)
     if body.dry_run:
         submission.remember(plan)
