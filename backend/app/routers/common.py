@@ -425,6 +425,7 @@ async def _create_and_enqueue(
     kind: str, params: dict[str, Any], handler: Callable, *, group_id: str | None,
     request_id: str | None, record_history: bool = True, plan_id: int | None = None,
     request_digest: str | None = None, backend_id: str | None = None,
+    model_key: str | None = None,
 ) -> tuple[Job, bool]:
     """Create or recover one ordinary job; only a new row is enqueued.
 
@@ -435,8 +436,9 @@ async def _create_and_enqueue(
     """
     job, created = db.create_job_once(
         kind, params, group_id=group_id,
-        model_key=model_key_for(kind, params), request_id=request_id,
-        plan_id=plan_id, request_digest=request_digest, backend_id=backend_id,
+        model_key=model_key if model_key is not None else model_key_for(kind, params),
+        request_id=request_id, plan_id=plan_id, request_digest=request_digest,
+        backend_id=backend_id,
     )
     register_handler(kind, handler)  # remember how to re-run this kind
     if not created:

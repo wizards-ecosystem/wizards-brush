@@ -41,6 +41,7 @@ from .routers import (
     resources,
     studio,
     system,
+    targets,
     tools,
     variant_sets,
     videos,
@@ -284,6 +285,8 @@ _API_TAGS = [
                                        "by immutable revision."},
     {"name": "resources", "description": "Models and adapters: identity, installs, licence, "
                                          "and safe local import."},
+    {"name": "targets", "description": "Where work can run: capability reports and the "
+                                       "routing policy."},
     {"name": "assets", "description": "The gallery: import, search, download, export."},
     {"name": "images", "description": "Multipart image generation routes used by the UI."},
     {"name": "videos", "description": "Multipart video generation routes used by the UI."},
@@ -398,7 +401,8 @@ for r in (system.router, settings_router.router, remote_gpu_router.router,
           images.router, videos.router,
           tools.router, job_api.router, jobs.router, assets.router, library.router,
           wildcards.router, loras.router, collections.router, grid.router,
-          variant_sets.router, recipes.router, studio.router, resources.router, openai_router):
+          variant_sets.router, recipes.router, studio.router, resources.router, targets.router,
+          openai_router):
     app.include_router(r, prefix="/api", responses=error_responses(401))
 
 # Streamable HTTP MCP. The mount matches /api/mcp/ and below. The exact route

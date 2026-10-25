@@ -585,6 +585,37 @@ kind-based way has no plan and answers `legacy_unverified`; `rerun` still
 queues its stored params. The same plan and seed are controlled inputs, not a
 promise of identical pixels on different hardware or kernels.
 
+## Targets and routing
+
+`GET /api/targets` describes where work can run, read-only and without asking
+any provider: a capability report for this machine and one for the Remote GPU
+(identity, hardware with a `confidence` of `measured`, `advertised` or
+`unknown`, the operations and kinds offered, configured model slots and
+whether each is installed, adapter support, finishing processors, runtime
+versions, the observation time), the routing `policy`, and a
+`capability_revision`. `/api/system` carries the same revision; when it
+changes, the controls a client shows may have changed.
+
+`PUT /api/targets/policy` changes the policy:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `remote_enabled` | `true` | Any remote target at all. Off refuses even an explicit `target: "remote"` (`remote_disabled`). |
+| `auto_may_use_remote` | `false` | Whether `auto` may route to a connected remote worker when this machine cannot run a request. A request can allow it for itself with `allow_remote`. |
+| `send_inputs_to_remote` | `false` | Whether a request's images, masks and references may be sent to a remote worker without that request setting `allow_remote` (`input_transfer_not_allowed` otherwise). |
+
+Auto prefers a ready local target, then a connected remote one it is allowed
+to use, and records the reason in the plan. It never changes the model,
+adapters or settings to fit a device, and nothing on the resolve or generate
+path starts or rents hardware.
+
+A plan's `readiness.state` is `ready`, `needs_resources` (a first download or
+import), `needs_check` (hardware not measured yet, an adapter that could not be
+matched, or a memory estimate that looks tight) or `blocked`. Only `ready`
+claims the plan runs as is; `submittable` is true for all but `blocked`. A
+memory estimate is advisory, as it is for the loader, which waits for memory
+before it gives up; it never shrinks a request.
+
 ## Studio presets
 
 A studio preset is a named, versioned creative setup: a model and ordered

@@ -53,11 +53,24 @@ def _local_gpu() -> dict:
 async def get_system() -> dict:
     # nvidia-smi is a blocking subprocess (up to 5s); keep it off the event loop
     # so a status poll never stalls the jobs WebSocket carrying live progress.
+    remote = await remote_gpu_health()
+    from ..remote_gpu_client import remote_gpu_status
+    from ..studio import targets
+
+    # When this changes, what the generator forms may offer changed: a worker
+    # connected or upgraded, a model finished downloading, a setting moved. The
+    # client refetches its controls instead of trusting the ones it booted with.
+    # "Connected" comes from the same reading every gate uses, so this revision
+    # matches the one /api/targets and a plan report.
+    gate = await remote_gpu_status()
+    revision = await asyncio.to_thread(
+        lambda: targets.reports(connected=bool(gate.get("connected")))["capability_revision"])
     return {
         # Reported so a bug report can start with a version instead of a guess.
         "version": get_version(),
+        "capability_revision": revision,
         "local_gpu": await asyncio.to_thread(_local_gpu),
-        "remote_gpu": await remote_gpu_health(),
+        "remote_gpu": remote,
         "models": {
             "local_image": settings.local_image_model,
             "a100_image": settings.a100_image_model,

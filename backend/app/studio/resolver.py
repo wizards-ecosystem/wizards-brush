@@ -158,6 +158,19 @@ class Context:
     finishing: Callable[[], list[dict[str, Any]]]
     hf_token: Callable[[], bool]
     extra: dict[str, Any] = field(default_factory=dict)
+    # The user's routing policy (studio/targets.py); the default is the
+    # shipped one: remote allowed, never chosen by Auto, inputs never sent
+    # without the request saying so.
+    policy: Callable[[], dict[str, bool]] = field(default=lambda: {
+        "remote_enabled": True, "auto_may_use_remote": False, "send_inputs_to_remote": False})
+    # This machine's measured hardware: {"vram_gb": float | None, ...}.
+    hardware: Callable[[], dict[str, Any]] = field(default=lambda: {"vram_gb": None})
+    # (needed, available) bytes when host RAM cannot back loading a repo.
+    memory_shortfall: Callable[[str], tuple[int, int] | None] = field(default=lambda _repo: None)
+    # The repo resident on this machine's GPU now, if any.
+    resident: Callable[[], str | None] = field(default=lambda: None)
+    # The app-wide capability revision, when the caller knows it.
+    capability_revision: Callable[[], str] | None = None
 
 
 def live() -> Context:
@@ -186,6 +199,10 @@ def live() -> Context:
 
         return bool(row is not None and row.path and Path(row.path).exists())
 
+    from .. import hardware
+    from ..generators.vram import host_ram_shortfall
+    from . import targets
+
     return Context(
         preset=catalogue.get, resource=store.get, adapter_path=resources.library_path,
         specs=registry_specs, slots=slots, resource_for_repo=resources.model_resource_id,
@@ -194,7 +211,19 @@ def live() -> Context:
         local_model_status=lambda repo: _cache_status(repo)[0],
         remote_state=last_health, finishing=describe,
         hf_token=lambda: bool(settings.hf_token),
+        policy=targets.policy, hardware=hardware.describe,
+        memory_shortfall=lambda repo: host_ram_shortfall(repo, settings.local_quant),
+        resident=_resident_model,
     )
+
+
+def _resident_model() -> str | None:
+    try:
+        from ..generators.local_image import resident_model
+
+        return resident_model() or None
+    except Exception:  # noqa: BLE001 — a probe of the GPU state is advisory here
+        return None
 
 
 # ---- small helpers -------------------------------------------------------------------------
@@ -269,13 +298,21 @@ def _resolve(request: ResolveRequest, ctx: Context,
     model_row = ctx.resource(model_id)
     model_facts = _model_facts(model_id, model_row)
     candidates = _candidates(operation, model_id, ctx)
-    target, why = _choose_target(request, candidates)
-    if request.target == "auto" and target == "remote" and not request.allow_remote:
+    rules = ctx.policy()
+    may_route_remote = bool(rules.get("remote_enabled", True)) and (
+        request.allow_remote or bool(rules.get("auto_may_use_remote", False)))
+    target, why = _choose_target(request, candidates, may_route_remote)
+    if target == "remote" and not rules.get("remote_enabled", True):
+        blockers.append(_issue(
+            "remote_disabled", "remote use is turned off in the routing policy",
+            field="target", action="Run locally, or enable remote use in Settings."))
+    elif request.target == "auto" and target == "remote" and not may_route_remote:
         blockers.append(_issue(
             "remote_not_allowed",
-            "only the Remote GPU runs this, and this request does not allow sending its work "
-            "and inputs there", field="allow_remote",
-            action="Set allow_remote, or choose the Remote target explicitly."))
+            "only the Remote GPU runs this, and neither this request nor the routing policy "
+            "lets Auto send work there", field="allow_remote",
+            action="Set allow_remote, allow Auto to use remote in Settings, or choose the "
+                   "Remote target explicitly."))
     chosen = next((c for c in candidates if c["target"] == target and c["slot"]), None)
     # No slot serves this model on the chosen target: there is no kind to run.
     # Building one anyway would run the lane's default model in its place.
@@ -311,6 +348,15 @@ def _resolve(request: ResolveRequest, ctx: Context,
     finish = _finish(request, preset, ctx, warnings)
     inputs, paths, mask_path, last_path = _inputs(request, preset, kind, specs, ctx)
     origins["seed"] = seed_origin
+    sent = len(inputs["images"]) + sum(len(v) for v in inputs["references"].values()) + \
+        (1 if inputs["mask"] else 0) + (1 if inputs["last_frame"] else 0)
+    if target == "remote" and sent and not (request.allow_remote
+                                            or rules.get("send_inputs_to_remote", False)):
+        blockers.append(_issue(
+            "input_transfer_not_allowed",
+            f"this request would send {sent} image(s) to the Remote GPU, and neither the request "
+            "nor the routing policy allows that", field="allow_remote",
+            action="Set allow_remote for this request, or allow sending inputs in Settings."))
 
     raw: dict[str, Any] = {
         **values, "prompt": prompt["positive"], "negative_prompt": prompt["negative"],
@@ -334,7 +380,7 @@ def _resolve(request: ResolveRequest, ctx: Context,
     seeds = _seed_mapping(request.seed, effective or raw)
 
     remote = ctx.remote_state()
-    capability = contracts.digest({
+    capability = ctx.capability_revision() if ctx.capability_revision else contracts.digest({
         "kind": kind, "controls": sorted(known),
         "options": {n: c.get("options") for n, c in known.items() if c.get("options")},
         "slot": slot.__dict__ if slot else None,
@@ -399,8 +445,7 @@ def _resolve(request: ResolveRequest, ctx: Context,
         "finish": finish,
         "validation": [v.model_dump() for v in (preset.validation if preset else [])],
         "warnings": warnings,
-        "readiness": {"ready": not blockers, "blockers": blockers,
-                      "actions": [b["action"] for b in blockers if b.get("action")]},
+        "readiness": _readiness(blockers, warnings),
         "capability_revision": capability,
         "fingerprint": {"model": model_facts["verification"],
                         "adapters": [a["verification"] for a in adapters],
@@ -508,6 +553,23 @@ def _candidates(operation: str, model_id: str, ctx: Context) -> list[dict[str, A
         elif target == "local":
             if reason := ctx.local_unavailable():
                 issues.append(_issue("target_unavailable", reason, field="target"))
+            hw = ctx.hardware()
+            if hw.get("vram_gb") is None:
+                issues.append(_issue(
+                    "needs_check", "this machine's GPU memory has not been measured yet, so "
+                    "whether this fits is unknown", field="target", blocking=False,
+                    action="Wait for the startup device probe, or run it to find out."))
+            # Advisory, as the loader treats it: it waits for memory before it
+            # gives up, and a resident model needs no load at all. An estimate
+            # is never a refusal; a measured failure is the job's to report.
+            if ctx.resident() != slot.repo and (shortfall := ctx.memory_shortfall(slot.repo)):
+                need, free = shortfall
+                issues.append(_issue(
+                    "insufficient_memory",
+                    f"loading {slot.repo} is estimated to need about {need / 1024 ** 3:.1f} GB of "
+                    f"free RAM and {free / 1024 ** 3:.1f} GB is available now; the load waits "
+                    "for memory and fails if it never frees", field="target", blocking=False,
+                    action="Close other programs, choose a smaller model, or run on Remote."))
             status = ctx.local_model_status(slot.repo)
             if status != "ready":
                 if slot.gated and not ctx.hf_token():
@@ -533,8 +595,8 @@ def _candidates(operation: str, model_id: str, ctx: Context) -> list[dict[str, A
     return out
 
 
-def _choose_target(request: ResolveRequest, candidates: list[dict[str, Any]]
-                   ) -> tuple[str | None, str]:
+def _choose_target(request: ResolveRequest, candidates: list[dict[str, Any]],
+                   may_route_remote: bool = False) -> tuple[str | None, str]:
     by_target = {c["target"]: c for c in candidates}
     if request.target in ("local", "remote"):
         if request.target not in by_target:
@@ -549,7 +611,7 @@ def _choose_target(request: ResolveRequest, candidates: list[dict[str, Any]]
     if local and ready(local):
         return "local", "auto: this machine can run it"
     if remote and ready(remote):
-        if request.allow_remote:
+        if may_route_remote:
             return "remote", "auto: this machine cannot run it and remote use is allowed"
         if local and local["slot"]:
             return "local", ("auto: the local slot is not ready; remote is ready but not "
@@ -907,6 +969,31 @@ def _effective(kind: str | None, raw: dict[str, Any], paths: list[str], mask_pat
                     f"{_NORMALIZED_WHY.get(key, 'normalized by the job builder')}",
                     field=f"settings.{key}", blocking=False))
     return effective, normalized
+
+
+_NEEDS_RESOURCES = frozenset({"resource_not_ready", "access_required"})
+
+
+def _readiness(blockers: list[dict[str, Any]],
+               warnings: list[dict[str, Any]]) -> dict[str, Any]:
+    """blocked > needs_resources > needs_check > ready.
+
+    Only `ready` is a claim that the plan will run as is. `needs_resources`
+    (a first download) and `needs_check` (unmeasured hardware, an adapter we
+    could not match) can still be submitted; `blocked` cannot.
+    """
+    codes = {w["code"] for w in warnings}
+    if blockers:
+        state = "blocked"
+    elif codes & _NEEDS_RESOURCES:
+        state = "needs_resources"
+    elif codes & {"needs_check", "insufficient_memory"}:
+        state = "needs_check"
+    else:
+        state = "ready"
+    actions = [i["action"] for i in [*blockers, *warnings] if i.get("action")]
+    return {"state": state, "ready": state == "ready", "submittable": not blockers,
+            "blockers": blockers, "actions": list(dict.fromkeys(actions))}
 
 
 def _seed_mapping(base: int, params: Mapping[str, Any]) -> list[int]:

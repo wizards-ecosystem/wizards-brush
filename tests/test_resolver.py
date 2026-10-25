@@ -89,7 +89,7 @@ def ctx(tmp_path, monkeypatch):
     from backend.app.variant_sets.operations import registry_specs
 
     state: dict = {"remote": {"connected": True, "features": ["edit_inpaint"]}, "local": "",
-                   "cache": "ready"}
+                   "cache": "ready", "hardware": {"vram_gb": 16.0}}
     context = Context(
         preset=preset, resource=resource,
         adapter_path=lambda rid: {INK: "ink_wash.safetensors",
@@ -105,6 +105,7 @@ def ctx(tmp_path, monkeypatch):
         local_unavailable=lambda: state["local"],
         local_model_status=lambda repo: state["cache"],
         remote_state=lambda: state["remote"], finishing=describe, hf_token=lambda: True,
+        hardware=lambda: state["hardware"],
     )
     context.extra["state"] = state
     return context
@@ -286,13 +287,15 @@ def test_auto_prefers_a_ready_local_target_and_never_routes_remote_unasked(ctx):
     assert remote_only["target"]["resolved"] == "remote"
     assert any(b["code"] == "remote_not_allowed" for b in remote_only["readiness"]["blockers"])
     allowed = run(ctx, operation="text_to_image", model=QWEN, prompt="x", allow_remote=True)
-    assert allowed["readiness"]["ready"] is True
+    assert allowed["readiness"]["ready"] is True and allowed["target"]["resolved"] == "remote"
 
 
 def test_readiness_is_not_validity(ctx):
     ctx.extra["state"]["cache"] = "absent"
     plan = run(ctx, preset_id="fixture/fast-general", prompt="x")
-    assert plan["readiness"]["ready"] is True              # it downloads on first run
+    # Valid and submittable (the first run downloads it), but not claimed ready.
+    assert plan["readiness"]["state"] == "needs_resources"
+    assert plan["readiness"]["submittable"] is True and plan["readiness"]["ready"] is False
     assert any(w["code"] == "resource_not_ready" for w in plan["warnings"])
     ctx.extra["state"]["remote"] = {"connected": False}
     offline = run(ctx, preset_id="fixture/character-scene", prompt="x", allow_remote=True,

@@ -625,6 +625,17 @@ def lane_for(kind: str) -> str:
     return "local" if kind in _LOCAL_KINDS else "remote"
 
 
+def lane_for_job(job: Any) -> str:
+    """A planned job's lane comes from the target it was planned for; older
+    jobs keep the kind-based answer."""
+    backend = str(getattr(job, "backend_id", "") or "")
+    if backend == "local":
+        return "local"
+    if backend.startswith("remote"):
+        return "remote"
+    return lane_for(job.kind)
+
+
 def release_device(job_id: int) -> None:
     """A remote handler calls this after the A100 returns so finishing can overlap."""
     for q in LANES.values():
@@ -657,7 +668,7 @@ async def resume_queued() -> int:
     for job in db.queued_jobs_for_lane():
         if job.id is None:
             continue
-        lane = LANES[lane_for(job.kind)]
+        lane = LANES[lane_for_job(job)]
         if job.id in lane._pending:
             continue
         handler = get_handler(job.kind)

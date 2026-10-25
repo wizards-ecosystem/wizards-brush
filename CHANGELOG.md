@@ -35,6 +35,12 @@ contributors know which user-facing changes need release notes.
   preview, rechecks the plan when the job starts and records the runtime that
   ran it. `POST /api/jobs/{id}/replay` replays exactly or refuses, and can run
   the latest preset revision instead.
+- Targets and routing (`/api/targets`): capability reports for this machine
+  and the Remote GPU, a capability revision (also on `/api/system`), and a
+  routing policy that decides whether Auto may use a remote worker and whether
+  inputs may be sent there. Plans report readiness as ready, needs resources,
+  needs check or blocked; unmeasured hardware is never reported as ready, and
+  a planned job's model affinity and lane follow its plan.
 
 ### Fixed
 

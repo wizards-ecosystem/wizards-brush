@@ -223,7 +223,9 @@ class PreparedPlan(BaseModel):
     """A preset request resolved into its execution plan, not queued."""
 
     dry_run: Literal[True] = True
-    ready: bool = Field(description="False when readiness lists blockers; see plan.readiness.")
+    ready: bool = Field(description="True only when the plan runs as is; see plan.readiness.")
+    submittable: bool = Field(default=True,
+                              description="False when readiness lists blockers.")
     seed: int = Field(description="The base seed. Send it back to keep this exact request.")
     plan: dict[str, Any]
     duplicate: bool = False
@@ -640,12 +642,17 @@ async def _plan_job(body: JobCreate) -> PreparedPlan | JobSubmission:
     # 15 s, as every other gate does); the resolver itself never touches the
     # network.
     state = await remote_state()
+    from ..studio import targets
+
     context = live()
     context.remote_state = lambda: {**last_health(), "connected": bool(state.get("connected"))}
+    context.capability_revision = lambda: targets.reports(
+        connected=bool(state.get("connected")))["capability_revision"]
     plan = await asyncio.to_thread(resolve, request, context, seed_origin=origin)
     if body.dry_run:
         submission.remember(plan)
-        return PreparedPlan(ready=plan["readiness"]["ready"], seed=seed, plan=plan)
+        return PreparedPlan(ready=plan["readiness"]["ready"],
+                            submittable=plan["readiness"]["submittable"], seed=seed, plan=plan)
     return await submission.submit_plan(body, plan, request)
 
 

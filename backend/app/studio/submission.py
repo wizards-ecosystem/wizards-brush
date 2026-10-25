@@ -138,6 +138,13 @@ def _path(asset_id: int) -> str:
     return row.path
 
 
+def _model_key(plan: dict[str, Any]) -> str | None:
+    """Affinity by runtime identity: the planned model's repo, never re-derived
+    from a variant name that could point somewhere else by dispatch time."""
+    return str(plan["model"]["repo"]) if plan["kind"] in _MODEL_KEYED and plan["model"]["repo"] \
+        else None
+
+
 def _backend_id(plan: dict[str, Any]) -> str | None:
     target = plan["target"]["resolved"]
     if target == "local":
@@ -180,7 +187,7 @@ async def submit_plan(body: Any, plan: dict[str, Any], request: Any) -> Any:
                        "previewed_known": before is not None},
                 suggestions=["Preview again and confirm the new plan."],
             )
-    if not plan["readiness"]["ready"]:
+    if not plan["readiness"]["submittable"]:
         raise _refuse_unready(plan)
     if plan["effective_params"].get("combinatorial"):
         raise RequestError(
@@ -205,7 +212,7 @@ async def submit_plan(body: Any, plan: dict[str, Any], request: Any) -> Any:
     )
     job, created = await _create_and_enqueue(
         kind, params, handler, group_id=None, request_id=request_id, plan_id=row.id,
-        request_digest=digest, backend_id=_backend_id(plan),
+        request_digest=digest, backend_id=_backend_id(plan), model_key=_model_key(plan),
     )
     if not created:
         # A concurrent retry won the request id. Its digest decides.
@@ -387,5 +394,6 @@ async def replay_job(job_id: int, *, request_id: str | None = None) -> Any:
     replayed, _created = await _create_and_enqueue(
         kind, job_params(plan), handler, group_id=None, request_id=rid, plan_id=copy.id,
         request_digest=row.request_digest, backend_id=_backend_id(plan),
+        model_key=_model_key(plan),
     )
     return JobSubmission(job_id=int(replayed.id or 0), job_ids=[int(replayed.id or 0)])
