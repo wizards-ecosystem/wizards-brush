@@ -3,7 +3,9 @@ import {
   addValues,
   availableAxes,
   axisProblems,
+  configuredChecks,
   countCombinations,
+  effectiveKind,
   formula,
   fromRecipe,
   insertAt,
@@ -202,5 +204,37 @@ describe("presentation", () => {
   it("measures how much of a set has settled", () => {
     expect(settledFraction({ total: 4, succeeded: 1, failed: 1, blocked: 1 })).toBe(0.75);
     expect(settledFraction({})).toBe(0);
+  });
+
+  it("a preset stage sends only the preset and explicit overrides, and an inpaint preset gets its mask", () => {
+    const draft = newDraft("image_edit");
+    draft.maskAssetId = 9;
+    draft.stages[0].axes = [{ uid: "a", name: "pose", values: ["sit"], describe: false, content: {} }];
+    draft.stages[0].preset = { id: "custom/fill", revision: 2, operation: "inpaint", allowRemote: true };
+    draft.stages[0].params = { strength: 0.5 };
+    const recipe = toRecipe(draft, new Set(["inpaint"]));
+    expect(recipe.stages[0].operation).toBe("");
+    expect(recipe.stages[0].preset).toEqual({ id: "custom/fill", revision: 2, allow_remote: true });
+    expect(recipe.stages[0].params).toEqual({ strength: 0.5 });
+    expect(recipe.stages[0].mask).toBe("region");
+    expect(recipe.masks).toEqual({ region: { asset_id: 9 } });
+    expect(effectiveKind(draft.stages[0])).toBe("inpaint");
+    const back = fromRecipe(recipe);
+    expect(back.stages[0].preset).toMatchObject({ id: "custom/fill", revision: 2, allowRemote: true });
+  });
+
+  it("keeps a validation policy through a round trip and drops names no longer configured", () => {
+    const draft = newDraft("image_edit");
+    draft.stages[0].axes = [{ uid: "a", name: "pose", values: ["sit"], describe: false, content: {} }];
+    draft.stages[0].validation.alpha = "required";
+    draft.stages[0].validation.margin = 8;
+    expect(configuredChecks(draft.stages[0].validation)).toEqual(["alpha", "margins"]);
+    draft.stages[0].validationPolicy = { required: ["alpha", "coverage"], optional: ["margins"] };
+    const recipe = toRecipe(draft, new Set());
+    expect(recipe.stages[0].validation).toMatchObject({ required: ["alpha"], optional: ["margins"] });
+    expect(fromRecipe(recipe).stages[0].validationPolicy).toEqual({
+      required: ["alpha"],
+      optional: ["margins"],
+    });
   });
 });

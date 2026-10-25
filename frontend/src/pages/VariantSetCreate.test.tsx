@@ -33,6 +33,7 @@ vi.mock("../api/client", () => ({
     waitJob: mocks.waitJob,
     variantSet: mocks.variantSet,
     asset: mocks.asset,
+    studioPresets: vi.fn().mockResolvedValue([]),
   },
 }));
 
