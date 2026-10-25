@@ -61,8 +61,9 @@ dependencies = [
     # protobuf<5 even though its solutions/controlnet_aux paths pass our smoke
     # test on 5.29.6; the matching uv override below documents that exception.
     "protobuf>=5.29.6,<6",
-    # Torch imports setuptools at runtime; 84.0.0 contains the fix for
-    # PYSEC-2026-3447 and is smoke-tested with the pinned Torch/CUDA pair.
+    # Torch imports setuptools at runtime; 84.x contains the fix for
+    # PYSEC-2026-3447 (from 84.0.0), and 84.1.0 is smoke-tested with the pinned
+    # Torch/CUDA pair (make optional-check).
     "setuptools==84.1.0",
     "ftfy>=6.3",
     # quantization fallback when Nunchaku has no wheel for the installed torch

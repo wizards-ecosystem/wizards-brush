@@ -6,7 +6,7 @@ generated CSS, even when the optimizer removes a particular module.
 
 MIT-licensed browser code
 
-React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0
+React 19.3.1, React DOM 19.3.1, and Scheduler 0.28.0
 Copyright (c) Meta Platforms, Inc. and affiliates.
 https://github.com/facebook/react
 
@@ -33,7 +33,7 @@ Tailwind CSS 4.3.3 and @tailwindcss/postcss 4.3.3
 Copyright (c) Tailwind Labs, Inc.
 https://github.com/tailwindlabs/tailwindcss
 
-Vite 8.3.3
+Vite 8.3.4
 Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
 https://github.com/vitejs/vite
 
