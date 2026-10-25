@@ -53,6 +53,14 @@ contributors know which user-facing changes need release notes.
   and recorded as a remote install. The worker stores it under its hash and
   never takes a path. Applying user adapters in remote jobs is not part of
   this release.
+- MCP tools for presets, plans, targets, resources, masks and cancellation:
+  `list_targets`, `list_presets` and the preset authoring tools,
+  `resolve_preset` (the same hashes as the HTTP dry run), `run_preset`,
+  `replay_job`, `get_plan`, `cancel_job` (which tells a requested cancel from a
+  settled one), `import_mask`, `fetch_asset` (full-resolution bytes up to
+  16 MB) and resource tools. Asset outcomes now name `mime_type`, `warnings`,
+  `plan_id` and a video's `duration_s`. `docs/parity-matrix.md` lists what the
+  UI, HTTP and MCP each support.
 
 ### Fixed
 

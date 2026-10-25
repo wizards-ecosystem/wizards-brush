@@ -56,6 +56,24 @@ then any Host that presents the token is accepted. See
 | `get_recipe` | One recipe by id, slug, or name, including frozen params. |
 | `save_recipe` | Save a kind's settings. `expose` names the fields a later run may change. |
 | `run_recipe` | Run one. `inputs` must match that recipe's `input_schema`. |
+| `list_targets` | Where work can run: capability reports, the routing policy, `capability_revision`. Read-only. |
+| `list_processors` | Finishing processors (options, availability) and validators. |
+| `list_presets`, `get_preset`, `preset_revisions` | The preset catalogue, one revision's full definition, and its history. |
+| `save_preset`, `update_preset`, `clone_preset`, `archive_preset` | Author presets. Every save is a new immutable revision. |
+| `resolve_preset` | The execution plan for a preset request. No side effects. |
+| `run_preset` | Queue a plan as an ordinary job. |
+| `replay_job` | Replay a preset job exactly, or against the latest preset revision. |
+| `get_plan` | A stored execution plan and the request behind it. |
+| `cancel_job` | Cancel and report what actually happened. |
+| `import_mask` | Store a mask (white = change) as a gallery asset. |
+| `fetch_asset` | Full-resolution image bytes, up to 16 MB. |
+| `list_resources`, `get_resource`, `rescan_resources` | Models and adapters by identity; rescan the library. |
+| `prepare_resource_on_remote`, `resource_preparation_status` | Copy an imported adapter to the Remote GPU worker. |
+
+Tools whose description begins "Side effect" change state: they save, queue,
+copy or import. The rest only read. None of them starts or rents hardware, and
+none changes the routing policy: whether Auto may use a remote worker, and
+whether inputs may be sent there, is the person's choice in Settings.
 
 Call `list_kinds`, then `describe_kind`, before choosing settings. Unknown
 names and out-of-range values are refused. Do not invent settings.
@@ -122,6 +140,53 @@ its client is `mcp`, and its params do not carry the recipe id, so a later
 rerun still validates.
 
 `brush://recipes` and `brush://recipes/{key}` return the same documents.
+
+### Presets and plans
+
+A preset is a versioned creative setup (see
+[studio contracts](studio-contracts.md)). `resolve_preset` takes the same
+fields as the preset form of `POST /api/jobs` (`preset_id` or `operation` and
+`model`, `prompt`, `styles`, `settings`, `finish`, `inputs` with `references`,
+`target`, `allow_remote`, `seed`) and returns the execution plan: composed
+prompt, ordered adapters, effective params, everything the builder
+normalized, readiness and hashes. It is the HTTP dry run, so the same
+fixed-seed request gives the same `creative_request_hash` over MCP and HTTP.
+Omit `seed` and the chosen one comes back; send it back to keep the request.
+
+`run_preset` queues it. Pass the `execution_plan_hash` you previewed as
+`expected_plan_hash`: if the plan would now run differently the call is
+refused as `plan_stale` instead of queueing something else. A `request_id`
+returns the same job for the same request and `request_conflict` for a
+different one. With `wait: false` the job id comes back at once; a transport
+timeout is not a failure, and `get_job` or `wait_job` picks the job up again
+by id. Outcomes name each asset's `mime_type`, size (or `duration_s` for a
+video), `warnings`, `plan_id` and `file_url`.
+
+`save_preset` and the other authoring tools share the HTTP catalogue. A
+preset an agent saves is `custom`, with `client: "mcp"`; `curated` is
+reserved for presets that ship with the app, and authorship is never a
+quality claim. `update_preset` needs the `base_revision` you edited; a stale
+one is `revision_conflict`, or a new copy with `on_conflict: "copy"`.
+
+### Cancelling
+
+`cancel_job` reports one of: `removed_from_queue` (it never ran),
+`cancellation_requested` (it is running; the lane stops it at its next
+step, and a Remote GPU job's own polling loop tells the worker), `canceled`,
+`settled_otherwise` (it finished first) or `already_settled`. Only a settled
+job is canceled; until then `settled` is false. `wait_seconds` waits up to 60
+seconds for it to settle. Outputs saved before the cancel are kept.
+
+### Masks and bytes
+
+`import_mask` stores a `data:image/...;base64` mask (white = change, at most
+16 MB). With `source_asset_id` its size must match that image, or it is
+`invalid_mask` and nothing is stored. Region masks and mattes come from the
+`region_mask` and `matte` kinds.
+
+`fetch_asset` returns an image's full-resolution bytes inline, for clients
+that cannot send the API token to `file_url`. Images over 16 MB and videos are
+refused with the `file_url` to use; credentials never go into a URL.
 
 ### Errors
 
