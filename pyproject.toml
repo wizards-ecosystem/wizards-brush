@@ -99,8 +99,11 @@ dev = ["ruff>=0.14", "pytest>=8.3", "mypy>=1.13"]
 
 [project.urls]
 Homepage = "https://github.com/wizards-ecosystem/wizards-brush"
+Releases = "https://github.com/wizards-ecosystem/wizards-brush/releases"
 Documentation = "https://github.com/wizards-ecosystem/wizards-brush/tree/main/docs"
 Issues = "https://github.com/wizards-ecosystem/wizards-brush/issues"
+Changelog = "https://github.com/wizards-ecosystem/wizards-brush/blob/main/CHANGELOG.md"
+Security = "https://github.com/wizards-ecosystem/wizards-brush/security/policy"
 Repository = "https://github.com/wizards-ecosystem/wizards-brush.git"
 
 # Torch-free dependency group for CI: just enough to import the app (heavy deps
