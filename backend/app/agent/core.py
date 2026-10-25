@@ -110,9 +110,24 @@ def public_job(row: JobRead) -> dict[str, Any]:
 
 
 def public_asset(asset: AssetRead) -> dict[str, Any]:
+    from .. import db
+
     data = asset.model_dump(mode="json")
     # `/files/...` is cookie-only once a token is set. Agents hold a header.
     data["file_url"] = f"/api/assets/{asset.id}/file"
+    content = db.content_of(int(asset.id))
+    data["mime_type"] = (content.mime_type if content is not None and content.mime_type
+                         else ("video/mp4" if asset.kind == "video" else "image/png"))
+    meta = asset.meta or {}
+    warnings = meta.get("warnings")
+    data["warnings"] = list(warnings) if isinstance(warnings, list) else []
+    if asset.kind == "video":
+        frames, fps = meta.get("num_frames"), meta.get("fps")
+        data["duration_s"] = (round(float(frames) / float(fps), 3)
+                              if isinstance(frames, (int, float)) and isinstance(fps, (int, float))
+                              and fps else None)
+    job = db.get_job(int(asset.job_id)) if asset.job_id is not None else None
+    data["plan_id"] = job.plan_id if job is not None else None
     return data
 
 

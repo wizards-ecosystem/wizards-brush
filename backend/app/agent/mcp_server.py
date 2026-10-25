@@ -34,7 +34,7 @@ from ..routers.job_api import (
     MemoryImage,
 )
 from ..version import get_version
-from . import core
+from . import core, studio_tools
 
 # A client that asks to wait is answered inside this budget, then told to poll.
 # The slice is how often progress is read; tests shorten it.
@@ -51,6 +51,10 @@ _INSTRUCTIONS = (
     "Saved recipes are named setups. list_recipes and get_recipe publish "
     "input_schema; run_recipe accepts only those fields. "
     "dry_run checks a request and does not queue a job. "
+    "Presets are versioned setups: list_presets and get_preset describe them, "
+    "resolve_preset returns the execution plan with no side effects, run_preset queues "
+    "it (pass expected_plan_hash from resolve), cancel_job reports what really happened. "
+    "list_targets says where work can run; nothing here rents hardware. "
     "Images come back as brush:// resource links and file_url paths; "
     "set inline_images to also receive a small preview. Do not invent settings."
 )
@@ -552,6 +556,374 @@ async def run_recipe(
     return await _present(
         result, wait=wait, inline=inline_images, ctx=ctx,
         recipe=(view.recipe_id, view.slug, view.name),
+    )
+
+
+# ---- discovery: targets, presets, resources, processors ------------------------------------
+@mcp.tool()
+async def list_targets() -> dict[str, Any]:
+    """Where work can run: capability reports for this machine and the Remote GPU,
+    the routing policy, and the capability_revision. Read-only; never rents hardware.
+    The policy is changed by the person in Settings, not by an agent."""
+    return await studio_tools.targets()
+
+
+@mcp.tool()
+async def list_processors() -> dict[str, Any]:
+    """Finishing processors (with their options and availability) and validators."""
+    return await studio_tools.processors()
+
+
+@mcp.tool()
+async def list_presets(
+    origin: Annotated[str | None, Field(description="curated or custom. Omit for both.")] = None,
+    tag: str | None = None,
+    q: Annotated[str | None, Field(description="Text to look for in name, description, tags.")] = None,
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    """The preset catalogue: head revisions by name."""
+    try:
+        if origin not in (None, "curated", "custom"):
+            raise RequestError(400, "origin must be curated or custom", code="invalid_option",
+                               field="origin", valid_options=["curated", "custom"])
+        rows = await studio_tools.presets(include_archived=include_archived,
+                                          origin=origin, tag=tag, q=q)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    return {"presets": rows}
+
+
+@mcp.tool()
+async def get_preset(
+    preset: Annotated[str, Field(description="A preset id such as custom/storybook.")],
+    revision: Annotated[int | None, Field(description="A revision; the head when omitted.",
+                                          ge=1)] = None,
+) -> dict[str, Any]:
+    """One preset revision, including its full definition (adapters, prompt
+    fragments, settings, ordered finishing, reference roles, validation)."""
+    try:
+        return await studio_tools.preset(preset, revision)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def preset_revisions(preset: str) -> dict[str, Any]:
+    """Every revision of a preset, oldest first. Revisions are never removed."""
+    try:
+        return {"revisions": await studio_tools.preset_history(preset)}
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def list_resources(
+    kind: Annotated[str | None, Field(description="model, adapter or component.")] = None,
+    family: str | None = None,
+    state: str | None = None,
+) -> dict[str, Any]:
+    """Models and adapters by identity, with state, verification, licence and
+    installs. Installs show a managed root and a relative path only."""
+    try:
+        if kind not in (None, "model", "adapter", "component"):
+            raise RequestError(400, "kind must be model, adapter or component",
+                               code="invalid_option", field="kind",
+                               valid_options=["model", "adapter", "component"])
+        return {"resources": await studio_tools.resources(kind=kind, family=family, state=state)}
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def get_resource(resource: Annotated[str, Field(description="A resource id.")]) -> dict[str, Any]:
+    """One resource."""
+    try:
+        return await studio_tools.resource(resource)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def rescan_resources() -> dict[str, Any]:
+    """Side effect: re-register configured models and hash new LoRA library files."""
+    return await studio_tools.rescan_resources()
+
+
+@mcp.tool()
+async def prepare_resource_on_remote(
+    resource: Annotated[str, Field(description="An imported adapter's resource id.")],
+) -> dict[str, Any]:
+    """Side effect: copy an imported adapter to the connected Remote GPU worker by
+    content, in the background. Poll resource_preparation_status. Storing it on
+    the worker does not make remote jobs apply it."""
+    try:
+        return await studio_tools.prepare_remote(resource)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def resource_preparation_status(resource: str) -> dict[str, Any]:
+    """Progress of prepare_resource_on_remote."""
+    try:
+        return await studio_tools.prepare_status(resource)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+# ---- presets: authoring ----------------------------------------------------------------------
+@mcp.tool()
+async def save_preset(
+    definition: Annotated[dict[str, Any], Field(
+        description="A preset definition (schema wizards-brush/preset, schema_version 2). "
+                    "It is saved as custom at revision 1; curated is reserved for shipped "
+                    "presets. See docs/studio-contracts.md.")],
+) -> dict[str, Any]:
+    """Side effect: save a new custom preset. Its client is recorded as mcp."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.save_preset(definition)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def update_preset(
+    preset: str,
+    definition: dict[str, Any],
+    base_revision: Annotated[int, Field(description="The revision you edited.", ge=1)],
+    on_conflict: Annotated[str, Field(
+        description="error (refuse a stale base) or copy (save yours as a new preset).")] = "error",
+) -> dict[str, Any]:
+    """Side effect: save an edit as the next revision. A curated preset becomes a
+    custom copy (cloned_from). A stale base is revision_conflict unless copy."""
+    try:
+        if on_conflict not in ("error", "copy"):
+            raise RequestError(400, "on_conflict must be error or copy", code="invalid_option",
+                               field="on_conflict", valid_options=["error", "copy"])
+        with client_tag.use("mcp"):
+            return await studio_tools.update_preset(
+                preset, definition, base_revision, cast(Any, on_conflict))
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def clone_preset(
+    preset: str,
+    revision: Annotated[int | None, Field(ge=1)] = None,
+    name: str | None = None,
+    new_id: Annotated[str | None, Field(description="An id like custom/my-look.")] = None,
+) -> dict[str, Any]:
+    """Side effect: copy a revision into a new custom preset."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.clone_preset(preset, revision=revision, name=name,
+                                                   new_id=new_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def archive_preset(
+    preset: str,
+    archived: Annotated[bool, Field(description="False unarchives.")] = True,
+) -> dict[str, Any]:
+    """Side effect: leave (or return to) the catalogue. Revisions stay readable."""
+    try:
+        return await studio_tools.archive_preset(preset, archived)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+# ---- plans -----------------------------------------------------------------------------------
+_PLAN_ARGS = ("preset_id", "revision", "operation", "model", "adapters", "prompt",
+              "negative_prompt", "styles", "style_fragments", "enhance", "notes", "settings",
+              "finish", "target", "allow_remote", "seed")
+
+
+def _plan_body(args: dict[str, Any], *, dry_run: bool, request_id: str | None = None,
+               expected_plan_hash: str | None = None) -> JobCreate:
+    from pydantic import ValidationError
+
+    fields = {k: v for k, v in args.items() if k in _PLAN_ARGS and v is not None}
+    inputs = args.get("inputs") or {}
+    try:
+        return JobCreate.model_validate({**fields, "inputs": inputs, "dry_run": dry_run,
+                                         "request_id": request_id,
+                                         "expected_plan_hash": expected_plan_hash})
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        path = ".".join(str(p) for p in first.get("loc", ()))
+        raise _fail(RequestError(400, f"{path}: {first.get('msg')}", code="invalid_request",
+                                 field=path or None)) from None
+
+
+@mcp.tool()
+async def resolve_preset(
+    prompt: Annotated[str, Field(description="The subject the preset's template wraps.")] = "",
+    preset_id: Annotated[str | None, Field(description="A preset; omit to use operation + model.")] = None,
+    revision: Annotated[int | None, Field(ge=1)] = None,
+    operation: Annotated[str | None, Field(description="text_to_image, edit, inpaint, ...")] = None,
+    model: Annotated[str | None, Field(description="A model resource id.")] = None,
+    adapters: Annotated[list[dict[str, Any]] | None, Field(
+        description="Ordered [{resource, strength}]; [] means none.")] = None,
+    negative_prompt: str | None = None,
+    styles: list[str] | None = None,
+    style_fragments: list[dict[str, str]] | None = None,
+    enhance: bool | None = None,
+    notes: str | None = None,
+    settings: Annotated[dict[str, Any] | None, Field(
+        description="Explicit overrides, validated strictly, never clamped.")] = None,
+    finish: Annotated[list[dict[str, Any]] | None, Field(
+        description="Ordered finishing steps; replaces the preset's.")] = None,
+    inputs: Annotated[dict[str, Any] | None, Field(
+        description="{images, mask, last_frame, references: {role: [asset ids]}}")] = None,
+    target: Annotated[str | None, Field(description="local, remote or auto.")] = None,
+    allow_remote: Annotated[bool | None, Field(
+        description="Let auto use a connected remote worker and send this request's inputs "
+                    "there. Never rents hardware.")] = None,
+    seed: Annotated[int | None, Field(
+        description="Omit for random; the chosen seed is returned. Send it back to keep the "
+                    "same request.", ge=0, le=2**32 - 1)] = None,
+) -> dict[str, Any]:
+    """Resolve a preset request into its execution plan. No side effects: no job,
+    download, upload or rental. Same request as POST /api/jobs with dry_run, so
+    the creative_request_hash matches the HTTP API's for the same inputs."""
+    body = _plan_body(dict(locals()), dry_run=True)
+    try:
+        with client_tag.use("mcp"):
+            result = await core.submit(body)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def run_preset(
+    ctx: Context,
+    prompt: str = "",
+    preset_id: str | None = None,
+    revision: Annotated[int | None, Field(ge=1)] = None,
+    operation: str | None = None,
+    model: str | None = None,
+    adapters: list[dict[str, Any]] | None = None,
+    negative_prompt: str | None = None,
+    styles: list[str] | None = None,
+    style_fragments: list[dict[str, str]] | None = None,
+    enhance: bool | None = None,
+    notes: str | None = None,
+    settings: dict[str, Any] | None = None,
+    finish: list[dict[str, Any]] | None = None,
+    inputs: dict[str, Any] | None = None,
+    target: str | None = None,
+    allow_remote: bool | None = None,
+    seed: Annotated[int | None, Field(ge=0, le=2**32 - 1)] = None,
+    expected_plan_hash: Annotated[str | None, Field(
+        description="The execution_plan_hash from resolve_preset. A plan that would now run "
+                    "differently is refused as plan_stale.")] = None,
+    request_id: Annotated[str | None, Field(
+        description="Idempotency key. The same request returns its job; a different "
+                    "request under the same key is request_conflict.")] = None,
+    wait: Annotated[bool, Field(description="Wait until the job settles, or up to 55 s.")] = True,
+    inline_images: bool = False,
+) -> Outcome:
+    """Side effect: queue the plan as an ordinary job. Returns the job id at once
+    when wait is false; a transport timeout is not a failure, call get_job."""
+    args = {k: v for k, v in locals().items() if k != "ctx"}
+    body = _plan_body(args, dry_run=False, request_id=request_id,
+                      expected_plan_hash=expected_plan_hash)
+    try:
+        with client_tag.use("mcp"):
+            result = await core.submit(body)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    assert isinstance(result, JobSubmission)
+    return await _present(result, wait=wait, inline=inline_images, ctx=ctx)
+
+
+@mcp.tool()
+async def replay_job(
+    job_id: int,
+    ctx: Context,
+    mode: Annotated[str, Field(
+        description="exact: the stored plan or replay_resource_unavailable. latest: the same "
+                    "request against today's preset revision.")] = "exact",
+    dry_run: bool = False,
+    request_id: str | None = None,
+    wait: bool = True,
+) -> dict[str, Any]:
+    """Run a preset job again. exact never substitutes a resource."""
+    try:
+        if mode not in ("exact", "latest"):
+            raise RequestError(400, "mode must be exact or latest", code="invalid_option",
+                               field="mode", valid_options=["exact", "latest"])
+        with client_tag.use("mcp"):
+            result = await studio_tools.replay(job_id, mode=cast(Any, mode), dry_run=dry_run,
+                                               request_id=request_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    if isinstance(result, JobSubmission):
+        outcome = await _present(result, wait=wait, inline=False, ctx=ctx)
+        return cast(Any, outcome).structured_content or {}
+    return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def get_plan(plan_id: int) -> dict[str, Any]:
+    """An execution plan and the request that produced it (job.plan_id names it)."""
+    try:
+        return await studio_tools.plan(plan_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+# ---- cancellation, masks, bytes --------------------------------------------------------------
+@mcp.tool()
+async def cancel_job(
+    job_id: int,
+    wait_seconds: Annotated[float, Field(
+        description="Wait up to this long (at most 60) for the job to settle.", ge=0, le=60)] = 0,
+) -> dict[str, Any]:
+    """Cancel a job. state is removed_from_queue (it never ran), cancellation_requested
+    (running; not canceled until it settles), canceled, settled_otherwise (it finished
+    first) or already_settled. Outputs already saved are kept."""
+    try:
+        return await studio_tools.cancel(job_id, wait_seconds=wait_seconds)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def import_mask(
+    mask: Annotated[str, Field(
+        description="data:image/png;base64,... (white = change, black = keep). At most 16 MB.")],
+    source_asset_id: Annotated[int | None, Field(
+        description="The image the mask is for; its size must match.")] = None,
+) -> dict[str, Any]:
+    """Side effect: store a mask as a gallery asset for edit, inpaint or Variant Sets.
+    Region masks and mattes come from the existing region_mask and matte kinds."""
+    try:
+        data = core.decode_data_url(mask)
+        stored = await studio_tools.import_mask(data, source_asset_id=source_asset_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    return core.public_asset(stored)
+
+
+@mcp.tool()
+async def fetch_asset(asset_id: int) -> CallToolResult:
+    """The full-resolution image bytes, for clients that cannot fetch file_url with
+    the API token. Capped at 16 MB; larger files and videos must use file_url."""
+    try:
+        data, mime, view = await asyncio.to_thread(studio_tools.asset_bytes, asset_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+    fmt = mime.split("/", 1)[1] if "/" in mime else "png"
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(view)),
+                 Image(data=data, format=fmt).to_image_content()],
+        structured_content={"asset": view, "bytes": len(data)},
     )
 
 

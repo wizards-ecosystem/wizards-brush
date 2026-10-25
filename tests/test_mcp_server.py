@@ -25,6 +25,12 @@ from backend.app.routers.common import persist_image
 _TOOLS = {
     "list_kinds", "describe_kind", "generate", "edit", "get_job", "wait_job", "search_library",
     "list_recipes", "get_recipe", "save_recipe", "run_recipe",
+    # P13: presets, plans, targets, resources, masks, cancellation, bytes.
+    "list_targets", "list_processors", "list_presets", "get_preset", "preset_revisions",
+    "list_resources", "get_resource", "rescan_resources", "prepare_resource_on_remote",
+    "resource_preparation_status", "save_preset", "update_preset", "clone_preset",
+    "archive_preset", "resolve_preset", "run_preset", "replay_job", "get_plan", "cancel_job",
+    "import_mask", "fetch_asset",
 }
 
 
