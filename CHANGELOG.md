@@ -6,6 +6,8 @@ contributors know which user-facing changes need release notes.
 
 ## Unreleased
 
+## [0.2.1] - 2026-10-25
+
 ### Security
 
 - certifi 2026.10.23: earlier bundles trusted emSign root CAs whose
@@ -509,6 +511,7 @@ shipped in 0.2.0.
 - Published the supported-version policy, trust boundaries, security
   invariants, reportability criteria, accepted risks, and known limitations.
 
+[0.2.1]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.2.1
 [0.2.0]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.2.0
 [0.1.7]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.7
 [0.1.6]: https://github.com/wizards-ecosystem/wizards-brush/releases/tag/v0.1.6
