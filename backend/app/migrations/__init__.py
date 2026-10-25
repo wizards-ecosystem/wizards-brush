@@ -51,6 +51,7 @@ from . import (
     m0015_execution_plans,
     m0016_resource_imports,
     m0017_reference_sets,
+    m0019_canvas_projects,
 )
 
 logger = log.get("migrate")
@@ -76,6 +77,7 @@ MIGRATIONS: list[tuple[str, Migration]] = [
     ("0015_execution_plans", m0015_execution_plans.run),
     ("0016_resource_imports", m0016_resource_imports.run),
     ("0017_reference_sets", m0017_reference_sets.run),
+    ("0019_canvas_projects", m0019_canvas_projects.run),
 ]
 
 

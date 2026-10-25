@@ -11,6 +11,7 @@ import { Queue } from "./pages/Queue";
 import { Settings } from "./pages/Settings";
 import { Resources } from "./pages/Resources";
 import { ReferenceSets } from "./pages/ReferenceSets";
+import { Canvas } from "./pages/Canvas";
 import { Diagnosis } from "./pages/Diagnosis";
 import { Tools } from "./pages/Tools";
 import { VariantSetCreate } from "./pages/VariantSetCreate";
@@ -49,6 +50,8 @@ export default function App() {
         <Route path="/resources" element={<Resources />} />
         <Route path="/references" element={<ReferenceSets />} />
         <Route path="/references/:id" element={<ReferenceSets />} />
+        <Route path="/canvas" element={<Canvas />} />
+        <Route path="/canvas/:id" element={<Canvas />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/diagnosis" element={<Diagnosis />} />
         {/* Without this an unknown path rendered the chrome around a blank

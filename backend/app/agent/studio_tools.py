@@ -196,6 +196,51 @@ async def archive_reference_set(set_id: int, archived: bool) -> dict[str, Any]:
     return _json(await routes.unarchive_set(set_id))
 
 
+# ---- canvas ----------------------------------------------------------------------------------
+async def canvases(include_archived: bool = False) -> list[dict[str, Any]]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.list_projects(include_archived))
+
+
+async def canvas(project_id: int, revision: int | None = None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.read_project(project_id, revision))
+
+
+async def create_canvas(name: str, document: dict[str, Any]) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.create_project(routes.CanvasCreate(name=name, document=document)))
+
+
+async def save_canvas(project_id: int, document: dict[str, Any], base_revision: int,
+                      name: str | None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.save_project(project_id, routes.CanvasSave(
+        document=document, base_revision=base_revision, name=name)))
+
+
+async def flatten_canvas(project_id: int, revision: int | None,
+                         allow_missing: bool) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.flatten_project(project_id, routes.FlattenBody(
+        revision=revision, allow_missing=allow_missing)))
+
+
+async def add_canvas_layer(project_id: int, *, base_revision: int, asset_id: int | None,
+                           job_id: int | None, name: str, from_layer: str | None,
+                           mask_id: int | None) -> dict[str, Any]:
+    from ..routers import canvas as routes
+
+    return _json(await routes.add_layer(project_id, routes.LayerAdd(
+        base_revision=base_revision, asset_id=asset_id, job_id=job_id, name=name,
+        from_layer=from_layer, mask_id=mask_id)))
+
+
 async def archive_preset(preset_id: str, archived: bool) -> dict[str, Any]:
     from ..routers import studio
 

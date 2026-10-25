@@ -322,6 +322,35 @@ export function AssetModal({
       toast(`Region mask failed: ${e}`, "error");
     }
   };
+  /** A new canvas the size of this image, with it as the first layer. */
+  const openInCanvas = async () => {
+    try {
+      const made = await api.createCanvas(`Canvas from #${asset.id}`, {
+        schema_version: 1,
+        width: asset.width ?? 1024,
+        height: asset.height ?? 1024,
+        color_space: "srgb",
+        background: "transparent",
+        layers: [
+          {
+            id: "layer-1",
+            name: `Asset ${asset.id}`,
+            asset_id: asset.id,
+            mask_id: null,
+            transform: { x: 0, y: 0, scale_x: 1, scale_y: 1, rotation: 0 },
+            opacity: 1,
+            visible: true,
+            blend_mode: "normal",
+          },
+        ],
+      });
+      onClose();
+      navigate(`/canvas/${made.id}`);
+    } catch (error) {
+      toast(`Could not open a canvas: ${error}`, "error");
+    }
+  };
+
   const sendTo = (target: "img2img" | "i2v" | "inpaint" | "inpaint_remote") => {
     markUsed(asset.id);
     navigate(`/g/${target}`, {
@@ -716,6 +745,9 @@ export function AssetModal({
                   </Button>
                   <Button size="sm" onClick={() => sendTo("i2v")}>
                     Video
+                  </Button>
+                  <Button size="sm" onClick={() => void openInCanvas()}>
+                    Canvas
                   </Button>
                 </div>
               </div>

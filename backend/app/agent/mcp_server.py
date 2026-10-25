@@ -913,6 +913,105 @@ async def archive_reference_set(
         raise _fail(exc) from None
 
 
+# ---- canvas ------------------------------------------------------------------------------------
+_CANVAS_DOCUMENT = (
+    "{schema_version: 1, width, height, color_space: \"srgb\", background: \"transparent\" | "
+    "\"#rrggbb\", layers (bottom first): [{id, name, asset_id, mask_id, transform: {x, y, "
+    "scale_x, scale_y, rotation (degrees clockwise about the layer centre)}, opacity, visible, "
+    "blend_mode: normal | multiply | screen}]}. Layers reference gallery assets; nothing is "
+    "copied.")
+
+
+@mcp.tool()
+async def list_canvases(include_archived: bool = False) -> dict[str, Any]:
+    """Canvas projects: layered documents over gallery assets."""
+    try:
+        return {"canvases": await studio_tools.canvases(include_archived)}
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def get_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    revision: Annotated[int | None, Field(ge=1, description="Omit for the latest.")] = None,
+) -> dict[str, Any]:
+    """One revision of a canvas document. `missing` lists assets that are no
+    longer in the gallery; their layers stay as placeholders."""
+    try:
+        return await studio_tools.canvas(canvas, revision)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def create_canvas(
+    name: Annotated[str, Field(min_length=1, max_length=80)],
+    document: Annotated[dict[str, Any], Field(description=_CANVAS_DOCUMENT)],
+) -> dict[str, Any]:
+    """Side effect: create a canvas project at revision 1."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.create_canvas(name, document)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def save_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    document: Annotated[dict[str, Any], Field(description=_CANVAS_DOCUMENT)],
+    base_revision: Annotated[int, Field(ge=1, description="The revision you edited.")],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Side effect: save the next revision. A stale base is revision_conflict, so
+    an edit made in the UI meanwhile is never overwritten."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.save_canvas(canvas, document, base_revision, name)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def flatten_canvas(
+    canvas: Annotated[int, Field(ge=1)],
+    revision: Annotated[int | None, Field(ge=1)] = None,
+    allow_missing: Annotated[bool, Field(description="Leave layers with missing assets out "
+                                                     "instead of refusing.")] = False,
+) -> dict[str, Any]:
+    """Side effect: render a revision into a new gallery PNG (the same renderer as
+    HTTP). The document is unchanged. Fetch the result with fetch_asset."""
+    try:
+        return await studio_tools.flatten_canvas(canvas, revision, allow_missing)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
+@mcp.tool()
+async def add_canvas_layer(
+    canvas: Annotated[int, Field(ge=1)],
+    base_revision: Annotated[int, Field(ge=1)],
+    asset_id: Annotated[int | None, Field(ge=1)] = None,
+    job_id: Annotated[int | None, Field(ge=1, description="A finished job; its first output "
+                                                          "becomes the layer.")] = None,
+    name: str = "",
+    from_layer: Annotated[str | None, Field(description="Take this layer's transform and record "
+                                                        "it as lineage, e.g. after editing "
+                                                        "it.")] = None,
+    mask_id: Annotated[int | None, Field(ge=1)] = None,
+) -> dict[str, Any]:
+    """Side effect: put an asset (or a finished edit's output) on top as a new
+    layer, saving the next revision."""
+    try:
+        with client_tag.use("mcp"):
+            return await studio_tools.add_canvas_layer(
+                canvas, base_revision=base_revision, asset_id=asset_id, job_id=job_id,
+                name=name, from_layer=from_layer, mask_id=mask_id)
+    except HTTPException as exc:
+        raise _fail(exc) from None
+
+
 # ---- plans -----------------------------------------------------------------------------------
 _PLAN_ARGS = ("preset_id", "revision", "operation", "model", "adapters", "prompt",
               "negative_prompt", "styles", "style_fragments", "enhance", "notes", "settings",

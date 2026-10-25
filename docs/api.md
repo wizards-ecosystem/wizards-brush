@@ -30,6 +30,7 @@ The test suite runs it against the real app, so it stays correct.
 - [Recipes](#recipes)
 - [Saved recipes](#saved-recipes)
 - [Reference sets](#reference-sets)
+- [Canvas](#canvas)
 - [Finishing and validation reference](#finishing-and-validation-reference)
 - [Endpoint index](#endpoint-index)
 
@@ -744,6 +745,45 @@ than the role accepts is refused, never trimmed. When the role has
 `notes_in_prompt` and the request sends no `notes`, the set's notes fill
 `{{notes}}`.
 
+## Canvas
+
+A canvas project is a layered document over gallery assets. Layers are listed
+bottom first; each points at an image (`asset_id`) and optionally a mask the
+same size as that image (`mask_id`, white keeps). The transform places it: the
+image is scaled by `scale_x`/`scale_y`, its top-left lands at `x`, `y` in
+canvas pixels (origin top-left), and it is rotated by `rotation` degrees
+clockwise about the centre of that scaled box, as CSS `rotate()` does.
+`opacity` multiplies alpha; `blend_mode` is `normal`, `multiply` or `screen`.
+
+```http
+POST /api/canvas
+{"name": "Poster", "document": {"schema_version": 1, "width": 1024, "height": 1024,
+  "color_space": "srgb", "background": "transparent",
+  "layers": [{"id": "bg", "asset_id": 41},
+             {"id": "logo", "asset_id": 57, "mask_id": 58,
+              "transform": {"x": 640, "y": 80, "scale_x": 0.5, "scale_y": 0.5, "rotation": 12},
+              "opacity": 0.9, "blend_mode": "normal"}]}}
+```
+
+Assets are only referenced: editing never changes a gallery file, and
+`DELETE /api/canvas/{id}` never deletes one. `PUT /api/canvas/{id}` takes
+`{document, base_revision}` and answers `409 revision_conflict` when another
+client saved first, so an autosave and an agent cannot overwrite each other.
+Every revision stays readable with `?revision=N`. A layer whose asset was
+trashed or purged stays as a placeholder and is listed under `missing`;
+restoring the asset from the trash brings it back.
+
+`POST /api/canvas/{id}/flatten` renders a revision with the server's renderer
+into a new gallery PNG whose metadata names the project and revision (the
+document is unchanged). It refuses with `missing_sources` while a source is
+missing, unless `allow_missing` is set.
+
+To edit part of a document, `POST /api/canvas/{id}/edit-inputs` with a
+`layer_id` (or none, to flatten first) and an optional `mask_id` returns the
+`inputs` for an ordinary `POST /api/jobs` request. When the job is done,
+`POST /api/canvas/{id}/layers` with `{base_revision, job_id, from_layer}` puts
+its output on top in that layer's place and records the lineage.
+
 ## Resources
 
 Models and adapters are resources: an identity that never changes, plus the
@@ -1011,6 +1051,7 @@ tag:
 | `images`, `videos` | The UI's multipart routes |
 | `openai` | OpenAI-compatible image generation and edits (`/api/openai/v1`) |
 | `references` | Reference sets |
+| `canvas` | Canvas projects |
 | `resources`, `targets` | Models and adapters, imports, routing policy |
 | `system`, `settings`, `library`, `collections`, `loras`, `wildcards`, `grid` | Supporting routes |
 

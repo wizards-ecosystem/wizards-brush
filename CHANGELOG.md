@@ -8,6 +8,15 @@ contributors know which user-facing changes need release notes.
 
 ### Added
 
+- Canvas: layered documents over gallery images, saved as revisions. Layers
+  have masks, position, scale, rotation, opacity, visibility, order and a
+  blend mode; edits are bounded undo/redo separate from autosave, and a save
+  from an old revision is refused instead of overwriting. Flatten renders a
+  revision into a new gallery image with the server's renderer, a layer can be
+  edited through an ordinary job and come back as a new layer, and a missing
+  source stays as a placeholder. Over HTTP (`/api/canvas`) and MCP
+  (`create_canvas`, `get_canvas`, `save_canvas`, `list_canvases`,
+  `flatten_canvas`, `add_canvas_layer`).
 - Saved recipes. A generation or edit setup can be saved under a name with a
   short list of exposed fields, then run from the Recipes page,
   `POST /api/recipes/{key}/run`, or the MCP tools `list_recipes`, `get_recipe`,

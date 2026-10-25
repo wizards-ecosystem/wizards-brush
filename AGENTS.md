@@ -113,6 +113,13 @@
   image and goes to `warnings`, never to `post`), and Pillow-only output checks. A Variant
   Set stage has its own `finishing` list, so `finish_steps` is in `SET_CONTROLLED`. Background removal is BiRefNet-lite ONNX (MIT, pinned + SHA-256, in NOTICE);
   BRIA RMBG weights are non-commercial and must not be used
+- `backend/app/canvas.py` + `routers/canvas.py` - canvas projects (migration `0019`):
+  a layered document over gallery assets with **append-only revisions** behind a
+  `base_revision` compare-and-set. Layers only reference assets - deleting a project
+  never deletes one, and a trashed source is a placeholder listed under `missing`.
+  `render()` is the one Pillow renderer (transform: scale, then top-left at x/y, then
+  rotate clockwise about the box centre, as CSS); flatten writes a new `canvas` asset
+  with lineage. Editing a layer goes through the ordinary job API - no canvas job kind
 - `backend/app/exports.py` - the single ZIP writer for gallery and Variant Set exports; the
   `embed_metadata` privacy setting governs manifests, and server paths never enter one
 - `backend/app/routers/job_api.py` - **the API is a first-class client surface** (guide:

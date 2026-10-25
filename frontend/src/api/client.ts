@@ -33,6 +33,10 @@ import type {
   RemoteSession,
   ImportInspection,
   ImportTask,
+  CanvasDocument,
+  CanvasFlatten,
+  CanvasRead,
+  CanvasSummary,
   ReferenceSetDefinition,
   ReferenceSetRead,
   ReferenceSetSummary,
@@ -441,6 +445,22 @@ export const api = {
     postJson(`/api/reference-sets/${id}/${archived ? "archive" : "unarchive"}`, {}).then((r) =>
       j<ReferenceSetRead>(r),
     ),
+  canvases: (includeArchived = false) =>
+    get(`/api/canvas${includeArchived ? "?include_archived=true" : ""}`).then((r) => j<CanvasSummary[]>(r)),
+  canvas: (id: number, revision?: number) =>
+    get(`/api/canvas/${id}${revision ? `?revision=${revision}` : ""}`).then((r) => j<CanvasRead>(r)),
+  createCanvas: (name: string, document: CanvasDocument) =>
+    postJson("/api/canvas", { name, document }).then((r) => j<CanvasRead>(r)),
+  /** Save the next revision; a stale base is an ApiError with code revision_conflict. */
+  saveCanvas: (id: number, document: CanvasDocument, baseRevision: number, name?: string) =>
+    safeFetch(`/api/canvas/${id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ document, base_revision: baseRevision, ...(name ? { name } : {}) }),
+    }).then((r) => j<CanvasRead>(r)),
+  flattenCanvas: (id: number, body: { revision?: number; allow_missing?: boolean } = {}) =>
+    postJson(`/api/canvas/${id}/flatten`, body).then((r) => j<CanvasFlatten>(r)),
+  deleteCanvas: (id: number) => del(`/api/canvas/${id}`).then((r) => j<OkResponse>(r)),
   rescanResources: () => postJson("/api/resources/rescan", {}).then((r) => j<Record<string, number>>(r)),
   createUpload: (body: { filename: string; size: number; kind: "adapter" | "model"; sha256?: string }) =>
     postJson("/api/resources/uploads", body).then((r) => j<UploadSession>(r)),
