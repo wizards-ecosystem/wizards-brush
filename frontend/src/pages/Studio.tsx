@@ -84,6 +84,8 @@ export function Studio() {
   const [saving, setSaving] = useState(false);
   const [submitted, setSubmitted] = useState<number[]>([]);
   const [open, setOpen] = useState<Asset | null>(null);
+  // Phones show one pane at a time, as the classic generators do.
+  const [mobileView, setMobileView] = useState<"compose" | "session">("compose");
   const composeRef = useRef<HTMLElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -181,6 +183,7 @@ export function Studio() {
     if (result) {
       const ids = result.job_ids?.length ? result.job_ids : [result.job_id];
       setSubmitted((s) => [...s, ...ids.filter((id) => !s.includes(id))]);
+      setMobileView("session");
       toast(result.duplicate ? `Already queued as #${result.job_id}` : `Queued #${result.job_id}`, "success");
     }
   }, [run, toast]);
@@ -238,10 +241,24 @@ export function Studio() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
+      <div className="shrink-0 border-b border-edge bg-panel px-3 py-2 lg:hidden">
+        <SegmentedControl
+          label="Studio pane"
+          value={mobileView}
+          onChange={setMobileView}
+          options={[
+            { value: "compose", label: "Compose" },
+            {
+              value: "session",
+              label: `Results${outputs.length || active.length ? ` · ${outputs.length + active.length}` : ""}`,
+            },
+          ]}
+        />
+      </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_clamp(380px,32vw,460px)]">
         <aside
           ref={composeRef}
-          className="flex min-h-0 flex-col bg-panel lg:col-start-2 lg:row-start-1 lg:border-l lg:border-edge"
+          className={`${mobileView === "compose" ? "flex" : "hidden"} min-h-0 flex-col bg-panel lg:col-start-2 lg:row-start-1 lg:flex lg:border-l lg:border-edge`}
           aria-label="Compose"
         >
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-5">
@@ -612,7 +629,10 @@ export function Studio() {
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-col bg-bg lg:col-start-1 lg:row-start-1" aria-label="Session">
+        <section
+          className={`${mobileView === "session" ? "flex" : "hidden"} min-h-0 flex-col bg-bg lg:col-start-1 lg:row-start-1 lg:flex`}
+          aria-label="Session"
+        >
           <div className="flex shrink-0 items-end justify-between border-b border-edge px-4 py-4 sm:px-6">
             <div>
               <div className="page-kicker">This session</div>
@@ -644,7 +664,8 @@ export function Studio() {
               <ul className="mb-4 space-y-1 text-xs" data-testid="session-failures">
                 {failed.map((job) => (
                   <li key={job!.id} className="border-l-2 border-danger pl-2">
-                    #{job!.id} failed{job!.tip ? `: ${job!.tip}` : ""}
+                    #{job!.id} failed:{" "}
+                    {job!.tip || (job!.error || "").split("\n")[0] || "no reason was recorded"}
                   </li>
                 ))}
               </ul>

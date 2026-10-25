@@ -351,3 +351,41 @@ describe("the Studio", () => {
     );
   });
 });
+
+describe("a failed job in the session", () => {
+  it("says why, from the tip or the error's first line", async () => {
+    localStorage.clear();
+    mocks.studioPresets.mockResolvedValue(presets);
+    mocks.studioPreset.mockImplementation((id: string) =>
+      Promise.resolve({ ...presets.find((p) => p.id === id), definition: definitions[id] }),
+    );
+    mocks.preparePlan.mockImplementation(async (request: PlanRequest) => planFor(request));
+    mocks.targets.mockResolvedValue({
+      local: { models: [] },
+      remote: { models: [] },
+      policy: {},
+      capability_revision: "cap-1",
+    });
+    mocks.submitPlan.mockResolvedValue({ job_id: 41, job_ids: [41], duplicate: false });
+    mocks.waitJob.mockResolvedValue({
+      job: {
+        id: 41,
+        status: "error",
+        tip: "",
+        error: "Z-Image-Turbo needs about 15.1 GB of system RAM\nTraceback ...",
+      },
+      settled: true,
+      assets: [],
+    });
+    const user = userEvent.setup();
+    renderStudio();
+    await user.click(await screen.findByRole("option", { name: /Storybook/ }));
+    await user.type(screen.getByLabelText("Prompt"), "x");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Generate" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Generate" }));
+    expect(await screen.findByTestId("session-failures")).toHaveTextContent(
+      "#41 failed: Z-Image-Turbo needs about 15.1 GB of system RAM",
+    );
+    expect(screen.getByTestId("session-failures")).not.toHaveTextContent("Traceback");
+  });
+});

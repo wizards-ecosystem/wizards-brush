@@ -283,7 +283,6 @@ export function Layout() {
         </Link>
         <nav className="flex min-h-0 flex-1 flex-col py-2" aria-label="Primary navigation">
           <RailLink to="/" label="Studio" icon="studio" />
-          <RailLink to="/processes" label="Processes" icon="make" />
           <button
             className={`relative flex h-[58px] w-full flex-col items-center justify-center gap-0.5 text-[9px] font-medium tracking-wide transition-colors ${
               launcherOpen || pathname.startsWith("/g/")
