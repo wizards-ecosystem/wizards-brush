@@ -113,6 +113,12 @@ def _incoming(kind: str) -> Path:
     return path
 
 
+def quarantine_dir(kind: str) -> Path:
+    """Where bytes for `kind` wait before validation (same filesystem as their
+    destination, so promotion is one atomic rename)."""
+    return _incoming(_check_kind(kind))
+
+
 def _destination(kind: str) -> Path:
     path = _root(kind) / ("imported" if kind == "adapter" else "checkpoints")
     path.mkdir(parents=True, exist_ok=True)

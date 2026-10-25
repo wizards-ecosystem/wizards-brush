@@ -285,12 +285,19 @@ def register_file(path: Path, digest: str, *, location: str, stat: os.stat_resul
     rid = resource_id("local", digest.removeprefix("sha256:"))
     existing = store.get(rid)
     now = datetime.now(UTC)
+    # A provider import recorded where the file came from and what the provider
+    # said about its licence; a later library scan must not reset that.
+    sourced = existing is not None and existing.provider not in ("", "local")
+    kept_license = existing is not None and (
+        existing.license.get("reviewed")
+        or existing.license.get("source") not in (None, "", "none", "file metadata"))
     store.upsert(
-        rid, kind=facts["kind"], family=facts["family"], provider="local",
+        rid, kind=facts["kind"], family=facts["family"],
+        provider=existing.provider if existing is not None and sourced else "local",
         provider_ref=existing.provider_ref if existing and existing.provider_ref else original_name,
         content_hash=digest, format=facts["format"], size_bytes=stat.st_size,
         label=label or (existing.label if existing and existing.label else Path(original_name).stem),
-        license=(existing.license if existing and existing.license.get("reviewed")
+        license=(existing.license if existing is not None and kept_license
                  else facts["license"]),
         compat=facts["compat"], constraints=facts["constraints"],
         verification="verified", error="" if facts["readable"] else "not a readable safetensors file",
@@ -299,6 +306,52 @@ def register_file(path: Path, digest: str, *, location: str, stat: os.stat_resul
                          mtime_ns=stat.st_mtime_ns, verified_hash=digest, verified_at=now,
                          error="")
     _refresh_state(rid)
+    return store.get(rid)
+
+
+def annotate_source(rid: str, *, provider: str, provider_ref: str, revision: str,
+                    license: dict[str, Any], access: str, source_url: str,
+                    family: str | None = None) -> Any:
+    """Record where an imported file came from. The identity stays its content.
+
+    A provider's licence statement replaces what the file's own metadata
+    said, unless a person already reviewed the licence. A family the tensors
+    identified is kept; the provider's claim only fills an unknown one.
+    """
+    existing = store.get(rid)
+    if existing is None:
+        return None
+    facts: dict[str, Any] = {"provider": provider, "provider_ref": provider_ref,
+                             "revision": revision, "access": access}
+    if not existing.license.get("reviewed"):
+        facts["license"] = license
+    if family and existing.family == "unknown":
+        facts["family"] = family
+    compat = dict(existing.compat)
+    compat["source_url"] = source_url
+    if family:
+        compat["declared_base"] = compat.get("declared_base") or family
+    facts["compat"] = compat
+    return store.upsert(rid, **facts)
+
+
+def register_hub_model(repo: str, commit: str, files: list[dict[str, Any]], *,
+                       license: dict[str, Any], access: str, verified: bool) -> Any:
+    """Record a Diffusers repository downloaded at an exact commit."""
+    from ..modelprobe import family_of_model
+
+    rid = resource_id("hf", repo, commit)
+    store.upsert(
+        rid, kind="model", family=family_of_model(repo), provider="hf", provider_ref=repo,
+        revision=commit, format="diffusers", label=repo.rsplit("/", 1)[-1],
+        size_bytes=sum(int(f.get("size") or 0) for f in files),
+        files=[{"path": f["path"], "size": int(f.get("size") or 0),
+                "sha256": f.get("sha256") or ""} for f in files],
+        license=license, access=access, state="installed",
+        verification="verified" if verified else "unverified", error="",
+    )
+    store.upsert_install(rid, "local", f"hf:{repo}", state="installed",
+                         size_bytes=sum(int(f.get("size") or 0) for f in files), error="")
     return store.get(rid)
 
 

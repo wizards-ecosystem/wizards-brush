@@ -573,6 +573,44 @@ class ResourceInstall(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now)
 
 
+class ResourceImport(SQLModel, table=True):
+    """One explicit provider import task (0016). Never holds a credential."""
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id: int | None = Field(default=None, primary_key=True)
+    provider: str = ""                       # "hf" | "civitai"
+    provider_ref: str = ""                   # repo id, or model/<id>/version/<id>/file/<id>
+    revision: str = ""                       # exact commit or version id
+    source_url: str = ""                     # without query string
+    selection_json: str = "{}"
+    kind: str = ""                           # adapter | model | diffusers
+    filename: str = ""
+    expected_size: int | None = None
+    expected_sha256: str = ""
+    # queued | running | canceling | canceled | failed | interrupted | done
+    state: str = Field(default="queued", index=True)
+    progress: float = 0.0
+    bytes_done: int = 0
+    bytes_total: int | None = None
+    error: str = ""
+    error_code: str = ""
+    resource_id: str | None = None
+    license_json: str = "{}"
+    license_acknowledged: bool = False
+    client: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+    @property
+    def selection(self) -> dict[str, Any]:
+        return _json_or(self.selection_json, {})
+
+    @property
+    def license(self) -> dict[str, Any]:
+        return _json_or(self.license_json, {})
+
+
 class VariantRecipe(SQLModel, table=True):
     """A reusable Variant Set definition: configuration only.
 

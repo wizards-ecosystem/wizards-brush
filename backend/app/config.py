@@ -65,6 +65,9 @@ class Settings(BaseSettings):
 
     # secrets / models — best-in-class, sized to each device.
     hf_token: str = Field(default="", alias="HF_TOKEN")
+    # Only for Civitai files that require a signed-in download. Sent only to
+    # civitai.com, never to a redirect host, and never stored with an import.
+    civitai_api_token: str = Field(default="", alias="CIVITAI_API_TOKEN")
     # Local 16 GB card: Z-Image-Turbo (fast, fits 16 GB with 4-bit + offload).
     local_image_model: str = Field(default="Tongyi-MAI/Z-Image-Turbo", alias="LOCAL_IMAGE_MODEL")
     # Optional local "Quality" variant: Z-Image base (CFG model, more steps,

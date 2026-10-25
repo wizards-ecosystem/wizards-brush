@@ -49,6 +49,7 @@ from . import (
     m0013_recipe_revisions,
     m0014_resources,
     m0015_execution_plans,
+    m0016_resource_imports,
 )
 
 logger = log.get("migrate")
@@ -72,6 +73,7 @@ MIGRATIONS: list[tuple[str, Migration]] = [
     ("0013_recipe_revisions", m0013_recipe_revisions.run),
     ("0014_resources", m0014_resources.run),
     ("0015_execution_plans", m0015_execution_plans.run),
+    ("0016_resource_imports", m0016_resource_imports.run),
 ]
 
 
